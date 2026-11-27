@@ -483,8 +483,13 @@ function renderHUD() {
   $('#hud-region').textContent = (ME.region?.name || '') + ' · ' + (ME.region?.country_name || ME.country?.name || 'Wilayah Merdeka');
   $('#hud-usd').textContent = fmtRp(c.usd);
   $('#hud-gold').textContent = fmt(c.gold);
-  $('#hud-xp').textContent = c.xp + '/' + ME.xpNext;
+  // Perisai HUD (UI batch 2): angka BESAR di dalam perisai = LEVEL warga;
+  // lencana kecil di bawahnya = progres XP. Avatar bulat di kiri (kolom
+  // .hud-side): foto profil bila ada, huruf awal bila tidak.
   $('#hud-lv').textContent = c.level;
+  $('#hud-xp').textContent = c.xp + '/' + ME.xpNext;
+  const av = $('#hud-avatar');
+  if (av) av.innerHTML = avatarHtml(ME.user?.avatar, c.username, 44);
   const segs = $('#energy-segs');
   // Batas energi tidak selalu 100 (Tahap 3): Premium 120, Rumah Sakit
   // Lapangan 110 — /api/me mengirim energyCap; default 100 untuk keamanan.
@@ -560,6 +565,35 @@ const fmtCooldown = (ms) => {
   if (s >= 60) return Math.ceil(s / 60) + ' mnt';
   return s + ' dtk';
 };
+
+// ---------- MODAL UNDANG TEMAN (UI batch 2) ----------
+// Popup referral di dashboard + profil: kode/link (salin + WhatsApp) +
+// penjelasan hadiah kedua sisi (pengundang +200 emas + 2 hari Premium;
+// teman baru +100 emas + 1 hari Premium, cair saat Level 3).
+function openReferralModal(code) {
+  const refCode = code || ME?.referral?.code || '';
+  const link = location.origin + '/?ref=' + refCode;
+  $('#ref-modal-code').textContent = refCode || '—';
+  $('#ref-modal-link').textContent = link;
+  const m = $('#referral-modal');
+  m.hidden = false;
+  const close = () => { m.hidden = true; };
+  $('#ref-modal-close').onclick = close;
+  m.onclick = (e) => { if (e.target === m) close(); };
+  $('#ref-modal-copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(link); toast('Link referral disalin!'); }
+    catch {
+      const ta = document.createElement('textarea');
+      ta.value = link; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); toast('Link referral disalin!'); } catch { toast(link); }
+      document.body.removeChild(ta);
+    }
+  };
+  $('#ref-modal-wa').onclick = () => {
+    const text = `Ayo main Parlementer bareng aku! Game simulasi negara online — kerja, dagang, bikin partai, sampai jadi presiden. 100% pemain asli, tanpa bot. Daftar lewat link ini: ${link}`;
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+  };
+}
 
 // ---------- POPOVER PENJELASAN (rombak UI) ----------
 // Kartu penjelasan tengah layar (energi / kelelahan) — menutup lewat tombol
@@ -814,6 +848,27 @@ ROUTES.dashboard = async () => {
       <div class="kv"><span class="k">Rupiah</span><span class="v">${fmtRp(c.usd)}</span></div>
     </div>
   </div>
+  <div class="panel" id="dash-map">
+    <div class="panel-head"><h3>🗺️ PETA LANGSUNG</h3><button class="btn-text gold" type="button" data-goto="#/map">BUKA PETA ›</button></div>
+    <div class="map-tiles" id="dash-map-tiles"><p class="muted small">Memuat…</p></div>
+  </div>
+  <div class="panel" id="dash-numbers">
+    <h3>🌍 DUNIA HARI INI</h3>
+    <div class="stat-grid" id="dash-numbers-grid"><div class="stat-cell"><div class="stat-label">Memuat…</div><div class="stat-num">—</div></div></div>
+  </div>
+  <div class="panel" id="dash-region">
+    <h3>📍 WILAYAHKU</h3>
+    <div id="dash-region-body"><p class="muted small">Memuat…</p></div>
+  </div>
+  <div class="panel" id="dash-inv">
+    <h3>📦 INVENTARIS</h3>
+    <div class="inv-grid" id="dash-inv-grid"><p class="muted small">Memuat…</p></div>
+    <p class="muted small" style="margin-top:8px">Sisa roti hari ini: ${10 - (c.bread_today || 0)}/10 · <button class="btn-text gold" type="button" data-goto="#/inventory" style="padding:0">Lihat Semua ›</button></p>
+  </div>
+  <div class="panel" id="dash-convoy">
+    <div class="panel-head"><h3>🚚 KONVOI</h3><button class="btn-text gold" type="button" data-goto="#/convoy">KELOLA ›</button></div>
+    <div id="dash-convoy-body"><p class="muted small">Memuat…</p></div>
+  </div>
   <div class="panel">
     <h3>💪 LATIHAN</h3>
     ${[['str', 'strength', 'Kekuatan', c.attr_str, 'Kerusakan perang'], ['edu', 'strategy', 'Pendidikan', c.attr_edu, 'Pelatihan lebih cepat'], ['eco', 'charisma', 'Ekonomi', c.attr_eco, 'Hasil produksi lebih banyak']].map(([k, serverKey, label, lv, desc]) => {
@@ -836,6 +891,8 @@ ROUTES.dashboard = async () => {
   <div class="panel"><h3>🤝 KOMUNITAS</h3>
     <p class="muted">Ngobrol dengan pemain lain, tanya jawab, dan kabar update game — gabung server Discord Parlementer.</p>
     <a class="btn-gold" href="${DISCORD_URL}" target="_blank" rel="noopener noreferrer">🎮 Gabung Discord Parlementer</a>
+    <p class="muted" style="margin-top:12px">Ajak temanmu jadi warga — kamu dapat +200 emas + 2 hari Premium saat dia mencapai Level 3.</p>
+    <button class="btn-gold" id="btn-invite" type="button">👥 UNDANG TEMAN</button>
   </div>`);
   // Handler kerangka (data ME, langsung aktif): latihan + popover.
   $$('[data-train]').forEach((b) => b.onclick = async () => {
@@ -847,6 +904,8 @@ ROUTES.dashboard = async () => {
     if (b.dataset.popover === 'energy') showEnergyPopover();
     else showFatiguePopover();
   });
+  // Tombol UNDANG TEMAN (UI batch 2): buka popup referral.
+  $('#btn-invite')?.addEventListener('click', () => openReferralModal());
   // Tiga panel API diisi paralel, masing-masing begitu selesai — gagal satu
   // tidak menggagalkan yang lain (allSettled + pesan gagal per panel).
   const eatMeal = async (tier) => {
@@ -930,8 +989,73 @@ ROUTES.dashboard = async () => {
     }).join('');
     // Kartu MAKANAN: ketuk kartu = makan (sama seperti tombol MAKAN di Inventaris).
     $$('#dash-food [data-eat]').forEach((b) => b.onclick = () => eatMeal(Number(b.dataset.eat)));
+    // INVENTARIS (UI batch 2): kartu barang T1 (maks 6) di panel dashboard.
+    const invEl = $('#dash-inv-grid');
+    if (invEl) {
+      const t1 = inv.items.filter((i) => i.tier === 1).slice(0, 6);
+      invEl.innerHTML = t1.length ? t1.map((i) => `<div class="inv-card"><div class="nm">${esc(i.name)}</div><div class="qty">×${i.qty}</div><div class="muted small">T1</div></div>`).join('') : '<p class="muted">Inventaris kosong.</p>';
+    }
   }).catch(() => { const el = $('#dash-food'); if (el) el.innerHTML = `<p class="muted">Gagal memuat makanan.</p>`; });
-  await Promise.allSettled([fillMissions, fillChronicle, fillInventory]);
+  // Panel UI batch 2 (angka dunia + kartu wilayah + PETA LANGSUNG + konvoi):
+  // masing-masing diisi paralel; gagal satu tidak menggagalkan yang lain.
+  const fillStats = api('/api/stats').then((s) => {
+    const g = $('#dash-numbers-grid');
+    if (g) {
+      const w = s.world;
+      g.innerHTML = `
+      <div class="stat-cell"><div class="stat-label">👥 Populasi Dunia</div><div class="stat-num">${fmt(w.population)}</div><div class="stat-sub">Hari ${ME.world.day}</div></div>
+      <div class="stat-cell"><div class="stat-label">🏳️ Negara</div><div class="stat-num">${fmt(w.countries)}</div><div class="stat-sub">${fmt(w.freeRegions)} wilayah merdeka</div></div>
+      <div class="stat-cell"><div class="stat-label">🗺️ Wilayah</div><div class="stat-num">${fmt(w.regions)}</div><div class="stat-sub">${fmt(s.myRegion.population)} warga di wilayahku</div></div>
+      <div class="stat-cell"><div class="stat-label">🟢 Online</div><div class="stat-num">${fmt(ME.onlineCount ?? 0)}</div><div class="stat-sub">aktif 5 menit terakhir</div></div>`;
+    }
+    const rb = $('#dash-region-body');
+    if (rb) {
+      const r = s.myRegion;
+      const infra = [['Kesehatan', r.health], ['Pendidikan', r.education], ['Militer', r.military], ['Industri', r.industry], ['Listrik', r.electricity]];
+      const cost = r.name === 'Jakarta' ? 100 : 50;
+      rb.innerHTML = `
+      <p class="lbl-gold" style="margin:0">DITEMPATKAN DI</p>
+      <h4 style="font-size:22px">${esc(r.name)}</h4>
+      <p class="muted">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Wilayah Merdeka'}</p>
+      <div class="kv"><span class="k">Skor Kota</span><span class="v"><span class="region-score">${r.city_score}<small>/10</small></span></span></div>
+      <div class="kv"><span class="k">Peringkat</span><span class="v">${r.rank}/17 wilayah</span></div>
+      ${infra.map(([label, v]) => `<div class="infra-row"><span class="lbl">${label}</span><span class="bar"><i style="width:${Math.min(100, (Number(v) / 10) * 100)}%"></i></span><span class="val">${v}</span></div>`).join('')}
+      <div class="kv"><span class="k">Kapasitas Wilayah</span><span class="v">${r.capacity}% ${Number(r.capacity) >= 100 ? 'SEHAT' : ''}</span></div>
+      ${r.resource_bonus ? `<div class="kv"><span class="k">Bonus Perintis</span><span class="v"><span class="chip teal">${esc(r.resource_bonus)}</span></span></div>` : ''}
+      <div class="kv"><span class="k">Pemberontakan</span><span class="v">${r.rebellion}/5 pendukung</span></div>
+      ${r.warActive ? '<p class="red-text small">⚔️ Perang sedang berlangsung di wilayah ini.</p>'
+        : r.mySupport ? '<p class="teal-text small">✓ Kamu sudah mendukung pemberontakan di sini.</p>'
+        : `<button class="btn-gold btn-sm" id="btn-dash-rebel" type="button">DUKUNG PEMBERONTAKAN · ${cost} emas hangus</button>`}`;
+      $('#btn-dash-rebel')?.addEventListener('click', async () => {
+        try { const res = await post('/api/regions/rebel', { region_id: r.id });
+          toast(res.warStarted ? 'PERANG MELETUS! Pemberontakan dimulai!' : `Dukungan tercatat (${res.supporters}/5).`);
+          await refreshMe(); route(); }
+        catch (e) { toast(e.message); }
+      });
+    }
+  }).catch(() => {
+    const g = $('#dash-numbers-grid'); if (g) g.innerHTML = '<div class="stat-cell"><div class="stat-label">Gagal memuat</div><div class="stat-num">—</div></div>';
+    const rb = $('#dash-region-body'); if (rb) rb.innerHTML = '<p class="muted">Gagal memuat kartu wilayah.</p>';
+  });
+  const fillMap = api('/api/regions').then((d) => {
+    const el = $('#dash-map-tiles');
+    if (!el) return;
+    el.innerHTML = d.regions.map((r) => `
+      <button class="map-tile ${r.id === d.mine ? 'mine' : ''}" type="button" data-goto="#/regions/${r.id}" title="${esc(r.name)} — ${r.population} warga">
+        <span class="mt-name">${esc(r.name)}</span>
+        <span class="mt-sub"><span class="mt-dot ${r.country_name ? '' : 'free'}"></span>${r.id === d.mine ? '<span class="you">📍 KAMU</span>' : esc(r.country_name || 'Merdeka')}</span>
+      </button>`).join('');
+  }).catch(() => { const el = $('#dash-map-tiles'); if (el) el.innerHTML = '<p class="muted">Gagal memuat peta.</p>'; });
+  const fillConvoy = api('/api/convoy').then((cv) => {
+    const el = $('#dash-convoy-body');
+    if (!el) return;
+    el.innerHTML = `<div class="kv"><span class="k">Slot terpakai</span><span class="v">${cv.used}/${cv.slots} slot</span></div>` +
+      (cv.convoys.length ? cv.convoys.map((x) => {
+        const def = cv.buildings.find((b) => b.type === x.building);
+        return `<div class="kv"><span class="k">${esc(def?.name || x.building)}</span><span class="v small muted">Berakhir ${fmtDate(x.expires_at)}</span></div>`;
+      }).join('') : '<p class="muted">Belum ada bangunan. Konvoi berjalan kosong.</p>');
+  }).catch(() => { const el = $('#dash-convoy-body'); if (el) el.innerHTML = '<p class="muted">Gagal memuat konvoi.</p>'; });
+  await Promise.allSettled([fillMissions, fillChronicle, fillInventory, fillStats, fillMap, fillConvoy]);
 };
 
 ROUTES.chronicle = async () => {
@@ -1113,7 +1237,8 @@ ROUTES.profile = async (username) => {
     <div class="kv"><span class="k">Link ajakan</span><span class="v small">${esc(location.origin + '/?ref=' + pr.referral.code)}</span></div>
     <div class="kv"><span class="k">Orang yang memakai kodemu</span><span class="v">${pr.referral.uses} orang</span></div>
     <div class="kv"><span class="k">Emas dari referral</span><span class="v gold-text">+${fmt(pr.referral.goldEarned)} emas</span></div>
-    <p class="muted small">Setiap warga baru yang memakai kodemu memberimu +100 emas + 2 hari Premium — dan dia mendapat +50 emas + 1 hari Premium.</p>
+    <p class="muted small">Setiap warga baru yang memakai kodemu memberimu +200 emas + 2 hari Premium — dan dia mendapat +100 emas + 1 hari Premium.</p>
+    <button class="btn-gold btn-sm" id="btn-invite-profile" type="button" style="margin-top:8px">👥 UNDANG TEMAN</button>
   </div>` : ''}
   <div class="panel"><h3>📊 ATRIBUT</h3>
     <div class="kv"><span class="k">Kekuatan</span><span class="v">${pr.attr_str}</span></div>
@@ -1146,6 +1271,9 @@ ROUTES.profile = async (username) => {
       }
     };
   }
+  // Tombol UNDANG TEMAN di panel referral profil (UI batch 2).
+  const inviteBtn = $('#btn-invite-profile');
+  if (inviteBtn && pr.referral) inviteBtn.onclick = () => openReferralModal(pr.referral.code);
 
   // ---------- FOTO PROFIL (hanya profil sendiri) ----------
   // Penentu "profil sendiri" = ID warga (user_id), BUKAN username — nama
@@ -2268,19 +2396,54 @@ ROUTES.country = async () => {
 
 // ---------- STATISTIK ----------
 ROUTES.stats = async () => {
-  const [world, regions, press] = await Promise.all([api('/api/world'), api('/api/regions'), api('/api/press/stats')]);
-  const fx = await api('/api/fx');
+  const [stats, fx] = await Promise.all([api('/api/stats'), api('/api/fx')]);
+  const w = stats.world;
+  const cell = (label, num, sub) => `<div class="stat-cell"><div class="stat-label">${label}</div><div class="stat-num">${num}</div><div class="stat-sub">${sub}</div></div>`;
+  const emptyRows = '<p class="muted">Belum ada data.</p>';
+  const levelRows = (rows) => rows.length ? rows.map((x, i) => `
+    <div class="leader-row"><span class="leader-rank">${i + 1}</span>
+      <div class="leader-main"><div class="leader-name">${esc(x.username)}</div><div class="leader-sub">${esc(x.region_name)}${x.country_name ? ' · ' + esc(x.country_name) : ' · Wilayah Merdeka'}</div>
+      <div class="bar leader-bar"><i style="width:${Math.round((Number(x.level) / (Number(rows[0]?.level) || 1)) * 100)}%"></i></div></div>
+      <span class="leader-val">LV ${x.level} <small>${fmt(x.xp)} XP</small></span></div>`).join('') : emptyRows;
+  const regionRows = (rows) => rows.length ? rows.map((x, i) => `
+    <div class="leader-row"><span class="leader-rank">${i + 1}</span>
+      <div class="leader-main"><div class="leader-name">${esc(x.name)}</div><div class="leader-sub">${esc(x.country_name || 'Wilayah Merdeka')} · ${esc(x.type)}</div>
+      <div class="bar leader-bar"><i style="width:${Math.round((Number(x.citizens) / (Number(rows[0]?.citizens) || 1)) * 100)}%"></i></div></div>
+      <span class="leader-val">${fmt(x.citizens)} <small>warga</small></span></div>`).join('') : emptyRows;
+  const partyRows = (rows) => rows.length ? rows.map((x, i) => `
+    <div class="leader-row"><span class="leader-rank">${i + 1}</span>
+      <div class="leader-main"><div class="leader-name">${esc(x.name)} <span class="party-tag">[${esc(x.tag)}]</span></div><div class="leader-sub">${fmt(x.members)} anggota</div>
+      <div class="bar leader-bar"><i style="width:${Math.round((Number(x.members) / (Number(rows[0]?.members) || 1)) * 100)}%"></i></div></div>
+      <span class="leader-val">${fmt(x.members)} <small>anggota</small></span></div>`).join('') : emptyRows;
   $('#page').innerHTML = page('STATISTIK', 'Angka nyata dari dunia — tanpa data palsu.', `
-  <div class="stat-grid">
-    <div class="stat-cell"><div class="stat-label">👥 Populasi Dunia</div><div class="stat-num">${fmt(world.population)}</div><div class="stat-sub">Hari ${world.day}</div></div>
-    <div class="stat-cell"><div class="stat-label">🟢 Online Sekarang</div><div class="stat-num">${fmt(world.onlineCount ?? 0)}</div><div class="stat-sub">aktif 5 menit terakhir</div></div>
-    <div class="stat-cell"><div class="stat-label">🗺️ Wilayah</div><div class="stat-num">${fmt(world.regions)}</div><div class="stat-sub">${fmt(world.countries)} negara</div></div>
-    <div class="stat-cell"><div class="stat-label">📰 Artikel / 7 hari</div><div class="stat-num">${fmt(press.articles7d)}</div><div class="stat-sub">dari ${fmt(press.journalists7d)} jurnalis</div></div>
-    <div class="stat-cell"><div class="stat-label">👁️ Dibaca / 7 hari</div><div class="stat-num">${fmt(press.reads7d)}</div><div class="stat-sub">${fmt(press.reactions7d)} reaksi</div></div>
+  <div class="panel"><h3>📜 CATATAN DUNIA — SEPANJANG MASA</h3>
+    <div class="stat-grid">
+      ${cell('⚔️ Perang Diumumkan', fmt(w.wars), `${fmt(w.warsActive)} masih berlangsung`)}
+      ${cell('🔥 Pemberontakan', fmt(w.rebellions), `dukungan aktif di ${fmt(w.rebellionRegions)} wilayah`)}
+      ${cell('💥 Kerusakan Diberikan', fmt(w.damage), 'total damage perang')}
+      ${cell('🔫 Senjata Digunakan', fmt(w.weapons), '1 senjata per serangan')}
+      ${cell('🏗️ Bangunan Berdiri', fmt(w.buildings), 'konvoi aktif')}
+      ${cell('📰 Artikel Terbit', fmt(w.articles), `dari ${fmt(w.newspapers)} surat kabar`)}
+      ${cell('🗞️ Surat Kabar', fmt(w.newspapers), 'koran terdaftar')}
+      ${cell('🤝 Kontrak Disepakati', fmt(w.contracts), 'transaksi pasar')}
+    </div>
+    <div class="stat-grid" style="margin-top:12px">
+      ${cell('🚩 Partai', fmt(w.parties), 'partai terdaftar')}
+      ${cell('🏭 Perusahaan', fmt(w.companies), 'perusahaan aktif')}
+    </div>
+    <p class="muted small" style="margin-top:10px">Populasi dunia ${fmt(w.population)} warga · ${fmt(w.regions)} wilayah · ${fmt(w.countries)} negara · ${fmt(w.freeRegions)} wilayah merdeka.</p>
   </div>
-  <div class="panel"><h3>📊 WILAYAH TERPADAT</h3>
-    ${[...regions.regions].sort((a, b) => b.population - a.population).slice(0, 8).map((r) => `
-      <div class="kv"><span class="k">${esc(r.name)}</span><span class="v">${fmt(r.population)} warga · skor ${r.city_score}/10</span></div>`).join('')}
+  <div class="panel"><h3>🏆 PEMIMPIN TIAP DAFTAR — LEVEL TERTINGGI</h3>
+    <div id="leaders-level">${levelRows(stats.topLevel)}</div>
+    <button class="btn-text gold" type="button" data-full="level">LIHAT SEMUA ›</button>
+  </div>
+  <div class="panel"><h3>👥 PEMIMPIN TIAP DAFTAR — WARGA TERBANYAK</h3>
+    <div id="leaders-regions">${regionRows(stats.topRegions)}</div>
+    <button class="btn-text gold" type="button" data-full="regions">LIHAT SEMUA ›</button>
+  </div>
+  <div class="panel"><h3>🚩 PEMIMPIN TIAP DAFTAR — PARTAI TERBESAR</h3>
+    <div id="leaders-parties">${partyRows(stats.topParties)}</div>
+    <button class="btn-text gold" type="button" data-full="parties">LIHAT SEMUA ›</button>
   </div>
   <div class="panel"><h3>💱 VALAS</h3>
     <div class="kv"><span class="k">Kurs cetak</span><span class="v">1 emas = ${fmtRp(10)}</span></div>
@@ -2288,6 +2451,17 @@ ROUTES.stats = async () => {
     <div class="kv"><span class="k">Beli terbaik</span><span class="v">${fx.bestBuy != null ? fmtRp(fx.bestBuy) : '—'}</span></div>
     <div class="kv"><span class="k">Transaksi 24 jam</span><span class="v">${fmt(fx.stats.tx)} · ${fmt(fx.stats.volume, 2)} emas</span></div>
   </div>`);
+  $$('[data-full]').forEach((b) => b.onclick = async () => {
+    const kind = b.dataset.full;
+    b.disabled = true; b.textContent = 'Memuat…';
+    try {
+      const d = await api('/api/stats?full=' + kind);
+      const el = $('#leaders-' + kind);
+      if (!el || !d.fullList) return;
+      el.innerHTML = kind === 'level' ? levelRows(d.fullList) : kind === 'regions' ? regionRows(d.fullList) : partyRows(d.fullList);
+      b.hidden = true;
+    } catch (e) { toast(e.message); b.disabled = false; b.textContent = 'LIHAT SEMUA ›'; }
+  });
 };
 
 // ---------- KONTRAK ----------

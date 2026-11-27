@@ -43,8 +43,8 @@ export function registerCore(app) {
     return { level, xp };
   }
 
-  // Bonus referral (pemilik kode +100 emas + 2 hari premium; pendaftar
-  // +50 emas + 1 hari premium) — dibayar SEKALI saat pendaftar mencapai
+  // Bonus referral (pemilik kode +200 emas + 2 hari premium; pendaftar
+  // +100 emas + 1 hari premium) — dibayar SEKALI saat pendaftar mencapai
   // Level 3, dan maks 5 bonus terbayar per hari per pemilik kode (anti
   // farming multi-akun; verifikasi email penuh ditunda ke tahap berikut).
   // Baris referral_pending yang sudah 'paid'/'skipped' tidak diproses lagi.
@@ -210,14 +210,14 @@ export function registerCore(app) {
   }
 
   // ---------- AUTH (email + password) ----------
-  // Bonus referral: pemilik kode +100 emas + 2 hari premium; pendaftar baru
-  // +50 emas + 1 hari premium — dibayar saat pendaftar mencapai Level 3
+  // Bonus referral: pemilik kode +200 emas + 2 hari premium; pendaftar baru
+  // +100 emas + 1 hari premium — dibayar saat pendaftar mencapai Level 3
   // (bukan saat daftar) dan maks 5 bonus terbayar/hari/pemilik kode.
   // Premium diperpanjang dari premium_until yang masih aktif, atau dari
   // sekarang bila tidak aktif. Bonus dicatat di referral_pending.
-  const REFERRER_GOLD = 100;
+  const REFERRER_GOLD = 200;
   const REFERRER_PREMIUM_MS = 2 * 24 * 60 * 60 * 1000;
-  const NEWCOMER_GOLD = 50;
+  const NEWCOMER_GOLD = 100;
   const NEWCOMER_PREMIUM_MS = 1 * 24 * 60 * 60 * 1000;
   const MAX_PASSWORD_BYTES = 72; // bcrypt memotong password di atas 72 byte
 
@@ -425,7 +425,7 @@ export function registerCore(app) {
       code: c.referral_code,
       uses: Number(refUses.n),
       // goldEarned = bonus yang SUDAH CAIR (Level 3), bukan total pendaftar.
-      goldEarned: Number(refPaid.n) * 100,
+      goldEarned: Number(refPaid.n) * 200,
     };
     res.json({
       user: {
@@ -726,7 +726,7 @@ export function registerCore(app) {
     if (req.userId === u.id) {
       const uses = await one('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?', [u.id]);
       const paid = await one("SELECT COUNT(*) AS n FROM referral_pending WHERE referrer_id = ? AND status = 'paid'", [u.id]);
-      referral = { code: u.referral_code, uses: Number(uses.n), goldEarned: Number(paid.n) * 100 };
+      referral = { code: u.referral_code, uses: Number(uses.n), goldEarned: Number(paid.n) * 200 };
     }
     res.json({ profile: { ...u, publicId: publicId(u.id), referral_code: u.referral_code, referral, pass_hash: undefined, region_name: region?.name, country_name: region?.country_name || null, party, companies, articles, isPremium: u.premium_until > Date.now() } });
   }));
@@ -1527,5 +1527,88 @@ export function registerCore(app) {
     worldCache = { day: world?.day || 1, population: Number(population.n), regions: Number(regions.n), countries: Number(countries.n), onlineCount: await countOnline() };
     worldCacheAt = now;
     res.json(worldCache);
+  }));
+
+  // ---------- STATISTIK DUNIA (UI batch 2, ala Parlamentum) ----------
+  // Semua angka dihitung langsung dari DB — tanpa data palsu. Definisi:
+  // - perang diumumkan: jumlah perang (wars) — semua perang di dunia ini
+  //   lahir dari pemberontakan (POST /api/regions/rebel).
+  // - pemberontakan: jumlah dukungan pemberontakan AKTIF saat ini
+  //   (war_support); baris dukungan dihapus begitu perang dimulai, jadi
+  //   ini bukan duplikat hitungan perang.
+  // - kerusakan: total damage dari war_attacks; senjata digunakan: jumlah
+  //   serangan (1 senjata per serangan).
+  // - bangunan berdiri: konvoi yang masih aktif (expires_at > sekarang).
+  // - kontrak disepakati: transaksi pasar (market_tx) — sama seperti
+  //   halaman KONTRAK: tiap pembelian di pasar tercatat sebagai kontrak.
+  // - warga terbanyak: dihitung per WILAYAH (pasca-redesain dunia, negara
+  //   dibentuk pemain; wilayah tanpa negara tetap dihitung).
+  app.get('/api/stats', authRequired, citizenRequired, r(async (req, res) => {
+    const warsTotal = await one('SELECT COUNT(*) AS n FROM wars');
+    const warsActive = await one("SELECT COUNT(*) AS n FROM wars WHERE status = 'active'");
+    const rebelRows = await sql('SELECT region_id FROM war_support');
+    const dmg = await one('SELECT COALESCE(SUM(damage), 0) AS total, COUNT(*) AS attacks FROM war_attacks');
+    const buildings = await one('SELECT COUNT(*) AS n FROM convoys WHERE expires_at > ?', [Date.now()]);
+    const articles = await one('SELECT COUNT(*) AS n FROM articles');
+    const papers = await one('SELECT COUNT(*) AS n FROM newspapers');
+    const contracts = await one('SELECT COUNT(*) AS n FROM market_tx');
+    const partiesN = await one('SELECT COUNT(*) AS n FROM parties');
+    const companiesN = await one('SELECT COUNT(*) AS n FROM companies');
+    const population = await one('SELECT COUNT(*) AS n FROM citizens');
+    const regionsN = await one('SELECT COUNT(*) AS n FROM regions');
+    const countriesN = await one('SELECT COUNT(*) AS n FROM country');
+    const freeRegions = await one('SELECT COUNT(*) AS n FROM regions WHERE country_id IS NULL');
+    const topLevel = await sql(`SELECT u.username, c.level, c.xp, r.name AS region_name, co.name AS country_name
+      FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.region_id
+      LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 3`);
+    const topRegions = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, co.name AS country_name
+      FROM regions r LEFT JOIN citizens c ON c.region_id = r.id LEFT JOIN country co ON co.id = r.country_id
+      GROUP BY r.id, r.name, r.type, co.name ORDER BY citizens DESC, r.name ASC LIMIT 3`);
+    const topParties = await sql(`SELECT p.id, p.name, p.tag, COUNT(pm.citizen_id) AS members
+      FROM parties p LEFT JOIN party_members pm ON pm.party_id = p.id
+      GROUP BY p.id, p.name, p.tag ORDER BY members DESC, p.name ASC LIMIT 3`);
+    // Kartu wilayahku (dashboard): skor kota, peringkat, infrastruktur,
+    // kapasitas, bonus sumber daya, dukungan pemberontakan aktif.
+    const myRegion = await one(`SELECT r.*, c.name AS country_name,
+      (SELECT COUNT(*) FROM citizens WHERE region_id = r.id) AS population,
+      (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
+      (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion
+      FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?`, [req.citizen.region_id]);
+    const rankRow = await one('SELECT COUNT(*) AS n FROM regions WHERE city_score > ?', [myRegion.city_score]);
+    const warActive = await one("SELECT COUNT(*) AS n FROM wars WHERE region_id = ? AND status = 'active'", [req.citizen.region_id]);
+    const mySupport = await one('SELECT COUNT(*) AS n FROM war_support WHERE region_id = ? AND citizen_id = ?', [req.citizen.region_id, req.citizen.id]);
+    const myCountryCitizens = myRegion.country_id
+      ? await one('SELECT COUNT(*) AS n FROM citizens c JOIN regions r ON r.id = c.region_id WHERE r.country_id = ?', [myRegion.country_id])
+      : { n: 0 };
+    // Daftar lengkap (?full=level|regions|parties, maks 50) untuk LIHAT SEMUA.
+    const full = req.query.full;
+    let fullList = null;
+    if (full === 'level') {
+      fullList = await sql(`SELECT u.username, c.level, c.xp, r.name AS region_name, co.name AS country_name
+        FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.region_id
+        LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 50`);
+    } else if (full === 'regions') {
+      fullList = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, co.name AS country_name
+        FROM regions r LEFT JOIN citizens c ON c.region_id = r.id LEFT JOIN country co ON co.id = r.country_id
+        GROUP BY r.id, r.name, r.type, co.name ORDER BY citizens DESC, r.name ASC LIMIT 50`);
+    } else if (full === 'parties') {
+      fullList = await sql(`SELECT p.id, p.name, p.tag, COUNT(pm.citizen_id) AS members
+        FROM parties p LEFT JOIN party_members pm ON pm.party_id = p.id
+        GROUP BY p.id, p.name, p.tag ORDER BY members DESC, p.name ASC LIMIT 50`);
+    }
+    res.json({
+      world: {
+        wars: Number(warsTotal.n), warsActive: Number(warsActive.n),
+        rebellions: rebelRows.length, rebellionRegions: new Set(rebelRows.map((x) => x.region_id)).size,
+        damage: Number(dmg.total), weapons: Number(dmg.attacks),
+        buildings: Number(buildings.n), articles: Number(articles.n),
+        newspapers: Number(papers.n), contracts: Number(contracts.n),
+        parties: Number(partiesN.n), companies: Number(companiesN.n),
+        population: Number(population.n), regions: Number(regionsN.n),
+        countries: Number(countriesN.n), freeRegions: Number(freeRegions.n),
+      },
+      topLevel, topRegions, topParties, fullList,
+      myRegion: { ...myRegion, rank: Number(rankRow.n) + 1, warActive: Number(warActive.n) > 0, mySupport: Number(mySupport.n) > 0, countryCitizens: Number(myCountryCitizens.n) },
+    });
   }));
 }

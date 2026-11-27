@@ -118,14 +118,17 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
 .hud-shield::before, .hud-shield::after { content: ''; position: absolute; inset: 0; clip-path: polygon(50% 0, 100% 18%, 100% 62%, 50% 100%, 0 62%, 0 18%); pointer-events: none; }
 .hud-shield::before { background: var(--gold); }
 .hud-shield::after { inset: 2px; background: linear-gradient(180deg, #1a2c4d, #0d1526); }
-.hud-shield-xp { position: relative; z-index: 1; font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700; color: var(--gold-bright); line-height: 1; white-space: nowrap; }
-.hud-shield-lv { position: absolute; bottom: -9px; left: 50%; transform: translateX(-50%); z-index: 2; background: var(--gold); color: #1a1206; border-radius: 999px; width: 20px; height: 20px; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+/* Angka besar di dalam perisai = LEVEL warga (UI batch 2); lencana kecil di
+   bawahnya = progres XP "xp/xpNext" sebagai pil (bukan lingkaran lagi,
+   supaya "120/500" muat). */
+.hud-shield-big { position: relative; z-index: 1; font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700; color: var(--gold-bright); line-height: 1; white-space: nowrap; }
+.hud-shield-badge { position: absolute; bottom: -9px; left: 50%; transform: translateX(-50%); z-index: 2; background: var(--gold); color: #1a1206; border-radius: 999px; min-width: 20px; width: auto; height: 20px; padding: 0 5px; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; white-space: nowrap; }
 .hud-identity { flex: 1; min-width: 0; }
 .hud-name { font-family: 'Oswald', sans-serif; font-size: 17px; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hud-region { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hud-wallet { text-align: right; flex: none; }
-.hud-usd { font-weight: 700; font-size: 15px; }
-.hud-gold { color: var(--gold-bright); font-weight: 700; font-size: 15px; }
+.hud-usd { font-weight: 700; font-size: 19px; }
+.hud-gold { color: var(--gold-bright); font-weight: 700; font-size: 16px; }
 .hud-actions { display: flex; gap: 6px; flex: none; }
 
 /* ---------- drawer ---------- */
@@ -426,7 +429,13 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .crate-btn .badge { background: #e8821e; top: -4px; right: -4px; }
 .crate-btn.claimed { border-color: var(--line); color: var(--muted2); }
 .crate-btn:disabled { opacity: .45; cursor: default; }
-.hud-shield-xp { font-size: 24px; }
+.hud-shield-big { font-size: 24px; }
+
+/* Avatar bulat HUD (UI batch 2): foto profil bila ada, huruf awal bila
+   tidak — diisi renderHUD lewat avatarHtml(). Di kolom kiri, di atas
+   tombol menu; ketuk = profil sendiri. */
+.hud-avatar { width: 44px; height: 44px; border-radius: 50%; padding: 0; border: none; background: transparent; flex: none; overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.hud-avatar .avatar-img, .hud-avatar .avatar-initial { border: 2px solid var(--gold-dim); }
 
 /* Banner UU di bawah header (satu baris, hanya bila ada UU divoting). */
 .law-banner { display: block; width: 100%; background: linear-gradient(90deg, rgba(217,164,65,.18), rgba(217,164,65,.05)); border: none; border-bottom: 1px solid var(--gold-dim); padding: 8px 14px; text-align: center; font-size: 14px; color: var(--text); font: inherit; cursor: pointer; }
@@ -535,7 +544,7 @@ button.food-card:disabled { cursor: default; }
   .profile-hero-name { font-size: 26px; }
   .food-card .tier { font-size: 17px; }
   .food-card .val { font-size: 12px; }
-  .hud-shield-xp { font-size: 18px; }
+  .hud-shield-big { font-size: 18px; }
   .crate-btn { width: 36px; height: 36px; font-size: 17px; }
   .hud-side { gap: 4px; }
 }
@@ -551,11 +560,11 @@ button.food-card:disabled { cursor: default; }
   .hud { gap: 6px; padding: 6px 8px; flex-wrap: wrap; row-gap: 12px; }
   .hud-icon { width: 36px; height: 36px; font-size: 16px; border-radius: 8px; }
   .hud-shield { width: 44px; height: 50px; }
-  .hud-shield-xp { font-size: 16px; }
+  .hud-shield-big { font-size: 16px; }
   .hud-identity { order: 5; flex: 1 1 100%; }
   .hud-name { font-size: 15px; }
   .hud-region { font-size: 11px; }
-  .hud-usd, .hud-gold { font-size: 13px; }
+  .hud-usd, .hud-gold { font-size: 15px; }
   .hud-actions { gap: 4px; }
   .page { padding: 12px 10px 180px; }
   .page h2 { font-size: 22px; }
@@ -569,3 +578,42 @@ button.food-card:disabled { cursor: default; }
   .stat-num { font-size: 24px; }
   .row > * { min-width: 120px; }
 }
+
+/* ---------- UI batch 2 ala Parlamentum: peta mini, leaderboard, kartu wilayah ---------- */
+/* PETA LANGSUNG: ubin 17 wilayah — bingkai emas = wilayahku, titik teal =
+   bernegara, titik abu = wilayah merdeka. Bukan peta geografis (itu batch
+   terpisah); ubin ini jujur terhadap data: nama + negara + posisi pemain. */
+.map-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+@media (min-width: 560px) { .map-tiles { grid-template-columns: repeat(6, 1fr); } }
+.map-tile { background: #0a0f1c; border: 1px solid var(--line); border-radius: 8px; padding: 8px 4px; text-align: center; font: inherit; color: var(--text); cursor: pointer; min-width: 0; }
+.map-tile:hover { border-color: var(--gold-dim); }
+.map-tile .mt-name { display: block; font-family: 'Oswald', sans-serif; font-size: 12px; letter-spacing: .03em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-tile .mt-sub { display: block; font-size: 10px; color: var(--muted2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-tile .mt-sub .you { color: var(--gold-bright); font-weight: 700; }
+.map-tile.mine { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+.map-tile .mt-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--teal); margin-right: 3px; vertical-align: 1px; }
+.map-tile .mt-dot.free { background: var(--muted2); }
+
+/* Papan pemimpin: baris peringkat + nama + nilai + bar proporsional. */
+.leader-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid #16213a; }
+.leader-row:last-child { border-bottom: none; }
+.leader-rank { font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700; color: var(--gold-bright); width: 26px; text-align: center; flex: none; }
+.leader-main { flex: 1; min-width: 0; }
+.leader-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.leader-sub { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.leader-val { font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700; color: #fff; white-space: nowrap; flex: none; }
+.leader-val small { font-size: 13px; color: var(--muted); font-weight: 500; }
+.leader-bar { height: 6px; margin-top: 4px; }
+
+/* Kartu wilayah: skor kota besar + bar infrastruktur. */
+.region-score { font-family: 'Oswald', sans-serif; font-size: 44px; font-weight: 700; line-height: 1; color: var(--gold-bright); }
+.region-score small { font-size: 20px; color: var(--muted); font-weight: 500; }
+.infra-row { display: grid; grid-template-columns: 96px 1fr 28px; align-items: center; gap: 10px; padding: 5px 0; }
+.infra-row .lbl { font-family: 'Oswald', sans-serif; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.infra-row .val { font-weight: 700; text-align: right; }
+
+/* Kartu barang T1 di dashboard (ringkas, tanpa tombol makan). */
+.inv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.inv-card { background: #0a0f1c; border: 1px solid var(--line); border-radius: 10px; padding: 10px 4px; text-align: center; min-width: 0; }
+.inv-card .nm { font-family: 'Oswald', sans-serif; font-size: 14px; letter-spacing: .03em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inv-card .qty { color: var(--gold-bright); font-weight: 700; font-size: 15px; }

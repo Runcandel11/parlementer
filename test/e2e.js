@@ -406,7 +406,7 @@ async function main() {
 
   // Naik ke Level 3 lewat jalur normal: klaim (+2 XP) + 13 latih (str×5,
   // edu×5, eco×3 = 13 XP, biaya total 36 emas). Pendaftar mulai 50 emas,
-  // setelah klaim 55, setelah latih 19, setelah bonus referral cair 69.
+  // setelah klaim 55, setelah latih 19, setelah bonus referral cair 119.
   // Jeda latihan: reset langsung di DB (pola yang sama seperti forceTick /
   // mundurkan tanggal di bawah) supaya helper levelTo3 bisa latih
   // beruntun tanpa menunggu jeda 2 menit × level.
@@ -449,24 +449,24 @@ async function main() {
   check('Pendaftar naik ke Level 3 (klaim + 13 latih)', r.status === 200, r.data.error || '');
   r = await N.get('/api/me');
   const nowMs = Date.now();
-  check('Pendaftar Level 3: 69 emas (19 + 50 bonus referral)', r.data.citizen.gold === 69, `emas=${r.data.citizen.gold}`);
+  check('Pendaftar Level 3: 119 emas (19 + 100 bonus referral)', r.data.citizen.gold === 119, `emas=${r.data.citizen.gold}`);
   check('Pendaftar Level 3: premium aktif 1 hari', r.data.citizen.isPremium && r.data.citizen.premium_until > nowMs && r.data.citizen.premium_until <= nowMs + 86400000 + 60000, `until=${r.data.citizen.premium_until}`);
   r = await R.get('/api/me');
-  check('Referrer: 150 emas (50 + 100 bonus)', r.data.citizen.gold === 150, `emas=${r.data.citizen.gold}`);
+  check('Referrer: 250 emas (50 + 200 bonus)', r.data.citizen.gold === 250, `emas=${r.data.citizen.gold}`);
   check('Referrer: premium aktif ~2 hari', r.data.citizen.isPremium && r.data.citizen.premium_until > nowMs + 86400000 && r.data.citizen.premium_until <= nowMs + 2 * 86400000 + 60000);
-  check('Referrer: 1 pemakai kode, +100 emas referral cair', r.data.referral.uses === 1 && r.data.referral.goldEarned === 100);
+  check('Referrer: 1 pemakai kode, +200 emas referral cair', r.data.referral.uses === 1 && r.data.referral.goldEarned === 200);
 
   r = await X.post('/api/auth/register', { email: 'ref3@test.local', password: 'rahasia123', username: 'pendaftar_dua', ref: refCode.toLowerCase() });
   check('Kode referral huruf kecil tetap berlaku', r.status === 200 && r.data.ok);
   r = await X.get('/api/me');
   check('Pendaftar kedua: 50 emas, tanpa premium', r.data.citizen.gold === 50 && !r.data.citizen.isPremium);
   r = await R.get('/api/me');
-  check('Referrer: 2 pemakai kode, bonus cair masih 100', r.data.referral.uses === 2 && r.data.referral.goldEarned === 100);
+  check('Referrer: 2 pemakai kode, bonus cair masih 200', r.data.referral.uses === 2 && r.data.referral.goldEarned === 200);
   r = await levelTo3(X);
   check('Pendaftar kedua naik ke Level 3', r.status === 200, r.data.error || '');
   r = await R.get('/api/me');
-  check('Referrer: 2 pemakai kode, +200 emas referral cair', r.data.referral.uses === 2 && r.data.referral.goldEarned === 200);
-  check('Referrer: 250 emas (50 + 200 bonus)', r.data.citizen.gold === 250, `emas=${r.data.citizen.gold}`);
+  check('Referrer: 2 pemakai kode, +400 emas referral cair', r.data.referral.uses === 2 && r.data.referral.goldEarned === 400);
+  check('Referrer: 450 emas (50 + 400 bonus)', r.data.citizen.gold === 450, `emas=${r.data.citizen.gold}`);
 
   r = await Y.post('/api/auth/register', { email: 'ref4@test.local', password: 'rahasia123', username: 'pendaftar_tiga', ref: 'ZZZZZZZZ' });
   check('Kode referral tidak valid: registrasi tetap jalan', r.status === 200 && r.data.ok);
@@ -498,7 +498,7 @@ async function main() {
   // --- Batas referral: maks 5 bonus terbayar/hari/pemilik kode ---
   // R sudah menerima 2 bonus (N, X). Tiga pendaftar lagi naik Level 3 →
   // bonus ke-3, 4, 5 cair. Pendaftar ke-6 naik Level 3 → bonus DITUNDA
-  // (skipped): R tetap 500 emas cair, pendaftar itu tetap 19 emas.
+  // (skipped): R tetap 1000 emas cair, pendaftar itu tetap 19 emas.
   const caps = [];
   for (let i = 1; i <= 4; i++) {
     const P = new Client();
@@ -509,12 +509,12 @@ async function main() {
     check(`Pendaftar cap ${i} naik ke Level 3`, r.status === 200, r.data.error || '');
   }
   r = await R.get('/api/me');
-  check('Referrer: 6 pemakai kode, 500 emas referral cair (5 bonus maks/hari)', r.data.referral.uses === 6 && r.data.referral.goldEarned === 500, `uses=${r.data.referral.uses} earned=${r.data.referral.goldEarned}`);
-  check('Referrer: 550 emas (50 + 500 bonus)', r.data.citizen.gold === 550, `emas=${r.data.citizen.gold}`);
+  check('Referrer: 6 pemakai kode, 1000 emas referral cair (5 bonus maks/hari)', r.data.referral.uses === 6 && r.data.referral.goldEarned === 1000, `uses=${r.data.referral.uses} earned=${r.data.referral.goldEarned}`);
+  check('Referrer: 1050 emas (50 + 1000 bonus)', r.data.citizen.gold === 1050, `emas=${r.data.citizen.gold}`);
   r = await caps[3].get('/api/me');
   check('Pendaftar cap ke-6 (bonus tertunda): 19 emas, tanpa premium', r.data.citizen.gold === 19 && !r.data.citizen.isPremium, `emas=${r.data.citizen.gold}`);
   r = await caps[2].get('/api/me');
-  check('Pendaftar cap ke-5 (bonus cair): 69 emas + premium', r.data.citizen.gold === 69 && r.data.citizen.isPremium, `emas=${r.data.citizen.gold}`);
+  check('Pendaftar cap ke-5 (bonus cair): 119 emas + premium', r.data.citizen.gold === 119 && r.data.citizen.isPremium, `emas=${r.data.citizen.gold}`);
 
   r = await B.get('/api/admin/players');
   check('Non-admin: GET /api/admin/players ditolak 403', r.status === 403);
@@ -573,7 +573,7 @@ async function main() {
 
   r = await R.get('/api/profile/referrer_satu');
   check('Profil menampilkan ID publik PL-000003', r.data.profile.publicId === 'PL-000003');
-  check('Profil sendiri: kode + 6 pemakai + 500 emas referral', r.data.profile.referral && r.data.profile.referral.uses === 6 && r.data.profile.referral.goldEarned === 500 && r.data.profile.referral.code === refCode);
+  check('Profil sendiri: kode + 6 pemakai + 1000 emas referral', r.data.profile.referral && r.data.profile.referral.uses === 6 && r.data.profile.referral.goldEarned === 1000 && r.data.profile.referral.code === refCode);
   r = await B.get('/api/profile/referrer_satu');
   check('Profil orang lain: statistik referral tidak ditampilkan', r.data.profile.referral === null);
   const html2 = await fetch(BASE + '/').then((x) => x.text());
