@@ -284,6 +284,13 @@ CREATE TABLE IF NOT EXISTS citizens (
   xp INTEGER NOT NULL DEFAULT 0,
   energy INTEGER NOT NULL DEFAULT 100 CHECK (energy >= 0),
   energy_updated_at BIGINT NOT NULL DEFAULT 0,
+  -- Kredit skor (v3.0.0, saran LIO tiket #7): semua warga mulai 100;
+  -- laporan chat yang terbukti benar menurunkan skor −10; pulih +1/hari
+  -- (malas, di loadCitizen); 0 = banned otomatis. Rentang dijaga di
+  -- kode (clamp 0..100), bukan CHECK — supaya migrasi kolom lama tidak
+  -- perlu menambah constraint.
+  credit_score INTEGER NOT NULL DEFAULT 100,
+  credit_updated_at BIGINT NOT NULL DEFAULT 0,
   last_seen_at BIGINT NOT NULL DEFAULT 0,
   gold REAL NOT NULL DEFAULT 50 CHECK (gold >= 0),
   usd REAL NOT NULL DEFAULT 500 CHECK (usd >= 0),
@@ -731,6 +738,19 @@ CREATE TABLE IF NOT EXISTS chat_reports (
   reason TEXT NOT NULL,
   details TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'open',
+  -- Putusan admin (v3.0.0): '' = belum diputus, 'proven' = terbukti benar
+  -- (skor penulis pesan −10), 'not_proven' = tidak terbukti (tanpa efek).
+  verdict TEXT NOT NULL DEFAULT '',
+  created_at BIGINT NOT NULL
+);
+-- Riwayat perubahan skor kredit (v3.0.0): siapa, berapa, kenapa, kapan --
+-- dibaca admin lewat GET /api/admin/credit-history/:userId.
+CREATE TABLE IF NOT EXISTS credit_history (
+  id ${id},
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  delta INTEGER NOT NULL,
+  score_after INTEGER NOT NULL,
+  reason TEXT NOT NULL,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS blocked (
@@ -1035,6 +1055,7 @@ export async function initDb() {
     await migrateWorldRedesign(t);
     await migrateTravelColumns(t);
     await migrateCompanyColumns(t);
+    await migrateCreditColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1091,7 +1112,7 @@ async function runDataFixups() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -1108,7 +1129,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1331,6 +1352,22 @@ async function migrateCompanyColumns(t) {
   await addCol('companies', 'bonus_credit', 'INTEGER NOT NULL DEFAULT 0');
   await addCol('companies', 'bonus_given', 'INTEGER NOT NULL DEFAULT 0');
   await addCol('companies', 'bonus_warned_at', 'BIGINT NOT NULL DEFAULT 0');
+}
+
+// Migrasikan kolom kredit skor v3.0.0 untuk database lama. Idempotent:
+// kolom yang sudah ada tidak disentuh.
+async function migrateCreditColumns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('citizens', 'credit_score', 'INTEGER NOT NULL DEFAULT 100');
+  await addCol('citizens', 'credit_updated_at', 'BIGINT NOT NULL DEFAULT 0');
+  await addCol('chat_reports', 'verdict', "TEXT NOT NULL DEFAULT ''");
 }
 
 // Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di

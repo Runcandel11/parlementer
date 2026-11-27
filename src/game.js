@@ -21,8 +21,60 @@
 // negara deterministik per negara), penanda KAMU, "Cari wilayah...",
 // panel bawah POLITIK · NEGARA, zoom; kunjungan ke peta menandai tugas
 // kronik 'map' selesai.
+// Update BESAR v3.0.0 = sistem kredit skor (saran LIO, tiket #7): semua
+// warga mulai 100; laporan chat yang TERBUKTI benar oleh admin menurunkan
+// skor penulis pesan −10; skor pulih +1/hari (malas, dari waktu berlalu);
+// makin rendah skor makin banyak batasan (pers <80, partai <60, pasar
+// <40, chat/DM <20); skor 0 = akun dibanned otomatis (bisa banding,
+// unban mengembalikan skor ke 50).
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '2.5.0';
+export const VERSION = '3.0.0';
+
+// --- Sistem kredit skor (v3.0.0, saran LIO tiket #7) ---
+// Semua warga mulai 100. Laporan chat yang terbukti benar menurunkan skor
+// penulis pesan yang dilaporkan. Pulih +1/hari secara malas (settle di
+// loadCitizen, pola yang sama seperti regen energi). Skor 0 = banned
+// otomatis; unban mengembalikan skor ke 50 (kesempatan kedua).
+export const CREDIT_START_SCORE = 100;
+export const CREDIT_MAX_SCORE = 100;
+export const CREDIT_RECOVERY_PER_DAY = 1;
+export const CREDIT_DAY_MS = 24 * 60 * 60 * 1000;
+export const CREDIT_DEDUCTION_PROVEN_REPORT = 10;
+export const CREDIT_UNBAN_RESET_SCORE = 50;
+// Batasan bertingkat — skor minimal untuk tiap aksi (dipakai middleware
+// requireCredit di util.js; server yang menegakkan, UI hanya menampilkan).
+export const CREDIT_MIN_FOR = { press: 80, party: 60, market: 40, chat: 20 };
+export const CREDIT_RESTRICTION_LABELS = {
+  press: 'Membuat koran / menerbitkan artikel',
+  party: 'Mendirikan partai / mencalonkan di pemilu',
+  market: 'Jual-beli di pasar',
+  chat: 'Mengirim chat / DM',
+};
+// Tier tampilan: batas bawah (inklusif) → label + warna + daftar batasan
+// yang sedang berlaku di tier itu (kumulatif dari tier di atasnya).
+export const CREDIT_TIERS = [
+  { min: 80, key: 'baik', label: 'Baik', color: '#3fb950', restrictions: [] },
+  { min: 60, key: 'waspada', label: 'Waspada', color: '#d29922', restrictions: ['press'] },
+  { min: 40, key: 'terbatas', label: 'Terbatas', color: '#f0883e', restrictions: ['press', 'party'] },
+  { min: 20, key: 'diawasi', label: 'Diawasi', color: '#f85149', restrictions: ['press', 'party', 'market'] },
+  { min: 1, key: 'kritis', label: 'Kritis', color: '#da3633', restrictions: ['press', 'party', 'market', 'chat'] },
+  { min: 0, key: 'banned', label: 'Dibanned', color: '#da3633', restrictions: ['press', 'party', 'market', 'chat'] },
+];
+export function creditTierFor(score) {
+  const s = Math.max(0, Math.min(CREDIT_MAX_SCORE, Number(score ?? CREDIT_START_SCORE)));
+  return CREDIT_TIERS.find((t) => s >= t.min) || CREDIT_TIERS[CREDIT_TIERS.length - 1];
+}
+// Satu objek untuk API (/api/me, profil): skor + tier + batasan yang
+// berlaku + skor minimal tiap aksi (supaya UI tidak mengulang angka).
+export function creditInfo(score) {
+  const tier = creditTierFor(score);
+  return {
+    score: Math.max(0, Math.min(CREDIT_MAX_SCORE, Number(score ?? CREDIT_START_SCORE))),
+    tier: tier.key, label: tier.label, color: tier.color,
+    restrictions: tier.restrictions.map((key) => ({ key, label: CREDIT_RESTRICTION_LABELS[key], min: CREDIT_MIN_FOR[key] })),
+    minFor: { ...CREDIT_MIN_FOR },
+  };
+}
 
 export const WA_TOPUP_URL = 'https://wa.me/6285220743283';
 export const MINT_RATE = 10; // 1 emas dicetak jadi 10 USD

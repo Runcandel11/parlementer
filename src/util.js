@@ -2,7 +2,7 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import { one, run, convoyBuildings } from './db.js';
-import { energyCapFor, ENERGY_REGEN_PER_MIN, ENERGY_REGEN_MS } from './game.js';
+import { energyCapFor, ENERGY_REGEN_PER_MIN, ENERGY_REGEN_MS, CREDIT_START_SCORE, CREDIT_MAX_SCORE, CREDIT_RECOVERY_PER_DAY, CREDIT_DAY_MS } from './game.js';
 
 export const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 // Fail-closed: di production server MENOLAK start bila JWT_SECRET tidak
@@ -94,8 +94,75 @@ export async function loadCitizen(userId) {
   // Regen energi malas (Tahap 4): tiap kali data warga dibaca, pulihkan
   // +2/menit dari waktu yang berlalu — pemain offline pun pulih saat kembali.
   // Gagal regen tidak boleh menggagalkan pembacaan data.
-  try { return await applyEnergyRegen(row); }
+  let afterEnergy;
+  try { afterEnergy = await applyEnergyRegen(row); }
   catch (e) { console.error('[regen] gagal:', e.message); return row; }
+  // Pulih skor kredit malas (v3.0.0): +1/hari dari waktu yang berlalu,
+  // berhenti di 100. Pola yang sama seperti regen energi (UPDATE bersyarat
+  // pada jam lama supaya dua request paralel tidak memulihkan dua kali).
+  // Akun banned TIDAK pulih — ban hanya dicabut admin (unban) atau banding.
+  try { return await settleCreditScore(afterEnergy); }
+  catch (e) { console.error('[kredit] gagal memulihkan skor:', e.message); return afterEnergy; }
+}
+
+// Pulihkan skor kredit +1 per hari penuh sejak credit_updated_at (cap
+// 100). Baris lama (credit_updated_at = 0): jangan beri windfall — cukup
+// tandai jam terakhir = sekarang. Skor 100 atau belum sehari: hanya majukan
+// jam bila sudah lewat sehari supaya hari tidak menumpuk.
+export async function settleCreditScore(c) {
+  const now = Date.now();
+  if (c.is_banned) return c;
+  const score = Math.max(0, Math.min(CREDIT_MAX_SCORE, Number(c.credit_score ?? CREDIT_START_SCORE)));
+  const last = c.credit_updated_at || 0;
+  if (!last) {
+    await run('UPDATE citizens SET credit_updated_at = ? WHERE id = ?', [now, c.id]);
+    return { ...c, credit_score: score, credit_updated_at: now };
+  }
+  const elapsed = now - last;
+  if (elapsed < CREDIT_DAY_MS) return { ...c, credit_score: score };
+  const days = Math.floor(elapsed / CREDIT_DAY_MS);
+  const newTs = last + days * CREDIT_DAY_MS;
+  if (score >= CREDIT_MAX_SCORE) {
+    await run('UPDATE citizens SET credit_updated_at = ? WHERE id = ?', [newTs, c.id]);
+    return { ...c, credit_score: score, credit_updated_at: newTs };
+  }
+  const newScore = Math.min(CREDIT_MAX_SCORE, score + days * CREDIT_RECOVERY_PER_DAY);
+  const upd = await run(
+    'UPDATE citizens SET credit_score = ?, credit_updated_at = ? WHERE id = ? AND credit_updated_at = ?',
+    [newScore, newTs, c.id, last]);
+  if (!upd.changes) {
+    // Kalah race: baca ulang baris yang sudah dipulihkan request lain.
+    const fresh = await one('SELECT * FROM citizens WHERE id = ?', [c.id]);
+    return fresh ? { ...c, ...fresh } : { ...c, credit_score: score };
+  }
+  return { ...c, credit_score: newScore, credit_updated_at: newTs };
+}
+
+// Hitung skor setelah pemulihan malas TANPA menulis DB — dipakai tampilan
+// publik (profil orang lain) yang tidak boleh menulis atas nama pemilik
+// profil. Akun banned tidak pulih.
+export function creditScoreSettled(score, updatedAt, isBanned, now = Date.now()) {
+  const s = Math.max(0, Math.min(CREDIT_MAX_SCORE, Number(score ?? CREDIT_START_SCORE)));
+  if (isBanned || !updatedAt) return s;
+  const days = Math.floor((now - updatedAt) / CREDIT_DAY_MS);
+  if (days <= 0) return s;
+  return Math.min(CREDIT_MAX_SCORE, s + days * CREDIT_RECOVERY_PER_DAY);
+}
+
+// Penjaga batasan kredit skor (v3.0.0): dipakai sebagai middleware SETELAH
+// citizenRequired (req.citizen sudah dipulihkan malas oleh loadCitizen).
+// Admin dikecualikan — skor admin tidak pernah turun (laporan terhadap
+// admin ditolak di /api/chat/report). Menolak 403 + pesan yang menjelaskan
+// skor saat ini, skor minimal, dan cara pulih (+1/hari).
+export function requireCredit(minScore, actionLabel) {
+  return (req, res, next) => {
+    if (req.citizen?.is_admin) return next();
+    const s = Math.max(0, Math.min(CREDIT_MAX_SCORE, Number(req.citizen?.credit_score ?? CREDIT_START_SCORE)));
+    if (s < minScore) {
+      return res.status(403).json({ error: `Skor kreditmu ${s} — butuh minimal ${minScore} untuk ${actionLabel}. Skor pulih +1 setiap hari; jaga perilakumu di game.` });
+    }
+    next();
+  };
 }
 
 // Selesaikan perjalanan yang waktunya sudah habis: pindahkan region_id ke

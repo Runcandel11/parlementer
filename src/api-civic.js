@@ -1,7 +1,7 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
 import { sql, one, run, tx, forUpdate, convoyBuildings, getParliamentOpensAt } from './db.js';
-import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl } from './util.js';
-import { warDamage, warDamageWithBonus, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS } from './game.js';
+import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl, requireCredit } from './util.js';
+import { warDamage, warDamageWithBonus, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR } from './game.js';
 
 // Ruang chat publik yang selalu ada. Ruang wilayah (region_<id>) bersifat
 // dinamis — divalidasi terpisah di validateRoom (hanya wilayah sendiri).
@@ -534,7 +534,7 @@ export function registerCivic(app) {
     res.json({ parties: rows, mine, pending, members });
   }));
 
-  app.post('/api/parties', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/parties', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.party, 'mendirikan partai'),  r(async (req, res) => {
     const { name, tag, ideology, type } = req.body || {};
     const c = req.citizen;
     if (c.level < 10) return res.status(400).json({ error: 'Mendirikan partai butuh Level 10.' });
@@ -789,7 +789,7 @@ export function registerCivic(app) {
   // partai boleh menominasikan dirinya sendiri ATAU anggota partainya
   // (mekanismenya nominasi oleh kepala, bukan pendaftaran oleh anggota).
   // Satu kandidat per partai per pemilu. Calon harus warga negara yang sama.
-  app.post('/api/elections/:id/nominate', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/elections/:id/nominate', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.party, 'mencalonkan di pemilu'),  r(async (req, res) => {
     const { citizen_id } = req.body || {};
     const e = await one("SELECT * FROM elections WHERE id = ? AND status = 'open' AND type = 'president'", [req.params.id]);
     if (!e) return res.status(404).json({ error: 'Pemilu presiden yang sedang dibuka tidak ditemukan.' });
@@ -817,7 +817,7 @@ export function registerCivic(app) {
   // jalur pendaftaran sama sekali — partai tidak pernah bisa menang kursi
   // lewat pemilu). Satu partai = satu baris kandidat; suara untuk partai
   // dihitung dari baris ini, kursi dibagi tick saat pemilu ditutup.
-  app.post('/api/elections/:id/register-party', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/elections/:id/register-party', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.party, 'mendaftarkan partai ke pemilu'),  r(async (req, res) => {
     const e = await one("SELECT * FROM elections WHERE id = ? AND status = 'open' AND type = 'parliament'", [req.params.id]);
     if (!e) return res.status(404).json({ error: 'Pemilu parlemen yang sedang dibuka tidak ditemukan.' });
     const c = req.citizen;
@@ -1034,7 +1034,7 @@ export function registerCivic(app) {
     res.json({ newspapers: rows });
   }));
 
-  app.post('/api/press/newspaper', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/press/newspaper', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.press, 'membuat koran'),  r(async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name || name.length < 3 || name.length > 50) return res.status(400).json({ error: 'Nama koran 3–50 karakter.' });
     // Atomik: kunci baris warga + potong 5 emas bersyarat di dalam tx.
@@ -1072,7 +1072,7 @@ export function registerCivic(app) {
     res.json({ ok: true });
   }));
 
-  app.post('/api/press/articles', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/press/articles', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.press, 'menerbitkan artikel'),  r(async (req, res) => {
     const { newspaper_id, title, content, topic, cover, cover_sm } = req.body || {};
     const np = await one('SELECT * FROM newspapers WHERE id = ? AND owner_id = ?', [newspaper_id, req.citizen.id]);
     if (!np) return res.status(403).json({ error: 'Kamu hanya bisa menulis di koranmu sendiri.' });
@@ -1242,8 +1242,16 @@ export function registerCivic(app) {
   app.post('/api/chat/report', authRequired, citizenRequired, r(async (req, res) => {
     const { message_id, reason, details } = req.body || {};
     if (!['Pelecehan', 'Ujaran kebencian', 'Spam', 'Lainnya'].includes(reason)) return res.status(400).json({ error: 'Alasan laporan tidak dikenal.' });
-    const msg = await one('SELECT id FROM chat_messages WHERE id = ?', [message_id]);
+    const msg = await one(
+      `SELECT cm.id, cm.citizen_id, u.is_admin FROM chat_messages cm
+       JOIN citizens c ON c.id = cm.citizen_id JOIN users u ON u.id = c.user_id WHERE cm.id = ?`,
+      [message_id]);
     if (!msg) return res.status(404).json({ error: 'Pesan tidak ditemukan.' });
+    // Kredit skor (v3.0.0): laporan terhadap diri sendiri dan terhadap
+    // admin DITOLAK — skor admin tidak pernah turun, dan pemain tidak bisa
+    // menjatuhkan skornya sendiri.
+    if (msg.citizen_id === req.citizen.id) return res.status(400).json({ error: 'Tidak bisa melaporkan pesan sendiri.' });
+    if (msg.is_admin) return res.status(400).json({ error: 'Tidak bisa melaporkan admin.' });
     await run('INSERT INTO chat_reports (reporter_id, message_id, reason, details, created_at) VALUES (?,?,?,?,?) RETURNING id',
       [req.citizen.id, message_id, reason, (details || '').slice(0, 500), Date.now()]);
     res.json({ ok: true });
@@ -1266,7 +1274,7 @@ export function registerCivic(app) {
     res.json({ ok: true });
   }));
 
-  app.post('/api/chat/:room', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/chat/:room', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.chat, 'mengirim pesan chat'),  r(async (req, res) => {
     const room = req.params.room;
     const roomErr = await validateRoom(room, req.citizen);
     if (roomErr) return res.status(404).json({ error: roomErr });
@@ -1341,7 +1349,7 @@ export function registerCivic(app) {
     res.json({ messages: rows });
   }));
 
-  app.post('/api/dms/:citizenId', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/dms/:citizenId', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.chat, 'mengirim DM'),  r(async (req, res) => {
     const other = Number(req.params.citizenId);
     const { content } = req.body || {};
     const text = (content || '').trim();

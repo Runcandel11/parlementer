@@ -905,6 +905,14 @@ ROUTES.dashboard = async () => {
       <div class="kv"><span class="k">Rupiah</span><span class="v">${fmtRp(c.usd)}</span></div>
     </div>
   </div>
+  ${ME.credit ? `<div class="panel" id="dash-credit">
+    <div class="panel-head"><h3>⭐ SKOR KREDIT</h3><span class="chip" style="color:${ME.credit.color}"><b>${ME.credit.score}/100 · ${esc(ME.credit.label)}</b></span></div>
+    <p class="muted small">Skor turun −10 tiap ada laporan tentangmu yang terbukti benar. Pulih +1 setiap hari.</p>
+    ${ME.credit.restrictions.length
+      ? `<p class="small" style="color:#f85149">⛔ Saat ini dibatasi: ${ME.credit.restrictions.map((x) => `${esc(x.label)} (butuh ${x.min})`).join(' · ')}</p>`
+      : '<p class="small" style="color:#3fb950">✅ Tidak ada batasan — semua fitur terbuka.</p>'}
+    <p class="muted small">Batasan: pers &lt;80 · partai &lt;60 · pasar &lt;40 · chat &lt;20 · skor 0 = banned.</p>
+  </div>` : ''}
   ${ME.job ? `<div class="panel" id="dash-shift">
     <div class="panel-head"><h3>💼 PEKERJAAN</h3><button class="btn-text gold" type="button" data-goto="#/jobs">LIHAT ›</button></div>
     <div class="kv"><span class="k">${esc(ME.job.title)} · ${esc(ME.job.company_name || 'ADMIN')}</span><span class="v gold-text">${payLabel(ME.job)}</span></div>
@@ -1308,6 +1316,7 @@ ROUTES.profile = async (username) => {
     <div class="kv"><span class="k">Partai</span><span class="v">${pr.party ? esc(pr.party.name) + ' [' + esc(pr.party.tag) + ']' : '—'}</span></div>
     <div class="kv"><span class="k">Bergabung</span><span class="v">${fmtDate(pr.created_at)}</span></div>
     <div class="kv"><span class="k">Terakhir main</span><span class="v">${pr.last_seen_at ? ago(pr.last_seen_at) : 'Belum pernah'}</span></div>
+    <div class="kv"><span class="k">Skor Kredit</span><span class="v"><b style="color:${pr.credit?.color || '#3fb950'}">${pr.credit_score ?? 100}/100 · ${esc(pr.credit?.label || 'Baik')}</b></span></div>
     ${pr.bio ? `<p style="margin-top:10px">${esc(pr.bio)}</p>` : ''}
     ${pr.user_id === ME.citizen.user_id ? `<div style="margin-top:12px">
       <label class="small muted">BIOGRAFI (maks 1000 karakter)</label>
@@ -1492,6 +1501,8 @@ ROUTES.admin = async (q) => {
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(p.publicId)}</b></span></div>
     <div class="kv"><span class="k">Email</span><span class="v">${esc(p.email)}</span></div>
     <div class="kv"><span class="k">Level</span><span class="v">${p.level}</span></div>
+    <div class="kv"><span class="k">Skor Kredit</span><span class="v"><b>${p.credit_score ?? 100}/100</b> <button class="btn-ghost btn-sm" data-act="credit-history" type="button">📉 Riwayat</button></span></div>
+    <div class="credit-history-box"></div>
     <div class="kv"><span class="k">Emas / Rupiah</span><span class="v">${fmt(p.gold)} emas · ${fmtRp(p.usd)}</span></div>
     <div class="kv"><span class="k">Premium</span><span class="v">${p.isPremium ? 'Aktif sampai ' + fmtDate(p.premium_until) : 'Tidak aktif'}</span></div>
     ${p.is_banned ? `<div class="kv"><span class="k">Alasan ban</span><span class="v">${esc(p.banned_reason || '')}</span></div>` : ''}
@@ -1554,6 +1565,16 @@ ROUTES.admin = async (q) => {
           tier: Number(panel.querySelector('.adm-tier').value), qty: Number(panel.querySelector('.adm-qty').value), kind: kind(),
         });
         if (act === 'energy') return runAct('/api/admin/energy', { user_id: uid, kind: kind() });
+        if (act === 'credit-history') {
+          const box = panel.querySelector('.credit-history-box');
+          try {
+            const d = await api('/api/admin/credit-history/' + uid);
+            box.innerHTML = d.history.length
+              ? `<p class="small" style="margin-top:8px"><b>📉 Riwayat skor kredit (skor kini ${d.credit_score})</b></p>` + d.history.map((h) => `<div class="kv"><span class="k">${esc(h.reason)}</span><span class="v">${h.delta > 0 ? '+' : ''}${h.delta} → ${h.score_after} · <small class="muted">${fmtDate(h.created_at)}</small></span></div>`).join('')
+              : '<p class="muted small" style="margin-top:8px">Belum ada perubahan skor kredit.</p>';
+          } catch (e) { toast(e.message); }
+          return;
+        }
         if (act === 'unban') return runAct('/api/admin/unban', { user_id: uid });
         if (act === 'ban') {
           const reason = panel.querySelector('.adm-reason').value.trim();
@@ -1774,8 +1795,12 @@ async function renderAdminInbox(statusFilter) {
         <br><small class="muted">${fmtDate(r.created_at)}</small>
       </span>
       <span class="v">${r.status === 'open'
-        ? `<button class="btn-gold btn-sm" data-report="${r.id}" type="button">👁 Tandai Ditinjau</button>`
-        : '<span class="chip">✅ DITINJAU</span>'}</span>
+        ? `<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+             <span class="small muted">Skor penulis: <b>${r.author_credit_score ?? '?'}</b></span>
+             <button class="btn-gold btn-sm" data-report="${r.id}" data-verdict="proven" type="button">✅ TERBUKTI (−10)</button>
+             <button class="btn-ghost btn-sm" data-report="${r.id}" data-verdict="not_proven" type="button">❌ TIDAK TERBUKTI</button>
+           </div>`
+        : `<span class="chip">✅ DITINJAU${r.verdict === 'proven' ? ' · TERBUKTI' : r.verdict === 'not_proven' ? ' · TIDAK TERBUKTI' : ''}</span>`}</span>
     </div>`).join('') : '<p class="muted">Belum ada laporan chat.</p>'}
   </div>`);
   $$('#page [data-ticket]').forEach((panel) => {
@@ -1799,7 +1824,13 @@ async function renderAdminInbox(statusFilter) {
     });
   });
   $$('[data-report]').forEach((b) => b.onclick = async () => {
-    try { await post('/api/admin/reports/' + b.dataset.report + '/review'); toast('Laporan ditandai sudah ditinjau.'); route(); }
+    try {
+      const res = await post('/api/admin/reports/' + b.dataset.report + '/review', { verdict: b.dataset.verdict });
+      if (b.dataset.verdict === 'proven') {
+        toast(res.banned ? 'Laporan TERBUKTI — skor penulis mencapai 0, akun dibanned.' : `Laporan TERBUKTI — skor penulis kini ${res.newScore}.`);
+      } else toast('Laporan ditandai TIDAK TERBUKTI — skor tidak berubah.');
+      route();
+    }
     catch (e) { toast(e.message); }
   });
 }

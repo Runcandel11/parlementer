@@ -6,6 +6,7 @@ import {
   signToken, cookieOptions, COOKIE_NAME, authRequired, citizenRequired,
   loadCitizen, isValidEmail, isValidUsername, todayStr, publicId,
   getUserIdFromReq, bootstrapCodeMatches, fmtRp, parseImageDataUrl,
+  requireCredit, creditScoreSettled,
 } from './util.js';
 import { dbRateLimit } from './rate-limit.js';
 import { getMyCountry, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary } from './api-civic.js';
@@ -15,7 +16,7 @@ import {
   energyCapFor, DAILY_MISSIONS, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS, REGION_COORDS,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, FACTORY_INPUT, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
-  PRICE_BAND, WASH_TRADE,
+  PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
 } from './game.js';
 
 export function registerCore(app) {
@@ -278,9 +279,9 @@ export function registerCore(app) {
       const startRegion = await t.one('SELECT id, name FROM regions ORDER BY RANDOM() LIMIT 1');
       const startRegionId = startRegion ? startRegion.id : 1;
       const citizen = await t.run(
-        `INSERT INTO citizens (user_id, level, xp, energy, energy_updated_at, gold, usd, region_id, home_region_id, home_changed_at, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
-        [user.id, 1, 0, 100, now, 50, 500, startRegionId, startRegionId, 0, now]);
+        `INSERT INTO citizens (user_id, level, xp, energy, energy_updated_at, gold, usd, region_id, home_region_id, home_changed_at, credit_score, credit_updated_at, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+        [user.id, 1, 0, 100, now, 50, 500, startRegionId, startRegionId, 0, 100, now, now]);
       // Paket awal: 3 Makanan T1, 3 Senjata T1, 3 Tiket T1.
       for (const name of ['Makanan', 'Senjata', 'Tiket']) {
         const com = await t.one('SELECT id FROM commodities WHERE name = ?', [name]);
@@ -447,6 +448,9 @@ export function registerCore(app) {
         is_admin: !!c.is_admin, is_banned: !!c.is_banned, banned_reason: c.banned_reason || '',
       },
       citizen: { ...c, isPremium, energyCap, trainCosts, trainCooldowns },
+      // Kredit skor (v3.0.0): skor + tier + batasan yang berlaku — dipakai
+      // dashboard untuk panel skor (satu sumber angka dari game.js).
+      credit: creditInfo(c.credit_score),
       referral,
       region, homeRegion: homeRegion ? { id: homeRegion.id, name: homeRegion.name, type: homeRegion.type, country_id: homeRegion.country_id, country_name: homeRegion.country_name } : null,
       travel, country: countrySummary(country),
@@ -746,9 +750,9 @@ export function registerCore(app) {
   app.get('/api/profile/:username', authRequired, r(async (req, res) => {
     // Kolom eksplisit (bukan `c.*`): `id` ada di users DAN citizens —
     // `SELECT *` membuat `u.id` ambigu (driver menyimpan kolom terakhir).
-    const q = `SELECT c.id AS citizen_id, u.id AS user_id, u.username, u.avatar, u.premium_until, u.referral_code,
+    const q = `SELECT c.id AS citizen_id, u.id AS user_id, u.username, u.avatar, u.premium_until, u.referral_code, u.is_banned,
       c.level, c.xp, c.bio, c.shifts, c.total_salary, c.total_damage, c.attacks, c.frontline_attacks,
-      c.attr_str, c.attr_edu, c.attr_eco, c.created_at, c.last_seen_at, c.party_id, c.home_region_id
+      c.attr_str, c.attr_edu, c.attr_eco, c.created_at, c.last_seen_at, c.party_id, c.home_region_id, c.credit_score, c.credit_updated_at
       FROM users u JOIN citizens c ON c.user_id = u.id WHERE `;
     let u = await one(q + 'u.username = ?', [req.params.username]);
     if (!u) u = await one(q + 'LOWER(u.username) = LOWER(?)', [req.params.username]);
@@ -780,6 +784,12 @@ export function registerCore(app) {
       total_damage: u.total_damage, attacks: u.attacks, frontline_attacks: u.frontline_attacks,
       attr_str: u.attr_str, attr_edu: u.attr_edu, attr_eco: u.attr_eco,
       created_at: u.created_at, last_seen_at: u.last_seen_at,
+      // Skor kredit bersifat PUBLIK (v3.0.0): semua pemain bisa melihat
+      // skor pemain lain — tidak seperti emas/USD/energi yang disembunyikan.
+      // Profil TIDAK lewat loadCitizen, jadi pemulihan dihitung di sini
+      // tanpa menulis DB (hanya pemilik yang menulis lewat loadCitizen).
+      credit_score: creditScoreSettled(u.credit_score, u.credit_updated_at, u.is_banned),
+      credit: creditInfo(creditScoreSettled(u.credit_score, u.credit_updated_at, u.is_banned)),
       region_name: region?.name, country_name: region?.country_name || null,
       party, companies, articles, referral, referral_code: referralCode,
       isPremium: u.premium_until > Date.now(),
@@ -1252,7 +1262,7 @@ export function registerCore(app) {
     });
   }));
 
-  app.post('/api/market/buy', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/market/buy', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.market, 'bertransaksi di pasar'), r(async (req, res) => {
     const { offer_id, qty } = req.body || {};
     const q = Math.max(1, Math.floor(Number(qty) || 1));
     // Atomik: kunci baris penawaran + kedua warga (urut id menaik agar tidak
@@ -1320,7 +1330,7 @@ export function registerCore(app) {
     res.json({ ok: true, ...result });
   }));
 
-  app.post('/api/market/sell', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/market/sell', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.market, 'bertransaksi di pasar'), r(async (req, res) => {
     const { scope, commodity_id, tier, qty, price } = req.body || {};
     const q = Math.floor(Number(qty) || 0);
     const p = Number(price);
@@ -1363,7 +1373,7 @@ export function registerCore(app) {
   // transaksi atomik. Tanpa mesin pencocokan otomatis — penjual memilih
   // order yang mau dipenuhi. Semua langkah atomik (pola Tahap 2:
   // FOR UPDATE + UPDATE bersyarat + cek changes).
-  app.post('/api/market/buy-order', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/market/buy-order', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.market, 'bertransaksi di pasar'), r(async (req, res) => {
     const { scope, commodity_id, tier, qty, price } = req.body || {};
     const q = Math.floor(Number(qty) || 0);
     const p = Number(price);
@@ -1380,7 +1390,7 @@ export function registerCore(app) {
     res.json({ ok: true, orderId: o.id });
   }));
 
-  app.post('/api/market/sell-to-order', authRequired, citizenRequired, r(async (req, res) => {
+  app.post('/api/market/sell-to-order', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.market, 'bertransaksi di pasar'), r(async (req, res) => {
     const { order_id, qty } = req.body || {};
     const q = Math.max(1, Math.floor(Number(qty) || 1));
     const result = await tx(async (t) => {

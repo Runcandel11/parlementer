@@ -922,11 +922,11 @@ async function main() {
   const rep = r.data.reports.find((x) => x.message_content === 'Pesan dengan avatar baru tes' && x.reporter_name === 'warga_dua');
   check('Admin melihat laporan chat (pesan + pelapor + alasan)', r.status === 200 && !!rep && rep.reason === 'Spam', `reason=${rep?.reason}`);
   const repId = rep.id;
-  r = await ADM.post('/api/admin/reports/' + repId + '/review');
-  check('Admin menandai laporan ditinjau', r.status === 200 && r.data.status === 'reviewed');
+  r = await ADM.post('/api/admin/reports/' + repId + '/review', { verdict: 'not_proven' });
+  check('Admin menandai laporan ditinjau (putusan tidak terbukti)', r.status === 200 && r.data.status === 'reviewed' && r.data.verdict === 'not_proven');
   r = await ADM.get('/api/admin/reports');
-  check('Laporan tampil sebagai sudah ditinjau', r.data.reports.find((x) => x.id === repId)?.status === 'reviewed');
-  r = await ADM.post('/api/admin/reports/' + repId + '/review');
+  check('Laporan tampil sebagai sudah ditinjau', r.data.reports.find((x) => x.id === repId)?.status === 'reviewed' && r.data.reports.find((x) => x.id === repId)?.verdict === 'not_proven');
+  r = await ADM.post('/api/admin/reports/' + repId + '/review', { verdict: 'proven' });
   check('Laporan yang sudah ditinjau tidak bisa ditinjau lagi (400)', r.status === 400);
   r = await B.get('/api/admin/reports');
   check('Pemain biasa tidak bisa membuka daftar laporan (403)', r.status === 403);
@@ -2209,6 +2209,126 @@ async function main() {
   const maxWorldMs29 = Math.max(...worldResults29.map((x) => x.ms));
   check('6 login berbarengan semuanya berhasil', loginResults29.every((x) => x.status === 200 && x.data.ok), `status=${loginResults29.map((x) => x.status).join(',')}`);
   check('/api/world tetap cepat saat 6 login berjalan (maks < 100 ms)', worldResults29.every((x) => x.ok) && maxWorldMs29 < 100, `maks=${maxWorldMs29} ms (total ${Date.now() - t29} ms)`);
+
+  console.log('\n[22m] Kredit skor v3.0.0 — laporan terbukti, pulih +1/hari, batasan tier, ban 0');
+  const dbK = new DatabaseSync(DB_PATH);
+  const KA = new Client(); // penulis pesan (yang dilaporkan)
+  const KB = new Client(); // pelapor
+  KA.extraHeaders = { 'X-Forwarded-For': '127.0.0.14' };
+  KB.extraHeaders = { 'X-Forwarded-For': '127.0.0.15' };
+  r = await KA.post('/api/auth/register', { email: 'kredit_a@test.local', password: 'rahasia123', username: 'kredit_a' });
+  check('Kredit: penulis KA mendaftar', r.status === 200 && r.data.ok);
+  r = await KB.post('/api/auth/register', { email: 'kredit_b@test.local', password: 'rahasia123', username: 'kredit_b' });
+  check('Kredit: pelapor KB mendaftar', r.status === 200 && r.data.ok);
+  const meKA = (await KA.get('/api/me')).data;
+  const meKB = (await KB.get('/api/me')).data;
+  const kaId = meKA.citizen.id; const kbId = meKB.citizen.id;
+  const kaUserId = meKA.user.id;
+  check('Skor awal 100 + tier Baik + tanpa batasan', meKA.citizen.credit_score === 100 && meKA.credit?.tier === 'baik' && meKA.credit?.restrictions.length === 0, `skor=${meKA.citizen.credit_score} tier=${meKA.credit?.tier}`);
+  check('Profil publik menampilkan skor kredit 100', (await KB.get('/api/profile/kredit_a')).data.profile.credit_score === 100);
+  // (a) Laporan: KA kirim pesan, KB laporkan; tolak lapor diri + lapor admin.
+  r = await KA.post('/api/chat/global', { content: 'Pesan kasar dari KA untuk tes kredit' });
+  check('KA mengirim pesan global', r.status === 200 && !!r.data.messageId, `status=${r.status} ${r.data.error || ''}`);
+  const kaMsgId = r.data.messageId;
+  r = await KB.post('/api/chat/report', { message_id: kaMsgId, reason: 'Pelecehan', details: 'tes kredit' });
+  check('KB melaporkan pesan KA', r.status === 200 && r.data.ok);
+  dbK.prepare('UPDATE citizens SET last_chat_at = 0 WHERE id = ?').run(kbId);
+  r = await KB.post('/api/chat/global', { content: 'Pesan KB sendiri' });
+  check('KB mengirim pesan sendiri', r.status === 200 && !!r.data.messageId);
+  r = await KB.post('/api/chat/report', { message_id: r.data.messageId, reason: 'Spam' });
+  check('Laporan terhadap pesan sendiri ditolak (400)', r.status === 400, `status=${r.status}`);
+  dbK.prepare('UPDATE citizens SET last_chat_at = 0 WHERE id = ?').run((await ADM.get('/api/me')).data.citizen.id);
+  r = await ADM.post('/api/chat/global', { content: 'Pesan admin darurat' });
+  check('Admin mengirim pesan global', r.status === 200 && !!r.data.messageId);
+  r = await KB.post('/api/chat/report', { message_id: r.data.messageId, reason: 'Spam' });
+  check('Laporan terhadap admin ditolak (400)', r.status === 400, `status=${r.status}`);
+  // (b) Putusan admin: tanpa verdict 400; proven −10; tidak bisa diputus 2×.
+  r = await ADM.get('/api/admin/reports');
+  const repK = (r.data.reports || []).find((x) => x.message_id === kaMsgId && x.status === 'open');
+  check('Admin melihat laporan KB atas KA (skor penulis 100)', !!repK && repK.author_credit_score === 100, `skor=${repK?.author_credit_score}`);
+  r = await ADM.post(`/api/admin/reports/${repK.id}/review`, {});
+  check('Putusan tanpa verdict ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await ADM.post(`/api/admin/reports/${repK.id}/review`, { verdict: 'proven' });
+  check("Putusan TERBUKTI: skor penulis 100 → 90", r.status === 200 && r.data.newScore === 90 && r.data.banned === false, JSON.stringify(r.data));
+  r = await ADM.post(`/api/admin/reports/${repK.id}/review`, { verdict: 'proven' });
+  check('Laporan yang sama tidak bisa diputus 2× (400)', r.status === 400, `status=${r.status}`);
+  r = await KA.get('/api/me');
+  check('KA: skor kini 90 setelah laporan terbukti', r.data.citizen.credit_score === 90, `skor=${r.data.citizen.credit_score}`);
+  r = await KA.get('/api/notifications');
+  check('KA: notifikasi Skor kredit berkurang', (r.data.notifications || []).some((n) => n.title === 'Skor kredit berkurang'));
+  // (c) Pulih +1/hari (malas): jam dimundurkan 2 hari → 90 + 2 = 92.
+  dbK.prepare('UPDATE citizens SET credit_updated_at = ? WHERE id = ?').run(Date.now() - 2 * 24 * 60 * 60 * 1000, kaId);
+  r = await KA.get('/api/me');
+  check('Pulih +1/hari: 90 → 92 setelah 2 hari', r.data.citizen.credit_score === 92, `skor=${r.data.citizen.credit_score}`);
+  const setScoreK = (score) => dbK.prepare('UPDATE citizens SET credit_score = ?, credit_updated_at = ? WHERE id = ?').run(score, Date.now(), kaId);
+  // (d) Batasan tier — 75: pers dibatasi; 55: partai; 35: pasar; 15: chat/DM.
+  setScoreK(75);
+  r = await KA.post('/api/press/newspaper', {});
+  check('Skor 75: buat koran ditolak (403)', r.status === 403, `status=${r.status}`);
+  r = await KA.post('/api/press/articles', {});
+  check('Skor 75: terbitkan artikel ditolak (403)', r.status === 403, `status=${r.status}`);
+  setScoreK(55);
+  r = await KA.post('/api/parties', {});
+  check('Skor 55: dirikan partai ditolak (403)', r.status === 403, `status=${r.status}`);
+  r = await KA.post('/api/elections/999999/nominate', {});
+  check('Skor 55: mencalonkan ditolak (403)', r.status === 403, `status=${r.status}`);
+  setScoreK(35);
+  r = await KA.post('/api/market/buy', {});
+  check('Skor 35: beli di pasar ditolak (403)', r.status === 403, `status=${r.status}`);
+  r = await KA.post('/api/market/sell', {});
+  check('Skor 35: jual di pasar ditolak (403)', r.status === 403, `status=${r.status}`);
+  // Pesan kedua dikirim SELAGI skor masih 35 (≥20, masih boleh chat) —
+  // laporannya dipakai untuk menguji ban di skor 10 nanti.
+  dbK.prepare('UPDATE citizens SET last_chat_at = 0 WHERE id = ?').run(kaId);
+  r = await KA.post('/api/chat/global', { content: 'Pesan kedua KA untuk tes ban' });
+  check('KA mengirim pesan kedua (skor 35, masih boleh chat)', r.status === 200 && !!r.data.messageId, `status=${r.status} ${r.data.error || ''}`);
+  const kaMsgId2 = r.data.messageId;
+  r = await KB.post('/api/chat/report', { message_id: kaMsgId2, reason: 'Ujaran kebencian' });
+  check('KB melaporkan pesan kedua KA', r.status === 200 && r.data.ok);
+  setScoreK(15);
+  r = await KA.post('/api/chat/global', { content: 'tes skor 15' });
+  check('Skor 15: kirim chat ditolak (403)', r.status === 403, `status=${r.status}`);
+  r = await KA.post('/api/dms/' + kbId, { content: 'tes dm skor 15' });
+  check('Skor 15: kirim DM ditolak (403)', r.status === 403, `status=${r.status}`);
+  // (e) Skor 0 = ban otomatis; unban pulihkan ke 50.
+  setScoreK(10);
+  r = await ADM.get('/api/admin/reports');
+  const repK2 = (r.data.reports || []).find((x) => x.status === 'open' && x.author_id === kaId);
+  check('Laporan kedua masih open', !!repK2, `id=${repK2?.id}`);
+  r = await ADM.post(`/api/admin/reports/${repK2.id}/review`, { verdict: 'proven' });
+  check('Putusan TERBUKTI kedua: skor 10 → 0 + akun dibanned', r.status === 200 && r.data.newScore === 0 && r.data.banned === true, JSON.stringify(r.data));
+  r = await KA.post('/api/auth/login', { email: 'kredit_a@test.local', password: 'rahasia123' });
+  check('Login KA yang dibanned: banned=true (bisa buka layar banned + banding)', r.status === 200 && r.data.banned === true, `banned=${r.data.banned}`);
+  r = await KA.get('/api/me');
+  check('KA yang dibanned: /api/me tetap 200 (layar banned butuh status) + is_banned', r.status === 200 && r.data.user.is_banned === true, `status=${r.status} banned=${r.data.user.is_banned}`);
+  r = await KA.post('/api/chat/global', { content: 'tes saat banned' });
+  check('KA yang dibanned: API game diblokir (chat 403)', r.status === 403, `status=${r.status}`);
+  r = await ADM.post('/api/admin/unban', { user_id: kaUserId });
+  check('Admin unban KA', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await KA.get('/api/me');
+  check('Setelah unban: skor dipulihkan ke 50', r.data.citizen.credit_score === 50, `skor=${r.data.citizen.credit_score}`);
+  dbK.prepare('UPDATE citizens SET last_chat_at = 0 WHERE id = ?').run(kaId);
+  r = await KA.post('/api/chat/global', { content: 'Aku kembali setelah unban' });
+  check('KA bisa chat lagi setelah unban (skor 50 ≥ 20)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  // (f) Putusan TIDAK TERBUKTI: skor tidak berubah.
+  r = await KB.post('/api/chat/report', { message_id: r.data.messageId, reason: 'Spam' });
+  check('KB melaporkan pesan ketiga KA', r.status === 200 && r.data.ok);
+  r = await ADM.get('/api/admin/reports');
+  const repK3 = (r.data.reports || []).find((x) => x.status === 'open' && x.author_id === kaId);
+  r = await ADM.post(`/api/admin/reports/${repK3.id}/review`, { verdict: 'not_proven' });
+  check('Putusan TIDAK TERBUKTI: newScore null, tanpa ban', r.status === 200 && r.data.newScore === null && r.data.banned === false, JSON.stringify(r.data));
+  r = await KA.get('/api/me');
+  check('Skor tetap 50 setelah putusan tidak terbukti', r.data.citizen.credit_score === 50, `skor=${r.data.citizen.credit_score}`);
+  // (g) Riwayat skor + daftar pemain admin.
+  r = await ADM.get('/api/admin/credit-history/' + kaUserId);
+  check('Riwayat skor: 2 pengurangan + 1 pemulihan unban', (r.data.history || []).length === 3
+    && r.data.history.some((h) => h.delta === -10 && h.score_after === 90)
+    && r.data.history.some((h) => h.delta === -10 && h.score_after === 0)
+    && r.data.history.some((h) => h.delta === 50 && h.score_after === 50),
+    JSON.stringify((r.data.history || []).map((h) => `${h.delta}→${h.score_after}`)));
+  r = await ADM.get('/api/admin/players?q=kredit_a');
+  check('Daftar pemain admin menampilkan skor kredit 50', (r.data.players || [])[0]?.credit_score === 50, `skor=${(r.data.players || [])[0]?.credit_score}`);
+  dbK.close();
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

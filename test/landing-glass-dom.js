@@ -22,7 +22,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3462;
 const DB_PATH = '/tmp/parlementer-landing-glass-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '2.5.0';
+const EXPECTED_VERSION = '3.0.0';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;

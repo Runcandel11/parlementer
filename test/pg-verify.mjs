@@ -235,7 +235,7 @@ async function main() {
   // steady state hanya baca penanda (tanpa lock/DDL); migrasi penuh hanya
   // bila penanda dihapus / versi lama.
   const ver = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Penanda versi skema = 12', ver.rows[0]?.value === '12', `value=${ver.rows[0]?.value}`);
+  check('Penanda versi skema = 13', ver.rows[0]?.value === '13', `value=${ver.rows[0]?.value}`);
   const t9a = Date.now();
   await Promise.all([initDb(), initDb(), initDb(), initDb(), initDb()]);
   const t9b = Date.now() - t9a;
@@ -302,7 +302,7 @@ async function main() {
   const archive = await pool.query("SELECT kind, currency, amount FROM treasury_tx WHERE kind = 'pembubaran' ORDER BY created_at");
   check('Migrasi: kas RI diarsip sebagai treasury_tx pembubaran (−100 emas, −50 USD)', archive.rows.length === 2 && archive.rows.some((r) => r.currency === 'gold' && Number(r.amount) === -100) && archive.rows.some((r) => r.currency === 'usd' && Number(r.amount) === -50), JSON.stringify(archive.rows));
   const ver10 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 12', ver10.rows[0]?.value === '12', `value=${ver10.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 13', ver10.rows[0]?.value === '13', `value=${ver10.rows[0]?.value}`);
 
   console.log('\n[11] Regresi bug Partai — GET /api/parties di Postgres (ORDER BY ambigu)');
   // Bug live 27 Nov 2026: begitu ada ≥1 partai, GET /api/parties 500 di
@@ -400,7 +400,7 @@ async function main() {
   const tCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('travel_to_region_id', 'travel_arrives_at', 'home_changed_at')");
   check('Migrasi: kolom perjalanan ditambah kembali', Number(tCols2.rows[0].n) === 3, `n=${tCols2.rows[0].n}`);
   const ver11 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 12', ver11.rows[0]?.value === '12', `value=${ver11.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 13', ver11.rows[0]?.value === '13', `value=${ver11.rows[0]?.value}`);
 
   console.log('\n[12b] Perusahaan v2.4.0 — migrasi v12 (foto + bonus shift)');
   const coCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'companies' AND column_name IN ('photo', 'photo_sm', 'bonus_credit', 'bonus_given', 'bonus_warned_at')");
@@ -413,7 +413,23 @@ async function main() {
   const coCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'companies' AND column_name IN ('photo', 'photo_sm', 'bonus_credit', 'bonus_given', 'bonus_warned_at')");
   check('Migrasi: kolom perusahaan ditambah kembali', Number(coCols2.rows[0].n) === 5, `n=${coCols2.rows[0].n}`);
   const ver12 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 12', ver12.rows[0]?.value === '12', `value=${ver12.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 13', ver12.rows[0]?.value === '13', `value=${ver12.rows[0]?.value}`);
+
+  console.log('\n[12c] Kredit skor v3.0.0 — migrasi v13 (kolom skor + verdict + riwayat)');
+  const crCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('credit_score', 'credit_updated_at')");
+  check('Kolom kredit skor v3.0.0 ada (credit_score, credit_updated_at)', crCols.rowCount === 2, `n=${crCols.rowCount}`);
+  const repCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'chat_reports' AND column_name IN ('verdict')");
+  check('Kolom putusan laporan v3.0.0 ada (verdict)', repCols.rowCount === 1, `n=${repCols.rowCount}`);
+  const histTbl = await pool.query("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name = 'credit_history'");
+  check('Tabel riwayat skor v3.0.0 ada (credit_history)', Number(histTbl.rows[0].n) === 1, `n=${histTbl.rows[0].n}`);
+  // Migrasi: hapus kolom skor, initDb mengembalikannya (versi 13).
+  await pool.query('ALTER TABLE citizens DROP COLUMN credit_score');
+  await resetVersion();
+  await initDb();
+  const crCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('credit_score', 'credit_updated_at')");
+  check('Migrasi: kolom kredit skor ditambah kembali', Number(crCols2.rows[0].n) === 2, `n=${crCols2.rows[0].n}`);
+  const ver13 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
+  check('Versi skema setelah migrasi = 13', ver13.rows[0]?.value === '13', `value=${ver13.rows[0]?.value}`);
   // Aturan durasi (unit, tanpa server): Kepri → Jakarta ±830 km = 10 mnt;
   // Jakarta → Bandung ±116 km = 3 mnt; terjauh dipangkas ke 30 mnt.
   const { travelMinutesFor } = await import('../src/game.js');

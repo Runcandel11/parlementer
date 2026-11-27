@@ -4,10 +4,10 @@
 // admin adalah mendaftar dengan kode bootstrap ADMIN_BOOTSTRAP_CODE yang
 // benar (lihat api-core.js), atau migrasi initDb yang menjaga akun admin
 // Khalid yang sudah ada (koboijuniorkhalid@gmail.com).
-import { sql, one, run, tx, convoyBuildings } from './db.js';
-import { authRequired, publicId, bootstrapActive, fmtRp } from './util.js';
+import { sql, one, run, tx, forUpdate, convoyBuildings } from './db.js';
+import { authRequired, publicId, bootstrapActive, fmtRp, creditScoreSettled } from './util.js';
 import { checkRateLimit } from './rate-limit.js';
-import { energyCapFor } from './game.js';
+import { energyCapFor, CREDIT_DEDUCTION_PROVEN_REPORT, CREDIT_UNBAN_RESET_SCORE } from './game.js';
 
 const PREMIUM_MONTHS = [1, 3, 6, 12];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -96,7 +96,7 @@ export function registerAdmin(app) {
     else if (q) { where += ' AND (u.username LIKE ? OR u.email LIKE ?)'; params.push(`%${q}%`, `%${q}%`); }
     const rows = await sql(
       `SELECT u.id, u.username, u.email, u.avatar, u.is_admin, u.is_banned, u.banned_reason,
-         u.premium_until, u.created_at, c.level, c.gold, c.usd
+         u.premium_until, u.created_at, c.level, c.gold, c.usd, c.credit_score
        FROM users u JOIN citizens c ON c.user_id = u.id
        WHERE ${where} ORDER BY u.id ASC LIMIT 100`,
       params);
@@ -157,6 +157,16 @@ export function registerAdmin(app) {
       await t.run("UPDATE users SET is_banned = 0, banned_reason = '', banned_at = 0 WHERE id = ?", [target.id]);
       await logAction(t, req.userId, target.id, 'unban', 'Unban: akses dipulihkan');
       await notifyCitizen(t, target.citizen_id, 'Ban dicabut', 'Admin mencabut ban akunmu. Kamu bisa masuk kembali.');
+      // Ban karena skor kredit 0 → skor dikembalikan ke 50 (kesempatan
+      // kedua, v3.0.0) supaya pemain tidak langsung bermain dengan skor 0.
+      // Ban manual (alasan lain) tidak menyentuh skor.
+      if ((target.banned_reason || '').startsWith('Skor kredit')) {
+        const now = Date.now();
+        await t.run('UPDATE citizens SET credit_score = ?, credit_updated_at = ? WHERE id = ?', [CREDIT_UNBAN_RESET_SCORE, now, target.citizen_id]);
+        await t.run('INSERT INTO credit_history (citizen_id, delta, score_after, reason, created_at) VALUES (?,?,?,?,?) RETURNING id',
+          [target.citizen_id, CREDIT_UNBAN_RESET_SCORE, CREDIT_UNBAN_RESET_SCORE, 'Unban: skor dipulihkan ke 50 (kesempatan kedua)', now]);
+        await logAction(t, req.userId, target.id, 'credit_restore', `Skor kredit dipulihkan ke ${CREDIT_UNBAN_RESET_SCORE} (unban)`);
+      }
     });
     res.json({ ok: true });
   }));
@@ -398,10 +408,12 @@ export function registerAdmin(app) {
 
   // ---------- INBOX ADMIN: LAPORAN CHAT ----------
   // GET /api/admin/reports — laporan chat (chat_reports) terbaru dulu,
-  // lengkap dengan isi pesan yang dilaporkan + pelapor + alasan.
+  // lengkap dengan isi pesan yang dilaporkan + pelapor + alasan + skor
+  // kredit penulis pesan saat ini (untuk putusan admin).
   app.get('/api/admin/reports', authRequired, admin, r(async (req, res) => {
     const rows = await sql(
-      `SELECT cr.*, cm.content AS message_content, au.username AS author_name,
+      `SELECT cr.*, cm.content AS message_content, cm.citizen_id AS author_id, au.username AS author_name,
+        cc.credit_score AS author_credit_score,
         ru.username AS reporter_name
        FROM chat_reports cr
        LEFT JOIN chat_messages cm ON cm.id = cr.message_id
@@ -413,18 +425,69 @@ export function registerAdmin(app) {
     res.json({ reports: rows });
   }));
 
-  // POST /api/admin/reports/:id/review — tandai laporan sudah ditinjau.
+  // GET /api/admin/credit-history/:userId — riwayat skor kredit pemain
+  // (siapa, berapa, kenapa, kapan), terbaru dulu, maks 50 baris.
+  app.get('/api/admin/credit-history/:userId', authRequired, admin, r(async (req, res) => {
+    const target = await one('SELECT c.id AS citizen_id, c.credit_score FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.id = ?', [Number(req.params.userId)]);
+    if (!target) return res.status(404).json({ error: 'Pemain tidak ditemukan.' });
+    const rows = await sql('SELECT * FROM credit_history WHERE citizen_id = ? ORDER BY created_at DESC, id DESC LIMIT 50', [target.citizen_id]);
+    res.json({ credit_score: target.credit_score, history: rows });
+  }));
+
+  // POST /api/admin/reports/:id/review — putuskan laporan chat (v3.0.0).
+  // Body { verdict: 'proven' | 'not_proven' } — WAJIB. 'proven' = laporan
+  // TERBUKTI benar: skor kredit penulis pesan yang dilaporkan −10
+  // (CREDIT_DEDUCTION_PROVEN_REPORT), dicatat di credit_history + log
+  // admin + notifikasi ke penulis. Bila skor mencapai 0, akun otomatis
+  // dibanned (mesin ban yang sudah ada; pemain bisa banding). 'not_proven'
+  // = tidak terbukti: skor tidak berubah. Satu laporan hanya bisa diputus
+  // SEKALI (status open → reviewed) — tidak ada pengurangan ganda.
   app.post('/api/admin/reports/:id/review', authRequired, admin, r(async (req, res) => {
     const id = Number(req.params.id);
+    const { verdict } = req.body || {};
+    if (verdict !== 'proven' && verdict !== 'not_proven') {
+      return res.status(400).json({ error: 'Putusan wajib diisi: terbukti (proven) atau tidak terbukti (not_proven).' });
+    }
     const rep = await one('SELECT * FROM chat_reports WHERE id = ?', [id]);
     if (!rep) return res.status(404).json({ error: 'Laporan tidak ditemukan.' });
     if (rep.status !== 'open') return res.status(400).json({ error: 'Laporan ini sudah ditinjau.' });
-    await tx(async (t) => {
-      await t.run("UPDATE chat_reports SET status = 'reviewed' WHERE id = ?", [id]);
+    const result = await tx(async (t) => {
+      // Kunci baris laporan supaya dua admin tidak memutus laporan yang
+      // sama bersamaan (pola forUpdate seperti saldo/stok).
+      const locked = await t.one(forUpdate('SELECT * FROM chat_reports WHERE id = ?'), [id]);
+      if (locked.status !== 'open') throw Object.assign(new Error('Laporan ini sudah ditinjau.'), { status: 400 });
+      await t.run("UPDATE chat_reports SET status = 'reviewed', verdict = ? WHERE id = ?", [verdict, id]);
       const reporter = await t.one('SELECT user_id FROM citizens WHERE id = ?', [rep.reporter_id]);
-      if (reporter) await logAction(t, req.userId, reporter.user_id, 'report_review', `Laporan chat #${id} ditinjau (${rep.reason})`);
+      if (reporter) await logAction(t, req.userId, reporter.user_id, 'report_review', `Laporan chat #${id} diputus: ${verdict === 'proven' ? 'TERBUKTI' : 'TIDAK TERBUKTI'} (${rep.reason})`);
+      if (verdict !== 'proven') return { newScore: null, banned: false };
+      // Penulis pesan yang dilaporkan (bukan pelapor).
+      const msg = await t.one('SELECT citizen_id FROM chat_messages WHERE id = ?', [rep.message_id]);
+      if (!msg) return { newScore: null, banned: false };
+      const author = await t.one(forUpdate('SELECT c.*, u.is_admin FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.id = ?'), [msg.citizen_id]);
+      if (!author || author.is_admin) return { newScore: null, banned: false };
+      // Pulihkan dulu skor yang sudah berhak pulih (+1/hari), baru kurangi
+      // — supaya pemain tidak dihukum dua kali untuk hari yang sama.
+      const now = Date.now();
+      const settled = creditScoreSettled(author.credit_score, author.credit_updated_at, author.is_banned, now);
+      const newScore = Math.max(0, settled - CREDIT_DEDUCTION_PROVEN_REPORT);
+      await t.run('UPDATE citizens SET credit_score = ?, credit_updated_at = ? WHERE id = ?', [newScore, now, author.id]);
+      await t.run('INSERT INTO credit_history (citizen_id, delta, score_after, reason, created_at) VALUES (?,?,?,?,?) RETURNING id',
+        [author.id, -CREDIT_DEDUCTION_PROVEN_REPORT, newScore, `Laporan chat #${id} terbukti (${rep.reason})`, now]);
+      await logAction(t, req.userId, author.user_id, 'credit_deduct', `Skor kredit -${CREDIT_DEDUCTION_PROVEN_REPORT} menjadi ${newScore} (laporan chat #${id} terbukti: ${rep.reason})`);
+      if (newScore === 0) {
+        // Skor 0 = BAN otomatis (mesin ban yang sudah ada: layar banned +
+        // banding tetap bisa dibuka; semua API game diblokir).
+        await t.run("UPDATE users SET is_banned = 1, banned_reason = ?, banned_at = ? WHERE id = ? AND is_admin = 0",
+          ['Skor kredit mencapai 0 karena laporan terbukti.', now, author.user_id]);
+        await notifyCitizen(t, author.id, 'Skor kredit 0 — akun dibanned',
+          'Skor kreditmu mencapai 0 karena laporan yang terbukti benar. Akunmu dibanned. Kamu bisa mengajukan banding lewat menu Banding.');
+        return { newScore, banned: true };
+      }
+      await notifyCitizen(t, author.id, 'Skor kredit berkurang',
+        `Skor kreditmu -${CREDIT_DEDUCTION_PROVEN_REPORT} menjadi ${newScore} karena laporan yang terbukti benar (${rep.reason}). Skor pulih +1 setiap hari.`);
+      return { newScore, banned: false };
     });
-    res.json({ ok: true, status: 'reviewed' });
+    res.json({ ok: true, status: 'reviewed', verdict, ...result });
   }));
 
   // ---------- PENGUMUMAN UPDATE ("Apa yang Baru", Tahap 4) ----------
