@@ -343,13 +343,39 @@ export function registerCore(app) {
     });
   }));
 
+  // ---------- JUMLAH PEMAIN ONLINE ----------
+  // Tanpa websocket: warga dianggap online bila memanggil /api/me dalam
+  // 5 menit terakhir (dashboard mem-poll /api/me tiap 30 detik, jadi
+  // jendela 5 menit memberi toleransi beberapa poll yang terlewat).
+  // Heartbeat ditulis paling cepat 1×/menit/pemain (murah di Postgres).
+  // Akun banned tidak dihitung — heartbeat dilewati + filter is_banned.
+  const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+  const ONLINE_HEARTBEAT_MS = 60 * 1000;
+  async function countOnline() {
+    const row = await one(
+      `SELECT COUNT(*) AS n FROM citizens c JOIN users u ON u.id = c.user_id
+       WHERE c.last_seen_at > ? AND u.is_banned = 0`,
+      [Date.now() - ONLINE_WINDOW_MS]);
+    return Number(row?.n || 0);
+  }
+
   // ---------- DASHBOARD / WARGA ----------
   app.get('/api/me', authRequired, citizenRequired, r(async (req, res) => {
     const c = req.citizen;
+    // Heartbeat online: sentuh last_seen_at bila sudah >60 detik sejak
+    // sentuhan terakhir. Gagal heartbeat tidak boleh menggagalkan
+    // pembacaan dashboard (pola yang sama seperti regen energi).
+    if (!c.is_banned && Date.now() - (c.last_seen_at || 0) > ONLINE_HEARTBEAT_MS) {
+      try { await run('UPDATE citizens SET last_seen_at = ? WHERE id = ?', [Date.now(), c.id]); }
+      catch (e) { console.error('[online] heartbeat gagal:', e.message); }
+    }
     const region = await one('SELECT * FROM regions WHERE id = ?', [c.region_id]);
     const party = c.party_id ? await one('SELECT id, name, tag FROM parties WHERE id = ?', [c.party_id]) : null;
     const job = c.job_id ? await one('SELECT j.*, co.name AS company_name FROM jobs j LEFT JOIN companies co ON co.id = j.company_id WHERE j.id = ?', [c.job_id]) : null;
     const unread = await one('SELECT COUNT(*) AS n FROM notifications WHERE citizen_id = ? AND is_read = 0', [c.id]);
+    // Lencana 🔔 ikut menghitung pengumuman yang belum dibaca (dulu hanya
+    // notifikasi) — kalau tidak, pengumuman baru tidak menyalakan lencana.
+    const unreadAnn = await one('SELECT COUNT(*) AS n FROM announcements a WHERE NOT EXISTS (SELECT 1 FROM announcement_reads r WHERE r.announcement_id = a.id AND r.citizen_id = ?)', [c.id]);
     const unreadDm = await one('SELECT COUNT(*) AS n FROM dms WHERE to_id = ? AND is_read = 0', [c.id]);
     const world = await one('SELECT * FROM world WHERE id = 1');
     const population = await one('SELECT COUNT(*) AS n FROM citizens');
@@ -391,8 +417,8 @@ export function registerCore(app) {
       citizen: { ...c, isPremium, energyCap, trainCosts },
       referral,
       region, party, job,
-      unread: Number(unread.n), unreadDm: Number(unreadDm.n),
-      world, population: Number(population.n),
+      unread: Number(unread.n) + Number(unreadAnn.n), unreadDm: Number(unreadDm.n),
+      world, population: Number(population.n), onlineCount: await countOnline(),
       activeWars, votingLaws,
       xpNext: xpForLevel(c.level),
     });
@@ -1422,9 +1448,11 @@ export function registerCore(app) {
   }));
 
   // Cache /api/world 30 detik (Tahap 5 — lag): isinya (hari, populasi,
-  // jumlah wilayah) berubah lambat — populasi hanya berubah saat ada
-  // pendaftaran/perjalanan. Di serverless, cache per instance ini
-  // menghemat 3 query DB di setiap panggilan saat instance masih hangat.
+  // jumlah wilayah, jumlah online) berubah lambat — populasi hanya berubah
+  // saat ada pendaftaran/perjalanan, dan angka online ikut ter-cache 30
+  // detik (jendela 5 menit, jadi tetap segar). Di serverless, cache per
+  // instance ini menghemat 3-4 query DB di setiap panggilan saat instance
+  // masih hangat.
   // Data per pemain (ME, chat) TIDAK di-cache — hanya data dunia bersama.
   let worldCache = null;
   let worldCacheAt = 0;
@@ -1434,7 +1462,7 @@ export function registerCore(app) {
     const world = await one('SELECT * FROM world WHERE id = 1');
     const population = await one('SELECT COUNT(*) AS n FROM citizens');
     const regions = await one('SELECT COUNT(*) AS n FROM regions');
-    worldCache = { day: world?.day || 1, population: Number(population.n), regions: Number(regions.n), countries: 1 };
+    worldCache = { day: world?.day || 1, population: Number(population.n), regions: Number(regions.n), countries: 1, onlineCount: await countOnline() };
     worldCacheAt = now;
     res.json(worldCache);
   }));

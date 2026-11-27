@@ -283,6 +283,7 @@ CREATE TABLE IF NOT EXISTS citizens (
   xp INTEGER NOT NULL DEFAULT 0,
   energy INTEGER NOT NULL DEFAULT 100 CHECK (energy >= 0),
   energy_updated_at BIGINT NOT NULL DEFAULT 0,
+  last_seen_at BIGINT NOT NULL DEFAULT 0,
   gold REAL NOT NULL DEFAULT 50 CHECK (gold >= 0),
   usd REAL NOT NULL DEFAULT 500 CHECK (usd >= 0),
   attr_str INTEGER NOT NULL DEFAULT 0,
@@ -911,6 +912,7 @@ export async function initDb() {
     await migrateSupportTickets(t);
     await migrateTahap4Columns(t);
     await migrateTahap5Columns(t);
+    await migrateOnlineColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -981,7 +983,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1129,6 +1131,26 @@ async function migrateTahap5Columns(t) {
     await t.exec('ALTER TABLE citizens ALTER COLUMN region_id DROP DEFAULT');
     await t.exec('ALTER TABLE citizens ALTER COLUMN home_region_id DROP DEFAULT');
   }
+}
+
+// Migrasikan kolom jumlah pemain online (fitur "online sekarang") untuk
+// database yang sudah ada (Neon live + SQLite lama): citizens.last_seen_at
+// (jam terakhir warga memanggil /api/me, epoch ms). Idempotent: kolom yang
+// sudah ada tidak disentuh. Pola sama seperti migrateTahap5Columns.
+async function migrateOnlineColumns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('citizens', 'last_seen_at', 'BIGINT NOT NULL DEFAULT 0');
+  // Indeks dibuat DI SINI (setelah ADD COLUMN), bukan di schema(): schema()
+  // jalan SEBELUM migrasi, dan database lama (Neon v6) belum punya kolom
+  // ini — indeks di schema() akan menggagalkan initDb dengan 42703.
+  await t.exec('CREATE INDEX IF NOT EXISTS idx_citizens_last_seen ON citizens(last_seen_at)');
 }
 
 // Migrasikan tabel support_tickets lama (tanpa kolom status) ke status

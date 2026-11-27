@@ -578,7 +578,7 @@ ROUTES.dashboard = async () => {
     return `<button class="food-card ${q ? '' : 'empty'}" type="button" data-eat="${t}" ${q ? '' : 'disabled'} aria-label="Makan Makanan T${t}, tambah ${t * 10} energi">
       <span class="tier">T${t}</span><span class="val">⚡${t * 10}</span><span class="qty">×${q}</span>${q ? '<span class="eat">MAKAN</span>' : ''}</button>`;
   }).join('');
-  $('#page').innerHTML = page('DASHBOARD', `Hari ${ME.world.day} · Populasi dunia: ${fmt(ME.population)} warga`, `
+  $('#page').innerHTML = page('DASHBOARD', `Hari ${ME.world.day} · Populasi dunia: ${fmt(ME.population)} warga · <span title="Pemain aktif dalam 5 menit terakhir">🟢 ${fmt(ME.onlineCount ?? 0)} online</span>`, `
   ${ME.activeWars.length ? `<div class="panel"><h3>⚔️ SEDANG TERJADI</h3>
     ${ME.activeWars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}
     <button class="btn-gold btn-sm" data-goto="#/war">Lihat Perang</button></div>` : ''}
@@ -813,7 +813,9 @@ ROUTES.notifications = async () => {
     try { await post('/api/announcements/read', { id: Number(b.dataset.annRead) }); route(); }
     catch (e) { toast(e.message); }
   });
-  $('#btn-read-all').onclick = async () => { await post('/api/notifications/read'); await refreshMe(); route(); };
+  // "Tandai Semua Dibaca" juga menandai semua pengumuman dibaca — lencana
+  // 🔔 menghitung keduanya, jadi keduanya harus bisa dibersihkan di sini.
+  $('#btn-read-all').onclick = async () => { await post('/api/notifications/read'); await post('/api/announcements/read', { all: true }); await refreshMe(); route(); };
 };
 
 // ---------- AKTIVITAS SAYA (Tahap 3, §7) ----------
@@ -1849,6 +1851,7 @@ ROUTES.stats = async () => {
   $('#page').innerHTML = page('STATISTIK', 'Angka nyata dari dunia — tanpa data palsu.', `
   <div class="stat-grid">
     <div class="stat-cell"><div class="stat-label">👥 Populasi Dunia</div><div class="stat-num">${fmt(world.population)}</div><div class="stat-sub">Hari ${world.day}</div></div>
+    <div class="stat-cell"><div class="stat-label">🟢 Online Sekarang</div><div class="stat-num">${fmt(world.onlineCount ?? 0)}</div><div class="stat-sub">aktif 5 menit terakhir</div></div>
     <div class="stat-cell"><div class="stat-label">🗺️ Wilayah</div><div class="stat-num">${fmt(world.regions)}</div><div class="stat-sub">1 negara merdeka</div></div>
     <div class="stat-cell"><div class="stat-label">📰 Artikel / 7 hari</div><div class="stat-num">${fmt(press.articles7d)}</div><div class="stat-sub">dari ${fmt(press.journalists7d)} jurnalis</div></div>
     <div class="stat-cell"><div class="stat-label">👁️ Dibaca / 7 hari</div><div class="stat-num">${fmt(press.reads7d)}</div><div class="stat-sub">${fmt(press.reactions7d)} reaksi</div></div>

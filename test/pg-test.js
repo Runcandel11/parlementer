@@ -63,6 +63,11 @@ const citizen = await run(
 check('INSERT citizen mengembalikan id', typeof citizen.id === 'number' && citizen.id > 0, `id=${citizen.id}`);
 r = await one('SELECT * FROM citizens WHERE user_id = ? AND level = ? AND gold = ?', [user.id, 1, 50]);
 check('SELECT 3 placeholder terbaca kembali', !!r && r.usd === 500, `usd=${r?.usd}`);
+r = await one('SELECT last_seen_at FROM citizens WHERE id = ?', [citizen.id]);
+check('Kolom last_seen_at ada (migrasi online, default 0)', r && r.last_seen_at === 0, `last_seen_at=${r?.last_seen_at}`);
+await run('UPDATE citizens SET last_seen_at = ? WHERE id = ?', [now, citizen.id]);
+r = await one('SELECT last_seen_at FROM citizens WHERE id = ?', [citizen.id]);
+check('last_seen_at bisa ditulis (heartbeat online)', r.last_seen_at === now, `last_seen_at=${r?.last_seen_at}`);
 
 console.log('\n[3] Transaksi: commit (rollback dilewati — lihat catatan pg-mem di atas)');
 await tx(async (t) => {
@@ -167,7 +172,7 @@ const tPar = Date.now() - t0;
 r = await one('SELECT COUNT(*) AS n FROM regions');
 check('initDb 10× paralel: seed tetap 17 (tidak terduplikasi)', Number(r.n) === 17, `n=${r.n}, ${tPar}ms`);
 const ver = await one("SELECT value FROM db_meta WHERE key = 'schema_version'");
-check('Penanda versi skema tersimpan (= 6)', ver?.value === '6', `value=${ver?.value}`);
+check('Penanda versi skema tersimpan (= 7)', ver?.value === '7', `value=${ver?.value}`);
 const t1 = Date.now();
 await initDb();
 const tFast = Date.now() - t1;

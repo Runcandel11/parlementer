@@ -1008,6 +1008,60 @@ async function main() {
   r = await ADM.post('/api/admin/gold', { user_id: cUserId, amount: 1000001 });
   check('Batas emas 1.000.000 TIDAK berubah (400)', r.status === 400);
 
+  console.log('  [22k] Jumlah pemain online + lencana pengumuman');
+  const dbO = new DatabaseSync(DB_PATH);
+  const idA = dbO.prepare("SELECT c.id AS cid, c.user_id AS uid FROM citizens c JOIN users u ON u.id = c.user_id WHERE u.username = 'warga_satu'").get();
+  const idB = dbO.prepare("SELECT c.id AS cid, c.user_id AS uid FROM citizens c JOIN users u ON u.id = c.user_id WHERE u.username = 'warga_dua'").get();
+  // Lencana 🔔: pengumuman belum dibaca ikut terhitung (dulu hanya notifikasi).
+  const unreadBefore = (await C.get('/api/me')).data.unread;
+  r = await ADM.post('/api/admin/announcements', { title: 'Update Tes Online', body: 'Isi tes online.' });
+  check('Admin membuat pengumuman tes online', r.status === 200 && !!r.data.id, `status=${r.status}`);
+  const annOnlineId = r.data.id;
+  r = await C.get('/api/me');
+  check('Badge 🔔 naik 1 untuk pengumuman belum dibaca', r.data.unread === unreadBefore + 1, `unread ${unreadBefore} → ${r.data.unread}`);
+  r = await C.post('/api/announcements/read', { id: annOnlineId });
+  check('Tandai pengumuman dibaca (tes online)', r.status === 200);
+  r = await C.get('/api/me');
+  check('Badge 🔔 kembali setelah pengumuman dibaca', r.data.unread === unreadBefore, `unread=${r.data.unread}`);
+  r = await ADM.post(`/api/admin/announcements/${annOnlineId}/delete`);
+  check('Hapus pengumuman tes online', r.status === 200);
+  // Heartbeat: GET /api/me memperbarui last_seen_at (throttle 60 detik).
+  dbO.prepare('UPDATE citizens SET last_seen_at = 0').run();
+  r = await A.get('/api/me');
+  const seen1 = dbO.prepare('SELECT last_seen_at FROM citizens WHERE id = ?').get(idA.cid).last_seen_at;
+  check('GET /api/me memperbarui last_seen_at', seen1 > Date.now() - 5000, `last_seen_at=${seen1}`);
+  r = await A.get('/api/me');
+  const seen2 = dbO.prepare('SELECT last_seen_at FROM citizens WHERE id = ?').get(idA.cid).last_seen_at;
+  check('Heartbeat di-throttle 60 detik (tidak ditulis ulang)', seen2 === seen1, `${seen1} → ${seen2}`);
+  r = await A.get('/api/me');
+  check('Online = 1 (hanya A yang aktif)', r.data.onlineCount === 1, `online=${r.data.onlineCount}`);
+  r = await B.get('/api/me');
+  r = await A.get('/api/me');
+  check('Online = 2 setelah B memanggil /api/me', r.data.onlineCount === 2, `online=${r.data.onlineCount}`);
+  dbO.prepare('UPDATE citizens SET last_seen_at = ? WHERE id = ?').run(Date.now() - 10 * 60 * 1000, idB.cid);
+  r = await A.get('/api/me');
+  check('Pemain basi 10 menit tidak terhitung online', r.data.onlineCount === 1, `online=${r.data.onlineCount}`);
+  dbO.prepare('UPDATE citizens SET last_seen_at = ? WHERE id = ?').run(Date.now(), idB.cid);
+  dbO.prepare('UPDATE users SET is_banned = 1 WHERE id = ?').run(idB.uid);
+  r = await A.get('/api/me');
+  check('Pemain banned tidak terhitung online', r.data.onlineCount === 1, `online=${r.data.onlineCount}`);
+  dbO.prepare('UPDATE users SET is_banned = 0 WHERE id = ?').run(idB.uid);
+  // /api/world (sekali saja — respons di-cache 30 detik).
+  dbO.prepare('UPDATE citizens SET last_seen_at = 0').run();
+  await A.get('/api/me');
+  // /api/world di-cache 30 detik (Tahap 5 — lag): respons bisa basi
+  // (populasi/online dari sebelum nol-kan). Polling sampai populasinya
+  // cocok dengan DB (= respons segar), maks ~36 detik.
+  const expectedPop = dbO.prepare('SELECT COUNT(*) AS n FROM citizens').get().n;
+  let w = null;
+  for (let i = 0; i < 12; i++) {
+    w = (await A.get('/api/world')).data;
+    if (w.population === expectedPop) break;
+    await sleep(3000);
+  }
+  check('/api/world memuat onlineCount (respons segar)', w.onlineCount === 1 && w.population === expectedPop, `online=${w.onlineCount} populasi=${w.population}`);
+  dbO.close();
+
 
   console.log('\n[23] Tahap 5 — Pemerintahan/Diplomasi + bug region + lag/Invalid Date');
   // Setup bersama: C = anggota parlemen (partai 31 kursi) + Menteri Ekonomi,

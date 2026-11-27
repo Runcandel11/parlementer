@@ -213,6 +213,12 @@ async function main() {
   await initDb();
   const t5cols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE (table_name = 'country' AND column_name = 'admin_pay_mult') OR (table_name = 'laws' AND column_name = 'effect_applied')");
   check('Migrasi: kolom Tahap 5 ditambah kembali', Number(t5cols2.rows[0].n) === 2);
+  // Migrasi kolom online: hapus kolom, initDb menambahkannya kembali.
+  await pool.query('ALTER TABLE citizens DROP COLUMN last_seen_at');
+  await resetVersion();
+  await initDb();
+  const onlineCol = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'citizens' AND column_name = 'last_seen_at'");
+  check('Migrasi: kolom citizens.last_seen_at ditambah kembali', onlineCol.rowCount === 1);
 
   console.log('\n[9] Version gate initDb (perbaikan advisory lock 27 Nov 2026)');
   // Insiden: initDb lama menahan advisory lock global selama ~100 round-trip
@@ -220,7 +226,7 @@ async function main() {
   // steady state hanya baca penanda (tanpa lock/DDL); migrasi penuh hanya
   // bila penanda dihapus / versi lama.
   const ver = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Penanda versi skema = 6', ver.rows[0]?.value === '6', `value=${ver.rows[0]?.value}`);
+  check('Penanda versi skema = 7', ver.rows[0]?.value === '7', `value=${ver.rows[0]?.value}`);
   const t9a = Date.now();
   await Promise.all([initDb(), initDb(), initDb(), initDb(), initDb()]);
   const t9b = Date.now() - t9a;
