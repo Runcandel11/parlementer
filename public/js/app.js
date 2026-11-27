@@ -2218,6 +2218,13 @@ ROUTES.jobs = async () => {
 ROUTES.companies = async () => {
   const data = await api('/api/companies');
   $('#page').innerHTML = page('INDUSTRI', 'Dirikan perusahaan, produksi setiap hari, buka lowongan untuk warga lain.', `
+  <div class="panel"><h3>📖 CARA KERJA PERUSAHAAN</h3>
+    <p class="small">• <b>Produksi harian:</b> setiap perusahaan menghasilkan produk setiap hari (otomatis saat pergantian hari) dan langsung masuk inventaris pemilik.</p>
+    <p class="small">• <b>Karyawan:</b> setiap shift karyawan menambah produk ke inventaris pemilik — sekitar 1/10 produksi harian per shift penuh. Produk kecil langsung masuk; produk besar seperti Drone terakumulasi beberapa shift.</p>
+    <p class="small">• <b>Gaji:</b> gaji karyawan dibayar oleh sistem, <b>bukan</b> dipotong dari pemilik — mendirikan perusahaan tidak membuatmu keluar uang tiap giliran.</p>
+    <p class="small">• <b>Pabrik:</b> butuh 2× Besi Mentah untuk mengolah 1× Bahan Bangunan — produksi maupun bonus shift berhenti bila bahan habis.</p>
+    <p class="small">• <b>Milikmu:</b> pemilik bisa mengubah nama, tentang, dan bahan yang diproduksi, serta memasang foto perusahaan.</p>
+  </div>
   <div class="panel"><h3>➕ DIRIKAN PERUSAHAAN</h3>
     <div class="grid2">
       ${data.types.map((t) => `
@@ -2233,15 +2240,23 @@ ROUTES.companies = async () => {
   </div>
   <div class="panel"><h3>🏭 PERUSAHAANKU</h3>
     ${data.mine.length ? data.mine.map((c) => `
-      <div class="card"><h4>${esc(c.name)}</h4>
+      <div class="card">
+      ${c.photo ? `<img src="${esc(c.photo)}" class="company-photo" alt="Foto ${esc(c.name)}">` : ''}
+      <h4>${esc(c.name)}</h4>
       <p class="muted small">${esc(c.type)} · ${esc(c.region_name)} · ${c.employees} karyawan${c.resource ? ' · Produksi: ' + esc(c.resource) : ''}</p>
+      ${c.about ? `<p class="small">${esc(c.about)}</p>` : ''}
+      <p class="muted small">🎁 Bonus shift: ${esc(c.bonus_text || '')} · Total dari karyawan: ${fmt(c.bonus_given || 0)} unit</p>
       <div class="row"><input placeholder="Judul lowongan baru" id="job-title-${c.id}"><input placeholder="Gaji (Rp)" type="number" id="job-salary-${c.id}" style="max-width:120px">
-      <button class="btn-gold btn-sm" data-newjob="${c.id}">BUKA LOWONGAN</button></div></div>`).join('')
+      <button class="btn-gold btn-sm" data-newjob="${c.id}">BUKA LOWONGAN</button></div>
+      <div class="row" style="margin-top:8px"><button class="btn-gold btn-sm" data-editco="${c.id}">✏️ EDIT</button>
+      <button class="btn-gold btn-sm" data-photoco="${c.id}">📷 PASANG FOTO</button>
+      <input type="file" accept="image/*" id="co-photo-${c.id}" hidden></div>
+      <div id="co-edit-${c.id}"></div></div>`).join('')
       : '<p class="muted">Kamu belum punya perusahaan.</p>'}
   </div>
   <div class="panel"><h3>🌍 SEMUA PERUSAHAAN</h3>
     ${data.companies.length ? data.companies.map((c) => `
-      <div class="kv"><span class="k">${esc(c.name)}<br><small class="muted">${esc(c.owner_name)} · ${esc(c.region_name)} · ${c.employees} karyawan</small></span>
+      <div class="kv"><span class="k">${c.photo_sm ? `<img src="${esc(c.photo_sm)}" class="company-photo-sm" alt="">` : ''}${esc(c.name)}<br><small class="muted">${esc(c.owner_name)} · ${esc(c.region_name)} · ${c.employees} karyawan</small></span>
       <span class="v">${esc(c.type)}</span></div>`).join('')
       : '<p class="muted">Belum ada perusahaan. Jadilah yang pertama!</p>'}
   </div>`);
@@ -2269,6 +2284,38 @@ ROUTES.companies = async () => {
       route();
     } catch (e) { toast(e.message); }
   });
+  // Edit perusahaan (v2.4.0): hanya pemilik — tombol hanya dirender di
+  // kartu PERUSAHAANKU sendiri, server tetap memverifikasi (403).
+  $$('[data-editco]').forEach((b) => b.onclick = () => {
+    const c = data.mine.find((x) => x.id === Number(b.dataset.editco));
+    if (!c) return;
+    $('#co-edit-' + c.id).innerHTML = `
+      <div class="card selected" style="margin-top:12px"><h4>✏️ EDIT ${esc(c.name)}</h4>
+      <label>NAMA<input id="co-name-${c.id}" value="${esc(c.name)}" maxlength="60"></label>
+      <label>TENTANG<input id="co-about-${c.id}" value="${esc(c.about || '')}" maxlength="200"></label>
+      ${c.type === 'resource' ? `<label>APA YANG DIBUAT<select id="co-resource-${c.id}">${data.resources.map((r) => `<option ${r === c.resource ? 'selected' : ''}>${r}</option>`).join('')}</select></label>` : ''}
+      <button class="btn-gold" id="co-save-${c.id}">SIMPAN PERUBAHAN</button></div>`;
+    $('#co-save-' + c.id).onclick = async () => {
+      try {
+        await api(`/api/companies/${c.id}`, { method: 'PATCH', body: { name: $('#co-name-' + c.id).value.trim(), about: $('#co-about-' + c.id).value.trim(), resource: $('#co-resource-' + c.id)?.value } });
+        toast('Perusahaan diperbarui.');
+        await refreshMe(); route();
+      } catch (e) { toast(e.message); }
+    };
+  });
+  // Foto perusahaan (v2.4.0): pola yang sama seperti sampul artikel —
+  // processCoverFile (1200×630, maks 500 KB) lalu POST data URL.
+  $$('[data-photoco]').forEach((b) => b.onclick = () => $('#co-photo-' + b.dataset.photoco).click());
+  $$('[id^="co-photo-"]').forEach((inp) => inp.addEventListener('change', async () => {
+    const id = inp.id.replace('co-photo-', '');
+    const processed = await processCoverFile(inp.files[0]);
+    if (!processed || processed.error) { toast(imageErrorMessage(processed?.error)); inp.value = ''; return; }
+    try {
+      await post(`/api/companies/${id}/photo`, { photo: processed.cover, photo_sm: processed.coverSm });
+      toast('Foto perusahaan dipasang.');
+      route();
+    } catch (e) { toast(e.message); inp.value = ''; }
+  }));
 };
 
 // ---------- PETA & WILAYAH ----------

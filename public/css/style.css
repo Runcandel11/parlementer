@@ -230,6 +230,9 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 /* Gambar artikel (sampul + gambar di isi) — sampul 40:21 seperti pratinjau. */
 .article-cover { width: 100%; aspect-ratio: 40 / 21; object-fit: cover; border-radius: 10px; display: block; margin-bottom: 12px; }
 .article-cover-hero { width: 100%; aspect-ratio: 40 / 21; object-fit: cover; display: block; }
+/* Foto perusahaan (v2.4.0): tampil BESAR di kartu perusahaan milik sendiri. */
+.company-photo { width: 100%; aspect-ratio: 40 / 21; object-fit: cover; border-radius: 10px; display: block; margin-bottom: 10px; }
+.company-photo-sm { width: 64px; height: 48px; object-fit: cover; border-radius: 8px; vertical-align: middle; margin-right: 8px; }
 .article-thumb { width: 64px; height: 36px; object-fit: cover; border-radius: 6px; flex: none; }
 .article-img { max-width: 100%; border-radius: 8px; margin: 10px 0; display: block; }
 .chat-input { position: sticky; bottom: 64px; display: flex; gap: 8px; background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 8px; }

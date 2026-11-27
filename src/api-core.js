@@ -14,7 +14,7 @@ import {
   xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
   energyCapFor, DAILY_MISSIONS, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
-  DAILY_PRODUCTION, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
+  DAILY_PRODUCTION, FACTORY_INPUT, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
   PRICE_BAND, WASH_TRADE,
 } from './game.js';
 
@@ -803,6 +803,10 @@ export function registerCore(app) {
   // diunggah ulang) — chat memakai fallback inisial di sana.
   const AVATAR_MAX_BYTES = 500 * 1024;
   const AVATAR_SM_MAX_BYTES = 25 * 1024;
+  // Foto perusahaan (v2.4.0): batas yang sama seperti foto profil (500 KB)
+  // + thumbnail 50 KB, pola yang sama seperti sampul artikel.
+  const COMPANY_PHOTO_MAX_BYTES = 500 * 1024;
+  const COMPANY_PHOTO_SM_MAX_BYTES = 50 * 1024;
   // Parser gambar bersama ada di util.js (dipakai juga gambar artikel).
   const parseAvatarDataUrl = (dataUrl, maxBytes = AVATAR_MAX_BYTES) => parseImageDataUrl(dataUrl, maxBytes);
   app.post('/api/profile/avatar', authRequired, r(async (req, res) => {
@@ -932,6 +936,65 @@ export function registerCore(app) {
       await chronicleDone(c, 'shift');
     }
     const shiftPrefix = (spent) => spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%): `;
+    const bonusNote = (bonus) => {
+      if (!bonus) return '';
+      if (bonus.qty > 0) return ` Bonus perusahaan: +${bonus.qty}× ${bonus.product} untuk pemilik ${bonus.company}.`;
+      if (bonus.shortage) return ` Bonus perusahaan tertunda (pemilik kehabisan ${FACTORY_INPUT.commodity}).`;
+      return '';
+    };
+    // Bonus shift karyawan (v2.4.0): tiap shift di perusahaan milik warga
+    // menambah produk perusahaan ke inventaris PEMILIK — ~1/10 produksi
+    // harian per shift penuh, terakumulasi dalam persepuluh unit (kolom
+    // companies.bonus_credit) supaya produk bernilai tinggi (Drone, 3/hari)
+    // tetap adil. Atomik dengan shift: dipanggil di dalam tx yang sama.
+    // Factory butuh 2× Besi Mentah per unit (seperti produksi harian); bila
+    // bahan kurang, bonus tertahan sebagai kredit + pemilik diberi tahu
+    // sekali per 24 jam. Mengembalikan { company, product, qty } bila ada
+    // unit yang masuk, { ..., qty: 0, shortage: true } bila tertahan bahan,
+    // atau null bila tidak ada bonus (bukan perusahaan / belum genap 1 unit).
+    async function grantCompanyShiftBonus(t, job, spent, worker) {
+      if (!job.company_id) return null;
+      const co = await t.one(forUpdate('SELECT * FROM companies WHERE id = ?'), [job.company_id]);
+      if (!co) return null;
+      const product = companyProduct(co);
+      const com = product ? await t.one('SELECT * FROM commodities WHERE name = ?', [product]) : null;
+      if (!com) return null;
+      const daily = DAILY_PRODUCTION[co.type] || 0;
+      if (daily <= 0) return null;
+      const added = Math.round(daily * spent.fraction);
+      const total = (co.bonus_credit || 0) + added;
+      let units = Math.floor(total / 10);
+      let credit = total - units * 10;
+      let shortage = false;
+      if (units > 0 && co.type === 'factory') {
+        const input = await t.one('SELECT id FROM commodities WHERE name = ?', [FACTORY_INPUT.commodity]);
+        const stock = input ? await t.one('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1', [co.owner_id, input.id]) : null;
+        const have = stock?.qty || 0;
+        const affordable = Math.floor(have / FACTORY_INPUT.perUnit);
+        if (affordable <= 0) {
+          units = 0; credit = total; shortage = true;
+          const now = Date.now();
+          if (!co.bonus_warned_at || now - co.bonus_warned_at > 24 * 60 * 60 * 1000) {
+            await t.run('UPDATE companies SET bonus_warned_at = ? WHERE id = ?', [now, co.id]);
+            await notify(co.owner_id, 'EKONOMI', 'Bonus shift tertunda',
+              `${co.name} tidak mendapat bonus shift: butuh ${FACTORY_INPUT.perUnit}× ${FACTORY_INPUT.commodity} per unit ${product} (punya ${have}).`, t);
+          }
+        } else {
+          if (affordable < units) { units = affordable; credit = total - units * 10; }
+          const used = units * FACTORY_INPUT.perUnit;
+          const took = await t.run('UPDATE inventory SET qty = qty - ? WHERE id = ? AND qty >= ?', [used, stock.id, used]);
+          if (!took.changes) { units = 0; credit = total; shortage = true; }
+        }
+      }
+      await t.run('UPDATE companies SET bonus_credit = ?, bonus_given = bonus_given + ? WHERE id = ?', [credit, units, co.id]);
+      if (units > 0) {
+        await addItem(co.owner_id, com.id, 1, units, t);
+        await notify(co.owner_id, 'EKONOMI', 'Bonus shift karyawan',
+          `${worker.username} menyelesaikan shift di ${co.name}: +${units}× ${product} masuk inventarismu.`, t);
+        return { company: co.name, product, qty: units };
+      }
+      return shortage ? { company: co.name, product, qty: 0, shortage: true } : null;
+    }
     let goodsNote = '';
     if (job.salary_type === 'goods') {
       // Lowongan ADMIN: dibayar BAHAN MENTAH, bukan uang (tanpa pajak).
@@ -964,11 +1027,12 @@ export function registerCore(app) {
         const gross = shiftSalary(job.salary, s.eco, s.fatigue, taxRate).gross * s.fraction;
         const units = Math.max(0, Math.floor((gross * pct / 100) / com.ref_usd));
         if (units > 0) await addItem(c.id, com.id, 1, units, t);
-        return { ...s, gross, units };
+        const bonus = await grantCompanyShiftBonus(t, job, s, c);
+        return { ...s, gross, units, bonus };
       });
-      goodsNote = `${shiftPrefix(spent)}Dibayar ${spent.units}× ${resource} (bagi hasil ${pct}%).`;
+      goodsNote = `${shiftPrefix(spent)}Dibayar ${spent.units}× ${resource} (bagi hasil ${pct}%).${bonusNote(spent.bonus)}`;
       await rewardShift(spent);
-      return res.json({ ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, note: goodsNote, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
+      return res.json({ ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, note: goodsNote, companyBonus: spent.bonus || null, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
     }
     const spent = await tx(async (t) => {
       const s = await spendEnergy(t);
@@ -976,10 +1040,11 @@ export function registerCore(app) {
       const scaledGross = Math.round(gross * s.fraction * 100) / 100;
       const scaledNet = Math.round(net * s.fraction * 100) / 100;
       await t.run('UPDATE citizens SET usd = usd + ?, total_salary = total_salary + ? WHERE id = ?', [scaledNet, scaledNet, c.id]);
-      return { ...s, gross: scaledGross, net: scaledNet, tax: Math.round(scaledGross * taxRate * 100) / 100 };
+      const bonus = await grantCompanyShiftBonus(t, job, s, c);
+      return { ...s, gross: scaledGross, net: scaledNet, tax: Math.round(scaledGross * taxRate * 100) / 100, bonus };
     });
     await rewardShift(spent);
-    res.json({ ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, note: spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%).`, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
+    res.json({ ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, note: `${spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%).`}${bonusNote(spent.bonus)}`.trim(), companyBonus: spent.bonus || null, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
   }));
 
   // ---------- PERUSAHAAN ----------
@@ -990,8 +1055,11 @@ export function registerCore(app) {
        FROM companies co JOIN users u ON u.id = (SELECT user_id FROM citizens WHERE id = co.owner_id)
        JOIN regions r ON r.id = co.region_id ORDER BY co.created_at DESC`,
       []);
-    const mine = rows.filter((x) => x.owner_id === req.citizen.id);
-    res.json({ companies: rows, mine, types: COMPANY_TYPES, resources: RESOURCE_PRODUCTS });
+    // Bonus shift (v2.4.0): teks imbalan per shift penuh + total unit yang
+    // sudah masuk inventaris pemilik dari shift karyawan.
+    const withBonus = rows.map((x) => ({ ...x, bonus_text: shiftBonusText(x), bonus_given: x.bonus_given || 0 }));
+    const mine = withBonus.filter((x) => x.owner_id === req.citizen.id);
+    res.json({ companies: withBonus, mine, types: COMPANY_TYPES, resources: RESOURCE_PRODUCTS });
   }));
 
   app.post('/api/companies', authRequired, citizenRequired, r(async (req, res) => {
@@ -1032,6 +1100,56 @@ export function registerCore(app) {
       VALUES (?,0,?,?,?,1,1,?,0,?,?,?) RETURNING id`,
       [co.id, title.slice(0, 80), Number(salary), salary_type === 'share' ? 'share' : 'fixed', Math.max(1, Math.min(20, Number(seats) || 1)), co.region_id, '', Date.now()]);
     res.json({ ok: true, jobId: j.id });
+  }));
+
+  // Edit perusahaan (v2.4.0, saran LIO): HANYA pemilik. Yang bisa diubah:
+  // nama (1–60 karakter), tentang (maks 200 karakter), dan resource
+  // (bahan mentah yang diproduksi — hanya untuk tipe resource, harus salah
+  // satu dari RESOURCE_PRODUCTS). Jenis, wilayah, dan pemilik tidak bisa
+  // diubah (biaya pendirian sudah dibayar per jenis).
+  app.patch('/api/companies/:id', authRequired, citizenRequired, r(async (req, res) => {
+    const co = await one('SELECT * FROM companies WHERE id = ?', [req.params.id]);
+    if (!co) return res.status(404).json({ error: 'Perusahaan tidak ditemukan.' });
+    if (co.owner_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya pemilik yang bisa mengubah perusahaan ini.' });
+    const { name, about, resource } = req.body || {};
+    const updates = [];
+    const values = [];
+    if (name !== undefined) {
+      const n = String(name).trim();
+      if (!n) return res.status(400).json({ error: 'Nama perusahaan tidak boleh kosong.' });
+      updates.push('name = ?'); values.push(n.slice(0, 60));
+    }
+    if (about !== undefined) { updates.push('about = ?'); values.push(String(about).slice(0, 200)); }
+    if (resource !== undefined && co.type === 'resource') {
+      if (!RESOURCE_PRODUCTS.includes(resource)) return res.status(400).json({ error: 'Pilih bahan mentah yang diproduksi.' });
+      updates.push('resource = ?'); values.push(resource);
+    }
+    if (!updates.length) return res.status(400).json({ error: 'Tidak ada perubahan.' });
+    values.push(co.id);
+    await run(`UPDATE companies SET ${updates.join(', ')} WHERE id = ?`, values);
+    const updated = await one('SELECT * FROM companies WHERE id = ?', [co.id]);
+    res.json({ ok: true, company: { ...updated, bonus_text: shiftBonusText(updated), bonus_given: updated.bonus_given || 0 } });
+  }));
+
+  // Foto perusahaan (v2.4.0): HANYA pemilik. Batas yang sama seperti foto
+  // profil/sampul artikel (500 KB, thumbnail 50 KB); data URL divalidasi
+  // magic bytes JPEG/PNG/WebP lewat parseImageDataUrl (SVG ditolak).
+  app.post('/api/companies/:id/photo', authRequired, citizenRequired, r(async (req, res) => {
+    const co = await one('SELECT * FROM companies WHERE id = ?', [req.params.id]);
+    if (!co) return res.status(404).json({ error: 'Perusahaan tidak ditemukan.' });
+    if (co.owner_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya pemilik yang bisa memasang foto perusahaan ini.' });
+    const { photo, photo_sm } = req.body || {};
+    if (!photo) return res.status(400).json({ error: 'Foto perusahaan wajib diisi.' });
+    const parsed = parseImageDataUrl(photo, COMPANY_PHOTO_MAX_BYTES);
+    if (!parsed) return res.status(400).json({ error: 'Foto harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 500 KB.' });
+    let photoSmUrl = null;
+    if (photo_sm) {
+      const parsedSm = parseImageDataUrl(photo_sm, COMPANY_PHOTO_SM_MAX_BYTES);
+      if (!parsedSm) return res.status(400).json({ error: 'Thumbnail foto tidak valid (maksimal 50 KB).' });
+      photoSmUrl = parsedSm.dataUrl;
+    }
+    await run('UPDATE companies SET photo = ?, photo_sm = ? WHERE id = ?', [parsed.dataUrl, photoSmUrl, co.id]);
+    res.json({ ok: true });
   }));
 
   // ---------- PASAR ----------

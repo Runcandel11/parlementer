@@ -9,7 +9,7 @@
 //   (4) PETA LANGSUNG: wilayah tanpa negara = kaca abu-abu (kelas free) +
 //       tanda "?" (17 ubin, semua belum bernegara di DB segar);
 //   (5) UI KACA: CSS memakai backdrop-filter; ikon atas diperkecil (32px);
-//   (6) VERSI: footer landing + drawer menampilkan "Parlementer v2.3.1"
+//   (6) VERSI: footer landing + drawer menampilkan "Parlementer v2.4.0"
 //       dari konstanta VERSION (API /api/world + /api/me).
 // Jalankan: node test/landing-glass-dom.js
 import { spawn } from 'node:child_process';
@@ -22,7 +22,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3462;
 const DB_PATH = '/tmp/parlementer-landing-glass-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '2.3.1';
+const EXPECTED_VERSION = '2.4.0';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;

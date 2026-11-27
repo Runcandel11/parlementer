@@ -16,8 +16,12 @@
 // Update kecil v2.3.1 = rapikan UI atas + ikon: HUD geser ke kanan
 // (padding kiri 16px di HP), kolom kiri HUD seragam 38px (36px di HP),
 // semua ikon di tengah dengan flex (HUD, drawer, peti, tutup drawer).
+// Update sedang v2.4.0 = batch perusahaan: tiap shift karyawan menambah
+// produk ke inventaris pemilik (~1/10 produksi harian per shift penuh),
+// edit perusahaan + foto perusahaan (500 KB, tampil besar) + penjelasan
+// cara kerja di halaman perusahaan.
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '2.3.1';
+export const VERSION = '2.4.0';
 
 export const WA_TOPUP_URL = 'https://wa.me/6285220743283';
 export const MINT_RATE = 10; // 1 emas dicetak jadi 10 USD
@@ -228,6 +232,23 @@ export const COMPANY_TYPES = [
 export const RESOURCE_PRODUCTS = ['Gandum Mentah', 'Besi Mentah', 'Minyak Mentah', 'Kapas Mentah', 'Kayu', 'Batu Bara', 'Tembaga Mentah'];
 // Produksi harian per perusahaan (unit), sebelum bonus wilayah.
 export const DAILY_PRODUCTION = { resource: 20, factory: 10, light: 8, heavy: 3 };
+// Bonus shift karyawan (v2.4.0): tiap shift penuh menambah ~1/10 produksi
+// harian ke inventaris pemilik — dihitung dalam persepuluh unit (kolom
+// companies.bonus_credit) supaya produk bernilai tinggi (Drone, 3/hari)
+// tetap adil: 1 Drone butuh ~4 shift penuh, bukan 0 atau 1 utuh.
+// Angka per shift penuh (unit): resource 2, factory 1, light 0,8, heavy 0,3.
+export const SHIFT_BONUS_DIVISOR = 10;
+export function companyProduct(co) {
+  if (co.type === 'factory') return 'Bahan Bangunan';
+  if (co.type === 'light') return 'Makanan';
+  if (co.type === 'heavy') return 'Drone';
+  return co.resource || '';
+}
+export function shiftBonusText(co) {
+  const per = (DAILY_PRODUCTION[co.type] || 0) / SHIFT_BONUS_DIVISOR;
+  const s = Number.isInteger(per) ? String(per) : per.toFixed(1).replace('.', ',');
+  return `${s}× ${companyProduct(co)} per shift penuh`;
+}
 
 // --- Toko (harga rupiah, top-up manual via WhatsApp) ---
 export const SHOP_PACKAGES = [

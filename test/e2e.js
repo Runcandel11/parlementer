@@ -40,6 +40,7 @@ class Client {
   }
   get(p) { return this.req('GET', p); }
   post(p, b) { return this.req('POST', p, b || {}); }
+  patch(p, b) { return this.req('PATCH', p, b || {}); }
   delete(p) { return this.req('DELETE', p); }
 }
 
@@ -1314,6 +1315,117 @@ async function main() {
   check('/api/world memuat onlineCount (respons segar)', w.onlineCount === 1 && w.population === expectedPop, `online=${w.onlineCount} populasi=${w.population}`);
   dbO.close();
 
+  console.log('  [22l] Perusahaan v2.4.0 — bonus shift, edit, foto');
+  const dbCo = new DatabaseSync(DB_PATH);
+  const GO = new Client();
+  const HO = new Client();
+  const IO = new Client();
+  // Batas registrasi 20/IP/24 jam sudah habis dipakai 20 pendaftaran
+  // sebelumnya dalam suite ini — 3 akun ini memakai IP berbeda lewat
+  // X-Forwarded-For (pola yang sama seperti [23b]/[28]/[5b]).
+  GO.extraHeaders = { 'X-Forwarded-For': '127.0.0.11' };
+  HO.extraHeaders = { 'X-Forwarded-For': '127.0.0.12' };
+  IO.extraHeaders = { 'X-Forwarded-For': '127.0.0.13' };
+  r = await GO.post('/api/auth/register', { email: 'perusahaan_g@test.local', password: 'rahasia123', username: 'perusahaan_g' });
+  check('Perusahaan: pemilik G mendaftar', r.status === 200 && r.data.ok);
+  r = await HO.post('/api/auth/register', { email: 'perusahaan_h@test.local', password: 'rahasia123', username: 'perusahaan_h' });
+  check('Perusahaan: pekerja H mendaftar', r.status === 200 && r.data.ok);
+  r = await IO.post('/api/auth/register', { email: 'perusahaan_i@test.local', password: 'rahasia123', username: 'perusahaan_i' });
+  check('Perusahaan: pekerja I mendaftar', r.status === 200 && r.data.ok);
+  const meG = (await GO.get('/api/me')).data;
+  const meH = (await HO.get('/api/me')).data;
+  const meI = (await IO.get('/api/me')).data;
+  const gId = meG.citizen.id; const hId = meH.citizen.id; const iId = meI.citizen.id;
+  const gRegion = meG.citizen.region_id;
+  // Semua di wilayah yang sama supaya bisa melamar (aturan v2.2.2).
+  dbCo.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id IN (?,?,?)').run(gRegion, gRegion, hId, iId);
+  // Emas untuk mendirikan 3 perusahaan (100 + 250 + 100).
+  dbCo.prepare('UPDATE citizens SET gold = 1000 WHERE id = ?').run(gId);
+  const setInvL = (citizenId, commodityId, qty) => dbCo.prepare(
+    'INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = ?')
+    .run(citizenId, commodityId, qty, qty);
+  const invQtyL = (citizenId, commodityId) => {
+    const row = dbCo.prepare('SELECT qty FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1').get(citizenId, commodityId);
+    return row ? row.qty : 0;
+  };
+  const setEnergyL = (citizenId, energy) => dbCo.prepare('UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ?').run(energy, Date.now(), citizenId);
+  const jobIdFor = (companyId) => dbCo.prepare('SELECT id FROM jobs WHERE company_id = ? ORDER BY id LIMIT 1').get(companyId)?.id;
+  // JPEG mungil yang valid (magic bytes FF D8 FF) untuk tes foto.
+  const tinyJpeg = 'data:image/jpeg;base64,' + Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9]).toString('base64');
+  // (a) Bonus shift — perusahaan resource (2× Besi Mentah per shift penuh).
+  r = await GO.post('/api/companies', { type: 'resource', name: 'Tambang Tes', resource: 'Besi Mentah' });
+  check('Tambang didirikan (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
+  const tambangId = r.data.companyId;
+  r = await HO.post('/api/jobs/apply', { job_id: jobIdFor(tambangId) });
+  check('HO melamar ke Tambang Tes', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const besiBefore = invQtyL(gId, besiId);
+  r = await HO.post('/api/jobs/shift');
+  check('Shift penuh HO: respons companyBonus 2× Besi Mentah', r.status === 200 && r.data.companyBonus?.qty === 2 && r.data.companyBonus?.product === 'Besi Mentah', JSON.stringify(r.data.companyBonus));
+  check('Pemilik GO: inventaris +2 Besi Mentah dari shift HO', invQtyL(gId, besiId) === besiBefore + 2, `besi=${invQtyL(gId, besiId)}`);
+  r = await GO.get('/api/notifications');
+  check('Pemilik GO: notifikasi Bonus shift karyawan', (r.data.notifications || []).some((n) => n.title === 'Bonus shift karyawan'));
+  r = await GO.get('/api/companies');
+  const tambang = (r.data.companies || []).find((x) => x.id === tambangId);
+  check('GET /api/companies: bonus_text + bonus_given Tambang', tambang?.bonus_text?.includes('Besi Mentah') && tambang?.bonus_text?.includes('per shift penuh') && tambang?.bonus_given === 2, JSON.stringify({ t: tambang?.bonus_text, g: tambang?.bonus_given }));
+  // (b) Akumulasi — Industri Ringan (0,8× Makanan per shift penuh).
+  r = await GO.post('/api/companies', { type: 'light', name: 'Dapur Tes' });
+  check('Dapur didirikan (250 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
+  const dapurId = r.data.companyId;
+  r = await IO.post('/api/jobs/apply', { job_id: jobIdFor(dapurId) });
+  check('IO melamar ke Dapur Tes', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const makananBefore = invQtyL(gId, makananId);
+  r = await IO.post('/api/jobs/shift');
+  check('Shift 1 Dapur: belum genap 1 unit (0,8 terakumulasi)', r.status === 200 && (r.data.companyBonus === null || r.data.companyBonus?.qty === 0), JSON.stringify(r.data.companyBonus));
+  check('Pemilik GO: Makanan belum bertambah setelah 1 shift', invQtyL(gId, makananId) === makananBefore, `makanan=${invQtyL(gId, makananId)}`);
+  setEnergyL(iId, 100);
+  r = await IO.post('/api/jobs/shift');
+  check('Shift 2 Dapur: 1× Makanan masuk (akumulasi 1,6)', r.status === 200 && r.data.companyBonus?.qty === 1 && r.data.companyBonus?.product === 'Makanan', JSON.stringify(r.data.companyBonus));
+  check('Pemilik GO: inventaris +1 Makanan', invQtyL(gId, makananId) === makananBefore + 1, `makanan=${invQtyL(gId, makananId)}`);
+  // (c) Pabrik — bonus butuh 2× Besi Mentah per unit; bila habis, tertahan.
+  r = await GO.post('/api/companies', { type: 'factory', name: 'Pabrik Bonus' });
+  check('Pabrik Bonus didirikan (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
+  const pabrikId = r.data.companyId;
+  r = await HO.post('/api/jobs/apply', { job_id: jobIdFor(pabrikId) });
+  check('HO pindah kerja ke Pabrik Bonus', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  setInvL(gId, besiId, 10);
+  const bahanBefore = invQtyL(gId, bahanId);
+  setEnergyL(hId, 100);
+  r = await HO.post('/api/jobs/shift');
+  check('Shift Pabrik: bonus 1× Bahan Bangunan', r.status === 200 && r.data.companyBonus?.qty === 1 && r.data.companyBonus?.product === 'Bahan Bangunan', JSON.stringify(r.data.companyBonus));
+  check('Pabrik: 2 Besi terpakai, +1 Bahan Bangunan', invQtyL(gId, besiId) === 8 && invQtyL(gId, bahanId) === bahanBefore + 1, `besi=${invQtyL(gId, besiId)} bahan=${invQtyL(gId, bahanId)}`);
+  setInvL(gId, besiId, 1);
+  setEnergyL(hId, 100);
+  r = await HO.post('/api/jobs/shift');
+  check('Shift Pabrik tanpa Besi: bonus 0 + shortage', r.status === 200 && r.data.companyBonus?.qty === 0 && r.data.companyBonus?.shortage === true, JSON.stringify(r.data.companyBonus));
+  check('Pabrik tanpa Besi: Besi tetap 1, Bahan tidak bertambah', invQtyL(gId, besiId) === 1 && invQtyL(gId, bahanId) === bahanBefore + 1, `besi=${invQtyL(gId, besiId)} bahan=${invQtyL(gId, bahanId)}`);
+  r = await GO.get('/api/notifications');
+  check('Pemilik GO: notifikasi Bonus shift tertunda', (r.data.notifications || []).some((n) => n.title === 'Bonus shift tertunda'));
+  // (d) Edit perusahaan — hanya pemilik.
+  r = await GO.patch(`/api/companies/${tambangId}`, { name: 'Tambang Baru', about: 'Tambang keren', resource: 'Kapas Mentah' });
+  check('Pemilik edit nama/tentang/resource', r.status === 200 && r.data.company?.name === 'Tambang Baru' && r.data.company?.about === 'Tambang keren' && r.data.company?.resource === 'Kapas Mentah', `status=${r.status} ${JSON.stringify(r.data.company)}`);
+  r = await HO.patch(`/api/companies/${tambangId}`, { name: 'Coba Curi' });
+  check('Bukan pemilik edit → 403', r.status === 403, `status=${r.status}`);
+  r = await GO.patch(`/api/companies/${tambangId}`, { resource: 'Emas' });
+  check('Edit resource tidak valid → 400', r.status === 400, `status=${r.status}`);
+  r = await GO.patch('/api/companies/999999', { name: 'Tidak Ada' });
+  check('Edit perusahaan tidak ada → 404', r.status === 404, `status=${r.status}`);
+  r = await GO.patch(`/api/companies/${tambangId}`, {});
+  check('Edit tanpa perubahan → 400', r.status === 400, `status=${r.status}`);
+  // (e) Foto perusahaan — 500 KB, hanya pemilik.
+  r = await GO.post(`/api/companies/${tambangId}/photo`, { photo: tinyJpeg, photo_sm: tinyJpeg });
+  check('Pemilik pasang foto (JPEG mungil valid)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await GO.get('/api/companies');
+  const tambangFoto = (r.data.companies || []).find((x) => x.id === tambangId);
+  check('GET /api/companies: foto tersimpan sebagai data URL', typeof tambangFoto?.photo === 'string' && tambangFoto.photo.startsWith('data:image/jpeg;base64,'));
+  r = await HO.post(`/api/companies/${tambangId}/photo`, { photo: tinyJpeg });
+  check('Bukan pemilik pasang foto → 403', r.status === 403, `status=${r.status}`);
+  r = await GO.post(`/api/companies/${tambangId}/photo`, { photo: 'data:image/jpeg;base64,' + 'A'.repeat(700000) });
+  check('Foto > 500 KB ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await GO.post(`/api/companies/${tambangId}/photo`, { photo: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' });
+  check('Foto SVG ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await GO.post('/api/companies/999999/photo', { photo: tinyJpeg });
+  check('Foto perusahaan tidak ada → 404', r.status === 404, `status=${r.status}`);
+  dbCo.close();
 
   console.log('\n[28] Redesain dunia — unifikasi, nominasi capres, ideologi/sistem (dijalankan SEBELUM [23] karena [23] butuh parlemen terbuka + negara 1)');
   const db28 = new DatabaseSync(DB_PATH);

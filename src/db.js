@@ -510,6 +510,11 @@ CREATE TABLE IF NOT EXISTS companies (
   type TEXT NOT NULL,
   region_id INTEGER NOT NULL,
   resource TEXT NOT NULL DEFAULT '',
+  photo TEXT,
+  photo_sm TEXT,
+  bonus_credit INTEGER NOT NULL DEFAULT 0,
+  bonus_given INTEGER NOT NULL DEFAULT 0,
+  bonus_warned_at BIGINT NOT NULL DEFAULT 0,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS parties (
@@ -1029,6 +1034,7 @@ export async function initDb() {
     await migrateArticleImageColumns(t);
     await migrateWorldRedesign(t);
     await migrateTravelColumns(t);
+    await migrateCompanyColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1102,7 +1108,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1307,6 +1313,24 @@ async function migrateTravelColumns(t) {
   await addCol('citizens', 'travel_to_region_id', 'INTEGER');
   await addCol('citizens', 'travel_arrives_at', 'BIGINT NOT NULL DEFAULT 0');
   await addCol('citizens', 'home_changed_at', 'BIGINT NOT NULL DEFAULT 0');
+}
+
+// Migrasikan kolom perusahaan v2.4.0 (foto + bonus shift) untuk database
+// lama. Idempotent: kolom yang sudah ada tidak disentuh.
+async function migrateCompanyColumns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('companies', 'photo', 'TEXT');
+  await addCol('companies', 'photo_sm', 'TEXT');
+  await addCol('companies', 'bonus_credit', 'INTEGER NOT NULL DEFAULT 0');
+  await addCol('companies', 'bonus_given', 'INTEGER NOT NULL DEFAULT 0');
+  await addCol('companies', 'bonus_warned_at', 'BIGINT NOT NULL DEFAULT 0');
 }
 
 // Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di
