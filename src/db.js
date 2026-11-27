@@ -237,6 +237,10 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   count INTEGER NOT NULL DEFAULT 0 CHECK (count >= 0),
   window_start BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS db_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS referral_pending (
   id ${id},
   referrer_id INTEGER NOT NULL,
@@ -848,6 +852,7 @@ PERBAIKAN BUG
 • Pemain baru tidak lagi semuanya lahir di Kepulauan Riau: wilayah awal kini dipilih acak dan merata dari semua wilayah yang ada. Pemain yang sudah ada tidak dipindah — hanya pendaftaran baru yang memakai wilayah acak.
 • Waktu chat kini tampil benar: semua pesan chat sebelumnya menampilkan "Invalid Date" — penyebabnya format waktu dari database yang tidak dikenali browser. Sekarang waktu tampil sebagai jam yang benar ("baru saja", "5 mnt lalu", dst.).
 • Game lebih ringan: polling otomatis kini berhenti saat tab tidak aktif (dan langsung menyegarkan saat tab dibuka lagi), dan data dunia di-cache 30 detik — supaya koneksi database tidak berebut dan game tidak terasa nge-lag. Catatan jujur: jeda saat membuka game pertama kali (cold start server gratis) masih bisa terjadi — itu batas paket gratis, bukan bug.
+• Server sempat hampir mati karena antrean cold start: setiap kali server bangun, ia menjalankan migrasi berat sambil mengunci database, sehingga yang lain antre puluhan detik lalu timeout. Kini cold start tidak lagi menjalankan migrasi — migrasi hanya jalan sekali tiap update, jadi game tidak lagi timeout saat banyak pemain membuka bersamaan.
 • Menulis artikel kini bisa lagi: tombol TULIS ARTIKEL sebelumnya tidak berfungsi karena aturan keamanan browser memblokir tombol-tombol di dalam halaman. Semua tombol navigasi di dalam halaman kini diperbaiki — termasuk pencarian wilayah yang ikut mati.
 • Log peringatan admin di server kini tidak lagi berisik: status jalan darurat admin cukup dilihat di Panel Admin.`;
 
@@ -866,23 +871,37 @@ export async function closeDb() {
 
 export async function initDb() {
   const dialect = isPg ? 'pg' : 'sqlite';
-  // Seluruh init (skema + migrasi + seed) jalan dalam SATU transaksi dan —
-  // di Postgres sungguhan — di bawah advisory lock. Dua perbaikan dari
-  // insiden 500 di Vercel 27 Nov 2026:
-  //  1. Dua cold start serverless yang bersamaan tidak lagi bisa balapan
-  //     membuat tabel yang sama (yang kalah gagal 23505 pada
-  //     pg_type_typname_nsp_index). Lock dilepas otomatis saat COMMIT.
-  //  2. Run yang gagal di tengah jalan tidak meninggalkan state parsial
-  //     (dulu: skema jadi, seed gagal di tengah — run berikutnya menabrak
-  //     state setengah jadi). Kini gagal = rollback total, coba lagi bersih.
-  await tx(async (t) => {
+  // Jalur cepat (steady state — DB sudah dimigrasi): SATU query murah ke
+  // db_meta, TANPA advisory lock, TANPA DDL. Inilah perbaikan insiden
+  // 27 Nov 2026: initDb lama menahan lock global selama ~100 round-trip
+  // ke Neon di setiap cold start, sehingga cold start antre puluhan detik.
+  // Fixup data murah tetap jalan tiap boot (lihat runDataFixups).
+  if ((await schemaVersion()) === String(SCHEMA_VERSION)) {
+    await runDataFixups();
+    return;
+  }
+  // Jalur lambat — hanya saat DB baru atau versi lama (sekali per deploy):
+  // seluruh migrasi jalan dalam SATU transaksi di bawah advisory lock
+  // (dua cold start tidak bisa balapan membuat tabel yang sama; gagal =
+  // rollback total, coba lagi bersih). Instance lain yang menunggu lock
+  // mengecek ulang versi DI DALAM lock dan langsung kembali bila migrasi
+  // sudah diselesaikan instance lain — jadi antrean hanya sepanjang SATU
+  // migrasi, bukan sepanjang setiap cold start.
+  const migrated = await tx(async (t) => {
     if (isPg && process.env.PG_MEM_TEST !== '1') {
       // pg-mem tidak mengenal pg_advisory_xact_lock; di sana tidak ada
       // instance paralel sehingga lock memang tidak diperlukan.
       await t.sql('SELECT pg_advisory_xact_lock(?::bigint)', [INITDB_LOCK_KEY]);
     }
+    // Tabel penanda dibuat lewat schema() di bawah agar baca versi di dalam
+    // transaksi tidak bisa gagal (error di dalam transaksi Postgres
+    // membatalkan transaksi). CREATE TABLE IF NOT EXISTS di sini no-op
+    // untuk DB yang sudah dimigrasi; DDL berat (ALTER kolom dsb.) tetap
+    // di-gate versi di bawah.
     if (isPg) await cleanupOrphanTypes(t);
     await t.exec(schema(dialect));
+    const current = await t.one("SELECT value FROM db_meta WHERE key = 'schema_version'");
+    if (current?.value === String(SCHEMA_VERSION)) return false;
     if (isPg) await migrateTimestampsToBigint(t);
     await migrateUserColumns(t);
     await migrateAdminJobs(t);
@@ -890,11 +909,48 @@ export async function initDb() {
     await migrateTahap4Columns(t);
     await migrateTahap5Columns(t);
     await seed(t);
+    // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
+    // dan rollback, penanda ikut batal — cold start berikutnya mengulang
+    // migrasi dari awal, bukan mengira DB sudah siap.
+    const existing = await t.one("SELECT value FROM db_meta WHERE key = 'schema_version'");
+    if (existing) await t.run("UPDATE db_meta SET value = ? WHERE key = 'schema_version'", [String(SCHEMA_VERSION)]);
+    else await t.run("INSERT INTO db_meta (key, value) VALUES ('schema_version', ?)", [String(SCHEMA_VERSION)]);
+    return true;
   });
-  // CHECK saldo/qty untuk database Postgres yang sudah ada: di luar transaksi
-  // utama (satu constraint yang gagal — mis. ada data lama yang melanggar —
-  // tidak boleh menggagalkan seluruh initDb).
-  await migrateChecks();
+  // CHECK saldo/qty: DI LUAR transaksi utama (satu constraint yang gagal —
+  // mis. ada data lama yang melanggar — tidak boleh menggagalkan seluruh
+  // initDb). Hanya jalan bila migrasi baru saja dilakukan di panggilan ini
+  // (bukan tiap cold start) — dan hanya instance yang bermigrasi yang
+  // menjalankannya, jadi tidak ada lagi balapan antar cold start.
+  if (migrated) await migrateChecks();
+  await runDataFixups();
+}
+
+// Perbaikan data murah yang jalan di SETIAP boot (di luar version gate):
+//  - semua user yang belum punya kode referral dibuatkan kode unik
+//    (registrasi baru selalu mengisi kode; ini hanya untuk baris lama);
+//  - akun ADMIN_EMAIL selalu ditandai is_admin = 1 (pengaman akun admin
+//    Khalid yang sudah ada; registrasi BARU tidak lagi memberi admin dari
+//    email — lihat api-core.js);
+//  - akun admin tidak boleh berstatus banned — bila ada yang is_banned=1
+//    (mis. ke-ban sebelum flag admin ada), ban-nya dicabut di sini;
+//  - lowongan ADMIN selalu bergaji bahan mentah (aturan Tahap 2).
+// Semua query berindeks / tabel kecil — tidak ada DDL, tidak ada lock
+// panjang. Sengaja TIDAK di-gate versi: tes e2e §15 mengandalkan fixup
+// cabut-ban admin ini jalan tiap boot (restart server).
+async function runDataFixups() {
+  const missing = await sql('SELECT id FROM users WHERE referral_code IS NULL');
+  for (const u of missing) {
+    const code = await generateReferralCode();
+    await run('UPDATE users SET referral_code = ? WHERE id = ?', [code, u.id]);
+  }
+  await run('UPDATE users SET is_admin = 1 WHERE email = ?', [ADMIN_EMAIL]);
+  await run("UPDATE users SET is_banned = 0, banned_reason = '', banned_at = 0 WHERE is_admin = 1 AND is_banned = 1");
+  for (const j of ADMIN_JOBS) {
+    await run(
+      "UPDATE jobs SET salary_type = 'goods', resource = ?, pay_qty = ?, salary = ? WHERE is_admin = 1 AND title = ?",
+      [j.resource, j.qty, j.salary, j.title]);
+  }
 }
 
 // Kolom yang menyimpan timestamp milidetik (Date.now()) — di Postgres harus
@@ -905,10 +961,34 @@ export async function initDb() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
+
+// Versi skema database — penanda di tabel db_meta (key 'schema_version').
+// INSIDEN 27 Nov 2026 (server hampir mati 16:16–16:21 WIB): initDb lama
+// menjalankan SELURUH init (50 CREATE TABLE + ~25 ALTER + seed — ~100
+// round-trip ke Neon) di bawah SATU advisory lock global, di SETIAP cold
+// start serverless. Cold start antre 24 detik di balik lock (59×, total
+// 1.444 detik), lalu timeout/500; migrasi CHECK di luar lock balapan antar
+// instance dan memicu deadlock. Sejak versi ini, initDb di steady state
+// hanya melakukan SATU query murah (baca penanda) tanpa lock dan tanpa DDL;
+// migrasi penuh hanya jalan sekali saat penanda belum ada / versi lama
+// (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
+// Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
+// dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
+const SCHEMA_VERSION = 6;
+
+// Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
+async function schemaVersion() {
+  try {
+    const row = await one("SELECT value FROM db_meta WHERE key = 'schema_version'");
+    return row?.value ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // Hapus tipe komposit "yatim" peninggalan run pertama yang gagal: CREATE TABLE
 // membuat tipe komposit bernama sama dengan tabelnya; bila tipe itu ada tapi
@@ -950,16 +1030,9 @@ async function migrateTimestampsToBigint(t) {
 // Migrasikan kolom users yang ditambahkan setelah deploy pertama
 // (referral_code, is_banned, banned_reason, banned_at, avatar, token_version)
 // untuk database yang sudah terlanjur dibuat dengan skema lama (Neon live +
-// SQLite lama). Idempotent: kolom yang sudah ada tidak disentuh. Setelah itu:
-//  - semua user yang belum punya kode referral dibuatkan kode unik;
-//  - akun ADMIN_EMAIL selalu ditandai is_admin = 1 (bila sudah terdaftar);
-//    PENTING: ini HANYA pengaman untuk akun admin Khalid yang sudah ada
-//    (email itu sudah terdaftar atas namanya sejak 27 Nov 2026, jadi tidak
-//    ada akun baru yang bisa mengambil email tersebut). Registrasi BARU
-//    tidak lagi memberi admin dari email — lihat api-core.js (bootstrap
-//    code). Jangan hapus baris ini tanpa memastikan admin Khalid aman.
-//  - akun admin tidak boleh berstatus banned — bila ada yang is_banned=1
-//    (mis. ke-ban sebelum flag admin ada), ban-nya dicabut di sini.
+// SQLite lama). Idempotent: kolom yang sudah ada tidak disentuh.
+// HANYA DDL — perbaikan datanya (backfill kode referral, pengaman admin)
+// jalan tiap boot lewat runDataFixups, bukan di sini.
 async function migrateUserColumns(t) {
   if (isPg) {
     await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE');
@@ -980,19 +1053,10 @@ async function migrateUserColumns(t) {
     if (!names.has('avatar_sm')) await t.exec('ALTER TABLE users ADD COLUMN avatar_sm TEXT');
     if (!names.has('token_version')) await t.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
   }
-  const missing = await t.sql('SELECT id FROM users WHERE referral_code IS NULL');
-  for (const u of missing) {
-    const code = await generateReferralCode(t);
-    await t.run('UPDATE users SET referral_code = ? WHERE id = ?', [code, u.id]);
-  }
-  await t.run('UPDATE users SET is_admin = 1 WHERE email = ?', [ADMIN_EMAIL]);
-  await t.run("UPDATE users SET is_banned = 0, banned_reason = '', banned_at = 0 WHERE is_admin = 1 AND is_banned = 1");
 }
 
-// Migrasikan lowongan ADMIN lama (dibayar USD) ke aturan baru (dibayar bahan
-// mentah). Database live sudah berisi 6 lowongan ADMIN dari seed lama — tanpa
-// migrasi ini mereka tetap bergaji USD dan kolom resource/pay_qty-nya kosong.
-// Idempotent: nilai yang disetel sama setiap kali dijalankan.
+// Migrasikan kolom lowongan ADMIN (resource/pay_qty) untuk database lama.
+// HANYA DDL — nilai gajinya disetel tiap boot lewat runDataFixups.
 async function migrateAdminJobs(t) {
   if (isPg) {
     await t.exec("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS resource TEXT NOT NULL DEFAULT ''");
@@ -1002,11 +1066,6 @@ async function migrateAdminJobs(t) {
     const names = new Set(cols.map((c) => c.name));
     if (!names.has('resource')) await t.exec("ALTER TABLE jobs ADD COLUMN resource TEXT NOT NULL DEFAULT ''");
     if (!names.has('pay_qty')) await t.exec('ALTER TABLE jobs ADD COLUMN pay_qty INTEGER NOT NULL DEFAULT 0');
-  }
-  for (const j of ADMIN_JOBS) {
-    await t.run(
-      "UPDATE jobs SET salary_type = 'goods', resource = ?, pay_qty = ?, salary = ? WHERE is_admin = 1 AND title = ?",
-      [j.resource, j.qty, j.salary, j.title]);
   }
 }
 
@@ -1110,21 +1169,39 @@ const CHECK_CONSTRAINTS = [
   ['country', 'ck_country_travel_tickets', 'travel_tickets IN (1, 2)'],
   ['budgets', 'ck_budgets_amount_range', 'amount >= 50 AND amount <= 500'],
 ];
+// Tambahkan CHECK saldo/qty ke database Postgres yang sudah ada (Neon live).
+// Hanya jalan di Postgres sungguhan (bukan pg-mem/SQLite — skema baru sudah
+// membawa CHECK inline). Idempotent: constraint yang sudah ada dilewati.
+// Satu constraint yang gagal (mis. ada data lama yang melanggar) hanya
+// diperingatkan, tidak menggagalkan initDb.
+// Sejak perbaikan advisory lock (27 Nov 2026): hanya dipanggil oleh instance
+// yang baru saja bermigrasi (lihat initDb) — bukan tiap cold start — jadi
+// tidak ada lagi balapan antar cold start. ADD memakai NOT VALID (tambah
+// tanpa memindai tabel: cepat, tidak memblokir tulis lama — dua ALTER
+// market_buy_orders di deploy Tahap 5 masing-masing 5–6 detik karena
+// validasi sambil memegang AccessExclusiveLock); VALIDATE sesudahnya hanya
+// butuh ShareUpdateExclusive (tidak memblokir INSERT/UPDATE/SELECT game).
+// Bila VALIDATE gagal (data lama melanggar), constraint tetap NOT VALID dan
+// dicoba divalidasi lagi di migrasi versi berikutnya.
 async function migrateChecks() {
   if (!isPg || process.env.PG_MEM_TEST === '1') return;
   for (const [table, name, expr] of CHECK_CONSTRAINTS) {
     try {
-      // Cek eksistensi lewat pg_class (aman skema) sebelum membuat.
-      const exists = await one(
-        `SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+      // Cek eksistensi + status validasi lewat pg_constraint (aman skema).
+      const row = await one(
+        `SELECT convalidated FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
          WHERE c.conname = ? AND c.contype = 'c' AND t.relname = ?
          AND t.relnamespace = 'public'::regnamespace`,
         [name, table]);
-      if (!exists) await exec(`ALTER TABLE "${table}" ADD CONSTRAINT "${name}" CHECK (${expr})`);
+      if (row) {
+        if (!row.convalidated) await exec(`ALTER TABLE "${table}" VALIDATE CONSTRAINT "${name}"`);
+        continue;
+      }
+      await exec(`ALTER TABLE "${table}" ADD CONSTRAINT "${name}" CHECK (${expr}) NOT VALID`);
+      await exec(`ALTER TABLE "${table}" VALIDATE CONSTRAINT "${name}"`);
     } catch (e) {
-      // 42P07 (duplicate_object): migrateChecks jalan DI LUAR transaksi
-      // ber-advisory-lock initDb, jadi dua cold start bersamaan bisa
-      // sama-sama lolos cek-eksistensi lalu ALTER — yang kalah mendapat
+      // 42P07 (duplicate_object): dua instance masih bisa balapan di jendela
+      // kecil ini bila keduanya bermigrasi bersamaan — yang kalah mendapat
       // "constraint already exists". Itu hasil idempotent yang diharapkan,
       // bukan masalah: diam saja. Warning hanya untuk kegagalan lain
       // (mis. ada data lama yang melanggar CHECK).

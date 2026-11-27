@@ -4,7 +4,10 @@
 //   (2) perbaikan state lama: kolom timestamp INTEGER → BIGINT,
 //       tipe komposit yatim dihapus, kolom token_version ditambah,
 //   (3) CHECK saldo/qty terpasang + ditegakkan,
-//   (4) JWT_SECRET fail-closed di production.
+//   (4) JWT_SECRET fail-closed di production,
+//   (5) version gate (perbaikan advisory lock 27 Nov 2026): initDb di
+//       steady state hanya baca penanda db_meta (tanpa lock/DDL);
+//       migrasi penuh hanya jalan bila penanda dihapus / versi lama.
 // Perlu Postgres 16 lokal + role/db tes (dibuat sekali, lihat README):
 //   su postgres -c "psql -c \"CREATE ROLE parlementer_test LOGIN PASSWORD 'parlementer_test'\""
 //   su postgres -c "psql -c \"CREATE DATABASE parlementer_test OWNER parlementer_test\""
@@ -34,6 +37,15 @@ async function dropAll() {
   for (const t of types.rows) await pool.query(`DROP TYPE IF EXISTS "${t.typname}" CASCADE`);
 }
 
+// Simulasi "DB versi lama": hapus penanda versi agar initDb berikutnya
+// menjalankan migrasi penuh. Tanpa ini, initDb di steady state sengaja
+// MELEWATI migrasi (version gate, perbaikan advisory lock 27 Nov 2026) —
+// tes "rusak lalu perbaiki" harus menghapus penanda dulu, seperti DB lama
+// yang memang belum punya penanda.
+async function resetVersion() {
+  await pool.query("DELETE FROM db_meta WHERE key = 'schema_version'");
+}
+
 async function main() {
   console.log('[pg-verify] Database: ' + DATABASE_URL.replace(/:[^:@]+@/, ':***@'));
   await dropAll();
@@ -54,9 +66,12 @@ async function main() {
   check('initDb kedua: seed tidak terduplikasi', Number(regions2.rows[0].n) === 17);
 
   console.log('\n[2] initDb paralel (3× bersamaan)');
+  const t2a = Date.now();
   await Promise.all([initDb(), initDb(), initDb()]);
+  const t2b = Date.now() - t2a;
   const regions3 = await pool.query('SELECT COUNT(*) AS n FROM regions');
   check('initDb paralel: seed tetap 17', Number(regions3.rows[0].n) === 17);
+  check('initDb paralel 3× selesai cepat (< 10 detik)', t2b < 10000, `${t2b}ms`);
 
   console.log('\n[3] Perbaikan state lama');
   // Kolom timestamp INTEGER (state sebelum perbaikan 22003): kosongkan tabel,
@@ -65,6 +80,7 @@ async function main() {
   await pool.query('ALTER TABLE notifications ALTER COLUMN created_at TYPE INTEGER');
   const before = await pool.query("SELECT data_type FROM information_schema.columns WHERE table_name = 'notifications' AND column_name = 'created_at'");
   check('Setup: created_at sementara INTEGER', before.rows[0].data_type === 'integer');
+  await resetVersion();
   await initDb();
   const after = await pool.query("SELECT data_type FROM information_schema.columns WHERE table_name = 'notifications' AND column_name = 'created_at'");
   check('Migrasi: created_at kembali BIGINT', after.rows[0].data_type === 'bigint', `type=${after.rows[0].data_type}`);
@@ -72,6 +88,7 @@ async function main() {
   // menghapus tipe itu dan membuat ulang tabelnya.
   await pool.query('DROP TABLE world');
   await pool.query('CREATE TYPE world AS (a int)');
+  await resetVersion();
   await initDb();
   const worldTable = await pool.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'world'");
   // Setiap tabel Postgres punya tipe komposit bernama sama; yang membuktikan
@@ -84,6 +101,7 @@ async function main() {
   check('Migrasi: tabel world ter-seed (hari 1)', worldDay.rows[0]?.day === 1, `day=${worldDay.rows[0]?.day}`);
   // Kolom token_version (migrasi Tahap 2): hapus kolom, initDb menambahkannya.
   await pool.query('ALTER TABLE users DROP COLUMN token_version');
+  await resetVersion();
   await initDb();
   const tv = await pool.query("SELECT column_name, column_default FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'token_version'");
   check('Migrasi: kolom token_version ditambah kembali', tv.rowCount === 1, `default=${tv.rows[0]?.column_default}`);
@@ -131,15 +149,18 @@ async function main() {
   check('Server production tanpa JWT_SECRET menolak start', failClosed || !!process.env.JWT_SECRET);
 
   console.log('\n[6] migrateChecks tanpa warning (Tahap 3: tahan race cold start)');
-  // migrateChecks jalan DI LUAR transaksi ber-advisory-lock initDb — dua
-  // cold start bersamaan bisa sama-sama lolos cek-eksistensi lalu ALTER;
-  // yang kalah dulu mendapat 42P07 dan menulis warning "[db] CHECK ...".
-  // Sekarang 42P07 ditelan diam-diam (hasil idempotent yang diharapkan).
+  // migrateChecks hanya jalan bila instance ini baru saja bermigrasi
+  // (perbaikan advisory lock 27 Nov 2026) dan tetap DI LUAR transaksi
+  // utama — dua cold start bersamaan dulu bisa sama-sama lolos
+  // cek-eksistensi lalu ALTER; yang kalah mendapat 42P07 dan menulis
+  // warning "[db] CHECK ...". Sekarang 42P07 ditelan diam-diam (hasil
+  // idempotent yang diharapkan).
   const warns = [];
   const origWarn = console.warn;
   console.warn = (...a) => { warns.push(a.join(' ')); };
   try {
     await pool.query('ALTER TABLE jobs DROP CONSTRAINT IF EXISTS ck_jobs_seats_nonneg');
+    await resetVersion();
     await Promise.all([initDb(), initDb(), initDb()]);
   } finally { console.warn = origWarn; }
   const checkWarns = warns.filter((w) => w.includes('[db] CHECK'));
@@ -161,6 +182,7 @@ async function main() {
   // Migrasi kolom lama: hapus kolom, initDb menambahkannya kembali.
   await pool.query('ALTER TABLE country DROP COLUMN treasury_usd');
   await pool.query('ALTER TABLE citizens DROP COLUMN energy_updated_at');
+  await resetVersion();
   await initDb();
   const t4cols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE (table_name = 'country' AND column_name = 'treasury_usd') OR (table_name = 'citizens' AND column_name = 'energy_updated_at')");
   check('Migrasi: kolom Tahap 4 ditambah kembali', Number(t4cols2.rows[0].n) === 2);
@@ -187,9 +209,36 @@ async function main() {
   // Migrasi kolom Tahap 5: hapus kolom, initDb menambahkannya kembali.
   await pool.query('ALTER TABLE country DROP COLUMN admin_pay_mult');
   await pool.query('ALTER TABLE laws DROP COLUMN effect_applied');
+  await resetVersion();
   await initDb();
   const t5cols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE (table_name = 'country' AND column_name = 'admin_pay_mult') OR (table_name = 'laws' AND column_name = 'effect_applied')");
   check('Migrasi: kolom Tahap 5 ditambah kembali', Number(t5cols2.rows[0].n) === 2);
+
+  console.log('\n[9] Version gate initDb (perbaikan advisory lock 27 Nov 2026)');
+  // Insiden: initDb lama menahan advisory lock global selama ~100 round-trip
+  // DDL di SETIAP cold start → antre 24 detik → timeout/500. Sejak perbaikan,
+  // steady state hanya baca penanda (tanpa lock/DDL); migrasi penuh hanya
+  // bila penanda dihapus / versi lama.
+  const ver = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
+  check('Penanda versi skema = 6', ver.rows[0]?.value === '6', `value=${ver.rows[0]?.value}`);
+  const t9a = Date.now();
+  await Promise.all([initDb(), initDb(), initDb(), initDb(), initDb()]);
+  const t9b = Date.now() - t9a;
+  check('initDb paralel 5× (steady state) selesai cepat (< 10 detik)', t9b < 10000, `${t9b}ms`);
+  // Kontrak gate: TANPA resetVersion, initDb SENGAJA tidak memperbaiki
+  // skema yang dirusak — DDL hanya jalan saat migrasi versi. Ini perilaku
+  // yang diinginkan (bukan bug): cold start tidak boleh menjalankan DDL.
+  await pool.query('ALTER TABLE users DROP COLUMN token_version');
+  await initDb();
+  const tvGated = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'token_version'");
+  check('Gate: kolom yang dihapus TIDAK diperbaiki tanpa resetVersion', tvGated.rowCount === 0);
+  await resetVersion();
+  await initDb();
+  const tvFixed = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'token_version'");
+  check('Setelah resetVersion: migrasi memperbaiki kolom', tvFixed.rowCount === 1);
+  // Semua CHECK harus tervalidasi (ADD ... NOT VALID + VALIDATE).
+  const unvalidated = await pool.query("SELECT conname FROM pg_constraint WHERE contype = 'c' AND conname LIKE 'ck_%' AND NOT convalidated");
+  check('Semua CHECK tervalidasi (tidak ada yang NOT VALID)', unvalidated.rowCount === 0, unvalidated.rows.map((r) => r.conname).join(',') || '0');
 
   await pool.end();
   console.log(`\n[pg-verify] SELESAI: ${passed} lolos, ${failed} gagal`);

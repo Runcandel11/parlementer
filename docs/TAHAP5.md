@@ -125,6 +125,58 @@ tanda minus dengan benar untuk pengeluaran.
   sengaja dibatalkan agar `forceTick` tes tetap jalan; pengecekan tick tetap
   di setiap request API). Kalimat itu diperbaiki di seed pengumuman.
 
+### 3e. Server hampir mati: advisory lock initDb (URGENT, 27 Nov 16:16–16:21 WIB)
+- Gejala live: halaman utama 2× timeout 30 detik + 1× 500 (19,5 detik);
+  `/api/world` 28 detik lalu timeout 30 detik; favicon 20,5 detik.
+- Neon SEHAT saat itu (compute Active, CPU 0,02–0,05 vCPU, RAM 0,25–0,4 GB,
+  cache ~100%, koneksi pooler ~35/10.000, bukan suspend) — jadi bukan Neon.
+- Akar masalah (konsol Neon): `SELECT pg_advisory_xact_lock` di `initDb`
+  (`src/db.js:882`) dipanggil 59× dengan rata-rata **24 detik** (total
+  1.444 detik). Setiap cold start serverless menjalankan SELURUH init
+  (~50 `CREATE TABLE IF NOT EXISTS` + ~25 `ALTER TABLE` + seed = ~100
+  round-trip ke Neon) di bawah SATU advisory lock global — cold start
+  antre di balik lock lalu timeout/500. ~17 deadlock sejam terakhir
+  (15 di 16:15–16:19) + lonjakan insert ~2.400 baris ~16:14, bertepatan
+  deploy Tahap 5.
+- Perbaikan (kode, bukan upgrade — commit terpisah setelah Tahap 5):
+  - **Version gate** (`db_meta`, `SCHEMA_VERSION = 6`): initDb di steady
+    state hanya melakukan SATU query murah (baca penanda versi) — tanpa
+    lock, tanpa DDL. Migrasi penuh hanya jalan sekali saat penanda belum
+    ada / versi lama (sekali per deploy). Instance yang menunggu lock
+    mengecek ulang versi DI DALAM lock dan langsung kembali bila migrasi
+    sudah selesai instance lain. Penanda ditulis di dalam transaksi
+    migrasi (gagal = rollback, penanda ikut batal).
+  - **Fixup data murah tetap jalan tiap boot** (`runDataFixups`, di luar
+    gate): backfill kode referral, pengaman admin Khalid (is_admin=1,
+    cabut ban admin), lowongan ADMIN bergaji bahan mentah. Semua query
+    berindeks / tabel kecil, tanpa DDL — tes e2e §15 mengandalkan fixup
+    cabut-ban admin ini jalan tiap boot.
+  - **`migrateChecks` hanya jalan bila instance ini baru saja bermigrasi**
+    (bukan tiap cold start), dan `ADD CONSTRAINT` memakai `NOT VALID` +
+    `VALIDATE` (tambah tanpa memindai tabel; validasi tidak memblokir
+    tulis game) — dua ALTER `market_buy_orders` di deploy Tahap 5
+    masing-masing 5–6 detik karena validasi sambil memegang
+    AccessExclusiveLock.
+  - Bila menambah migrasi baru, NAIKKAN `SCHEMA_VERSION` — kalau tidak,
+    migrasi tidak akan jalan di database yang sudah ada.
+- Sumber insert ~2.400 baris: diaudit semua jalur insert saat boot/deploy
+  (seed initDb, tick harian, rate limiter). **Tidak ada backfill sekali
+  jalan di kode deploy** — seed Tahap 5 hanya menyisipkan 1 baris
+  (pengumuman Update #2); tick harian diklaim atomik sekali sehari
+  (`UPDATE world ... WHERE last_tick_date <> ?`, dicek `changes`). Satu-
+  satunya sumber insert bervolume per request adalah `rate_limits`
+  (1 baris per kunci IP+endpoint+jendela baru) — lonjakan itu konsisten
+  dengan badai request saat server timeout (browser/polling me-retry,
+  stress test live 16:12, pengukuran curl) + insert dari transaksi yang
+  di-rollback ikut terhitung di statistik Neon. Dengan lock diperbaiki,
+  badai pemicunya hilang. Tidak ada perubahan kode untuk ini.
+- Verifikasi: pg-mem `initDb` 10× paralel 94ms (sebelumnya tidak bisa
+  diuji 2× karena batasan pg-mem — gate memperbaikinya sebagai efek
+  samping); Postgres 16 lokal `initDb` paralel 5× steady state **5ms**;
+  tes kontrak gate (§9 pg-verify): tanpa reset versi, kolom yang dihapus
+  SENGAJA tidak diperbaiki (DDL hanya saat migrasi); setelah reset versi,
+  migrasi memperbaikinya; semua CHECK tervalidasi.
+
 ## 4. Bug yang ketemu & diperbaiki selama pengujian Tahap 5
 
 1. **INSERT pemakzulan salah jumlah nilai** (`api-civic.js`): `VALUES
@@ -158,11 +210,11 @@ tanda minus dengan benar untuk pengeluaran.
 |---|---|---|
 | e2e (`npm test`) | **426/426** | baseline 329 → +97 (§23 Tahap 5; §24 artikel: 14 cek; §5/§9 disesuaikan wilayah acak) |
 | modal-dom | **84/84** | baseline 56 → +28 (§14 Tahap 5; §15 artikel/CSP: 13 cek) |
-| pg (pg-mem) | **28/28** | — |
-| pg-verify (Postgres 16) | **34/34** | baseline 25 → +9 (§8: tabel/kolom/CHECK Tahap 5, Update #2, tanpa default region, parser int8) |
+| pg (pg-mem) | **33/33** | baseline 28 → +5 (§9: initDb 10× paralel 94ms + jalur cepat + fixup data) |
+| pg-verify (Postgres 16) | **40/40** | baseline 25 → +15 (§8 Tahap 5; §9 version gate: penanda=6, paralel 5× 5ms, kontrak gate, CHECK tervalidasi) |
 | pg-concurrency | **33/33** | baseline 24 → +9 (§7 pakta race, §8 vote anggaran race) |
 | ssl-warning | **6/6** | — |
-| **TOTAL** | **611/611** | baseline 468 → **+143** |
+| **TOTAL** | **622/622** | baseline 468 → **+154** |
 
 Tambahan di luar suite:
 - **Screenshot Playwright 390×844** halaman chat global: jam "09.08" tampil
@@ -227,8 +279,14 @@ Tes beban terpisah (detail mentah: `/tmp/loadtest/result-*.json`):
 
 Judul: "UU Kini Berpengaruh, Menteri Punya Wewenang & Pakta Organisasi".
 Isi: ringkasan §1–§3 di atas (UU berjenis, anggaran, wewenang menteri,
-pemakzulan, pakta) + perbaikan wilayah acak, Invalid Date, dan lag.
+pemakzulan, pakta) + perbaikan wilayah acak, Invalid Date, lag, artikel,
+dan advisory lock (§3e).
 Tampil di notifikasi + "RIWAYAT UPDATE" di Buku sebagai Update #2.
+Catatan jujur: Update #2 live sudah ter-seed SEBELUM baris artikel (§3d)
+dan baris advisory lock (§3e) ditambahkan ke teks seed — pemain live
+melihat Update #2 versi awal tanpa dua baris itu. Teks seed yang sekarang
+berlaku untuk database baru; tidak ada cara mengubah pengumuman yang sudah
+ter-seed dari kode (admin bisa menulis pengumuman susulan bila perlu).
 
 ## 8. File yang diubah (13)
 
@@ -237,7 +295,9 @@ Tampil di notifikasi + "RIWAYAT UPDATE" di Buku sebagai Update #2.
 - `src/db.js` — kolom country/laws Tahap 5, tabel `budgets`,
   `budget_votes`, `impeachments`, `impeachment_votes`, `org_pacts`;
   seed Update #2; hapus default region 1 + migrasi; parser int8;
-  urutan tabel `org_pacts`.
+  urutan tabel `org_pacts`; **perbaikan advisory lock (§3e): tabel
+  `db_meta` + `SCHEMA_VERSION = 6`, initDb version gate, `runDataFixups`
+  tiap boot, `migrateChecks` NOT VALID + VALIDATE**.
 - `src/util.js` — warning bootstrap hanya saat startup (non-production).
 - `src/tick.js` — §4 UU (terapkan efek), §4b anggaran, §4c pemakzulan.
 - `src/api-core.js` — pajak pasar dinamis + pakta dagang, upah ADMIN
@@ -257,7 +317,10 @@ Tampil di notifikasi + "RIWAYAT UPDATE" di Buku sebagai Update #2.
 - `test/e2e.js` — §23 Tahap 5 + §24 artikel + penyesuaian §2/§5/§9/§22i (wilayah acak,
   Update #2).
 - `test/modal-dom.js` — §14 (parlemen, pakta, format waktu string) + §15 (CSP/data-goto, form artikel).
-- `test/pg-verify.mjs` — §8 (skema Tahap 5, Update #2, parser int8).
+- `test/pg-test.js` — §9 (initDb 10× paralel + jalur cepat + fixup data).
+- `test/pg-verify.mjs` — §8 (skema Tahap 5, Update #2, parser int8) +
+  §9 (version gate) + `resetVersion()` untuk tes "rusak lalu perbaiki"
+  (§3, §6, §7, §8) + timing initDb paralel (§2).
 - `test/pg-concurrency.mjs` — §7 (pakta race), §8 (vote anggaran race),
   §9 (invariant; dulu §7), penyesuaian §3 (wilayah acak).
 - `docs/TAHAP5.md` — dokumen ini.
@@ -274,5 +337,11 @@ Tampil di notifikasi + "RIWAYAT UPDATE" di Buku sebagai Update #2.
 - Perusahaan di live yang didirikan sebelum perbaikan §4.2 punya lowongan
   default yang terlihat penuh (`seats_taken=1`, `region_id=0`) — tidak ada
   migrasi data yang aman (lihat §4.2).
+- **Lonjakan insert ~2.400 baris saat deploy Tahap 5** (§3e): bukan backfill
+  — satu-satunya sumber insert bervolume per request adalah `rate_limits`
+  (1 baris per kunci+jendela baru), yang membengkak karena badai retry
+  saat server timeout. Perbaikan lock menghilangkan pemicunya; tidak ada
+  perubahan kode untuk ini. Bila lonjakan insert terulang padahal server
+  sehat, barulah selidiki `rate_limits` (mis. bersihkan baris >24 jam).
 - Verifikasi live (browser task) masih perlu dijalankan setelah deploy ini,
   seperti tahap-tahap sebelumnya, sebelum Tahap 6 dimulai.
