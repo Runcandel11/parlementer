@@ -1440,6 +1440,9 @@ $$('#report-reasons button').forEach((b) => b.onclick = () => {
   reportReason = b.dataset.reason;
 });
 $('#report-cancel').onclick = () => { $('#report-modal').hidden = true; };
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#report-modal').hidden) $('#report-modal').hidden = true;
+});
 $('#report-submit').onclick = async () => {
   if (!reportReason) { toast('Pilih alasan laporan dulu.'); return; }
   try {

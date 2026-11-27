@@ -1,4 +1,11 @@
 /* Parlementer — tema gelap navy-hitam + aksen emas (mobile-first) */
+
+/* Atribut [hidden] harus selalu menyembunyikan elemen. Tanpa aturan ini,
+   deklarasi display di kelas (mis. .modal { display:flex }) mengalahkan
+   display:none bawaan browser untuk [hidden], sehingga modal LAPORKAN
+   KONTEN (dan tampilan login/aplikasi) tampil terus dan tidak bisa ditutup. */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #070b14;
   --bg2: #0b1220;
