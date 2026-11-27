@@ -2,7 +2,7 @@
 // Dipanggil otomatis saat ada request (cek tanggal) + interval 10 menit.
 // Aman di Render free (tanpa cron eksternal): tick jalan saat ada yang membuka game.
 import { sql, one, run } from './db.js';
-import { DAILY_PRODUCTION, FACTORY_INPUT, RETENTION, productionWithBonus } from './game.js';
+import { DAILY_PRODUCTION, FACTORY_INPUT, RETENTION, productionWithBonus, BUDGET_KINDS, BUDGET_DURATION_MS, lawEffectText } from './game.js';
 
 function todayStr(d = new Date()) { return d.toISOString().slice(0, 10); }
 
@@ -25,6 +25,26 @@ export async function ensureElections() {
 async function notify(citizenId, category, title, content = '') {
   await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?) RETURNING id',
     [citizenId, category, title, content, Date.now()]);
+}
+
+async function notifyAll(category, title, content = '') {
+  await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) SELECT id, ?, ?, ?, ? FROM citizens',
+    [category, title, content, Date.now()]);
+}
+
+// Terapkan efek UU yang disahkan ke baris country (Tahap 5, BUG-9).
+// kind 'general' tidak mengubah angka apa pun. effect_applied = 1 menandai
+// UU sudah diterapkan (idempotent bila tick diulang).
+async function applyLawEffect(law) {
+  const kind = law.kind || 'general';
+  if (kind === 'tax_income') {
+    await run('UPDATE country SET tax_income = ? WHERE id = 1', [Number(law.value)]);
+  } else if (kind === 'admin_pay') {
+    await run('UPDATE country SET admin_pay_mult = ? WHERE id = 1', [Number(law.value) / 100]);
+  } else if (kind === 'travel') {
+    await run('UPDATE country SET travel_tickets = ? WHERE id = 1', [Number(law.value)]);
+  }
+  await run('UPDATE laws SET effect_applied = 1 WHERE id = ?', [law.id]);
 }
 
 export async function runDailyTick() {
@@ -137,15 +157,59 @@ export async function runDailyTick() {
   }
   await ensureElections();
 
-  // 4) UU: tutup voting yang berakhir.
+  // 4) UU: tutup voting yang berakhir. (Tahap 5, BUG-9): UU yang lolos
+  // kini benar-benar MENGUBAH angka negara (applyLawEffect) — bukan lagi
+  // sekadar ganti status jadi 'executed'. UU umum tidak mengubah angka.
   const laws = await sql("SELECT * FROM laws WHERE status = 'voting' AND ends_at <= ?", [now]);
   for (const law of laws) {
     if (law.yes > law.no) {
       await run("UPDATE laws SET status = 'executed' WHERE id = ?", [law.id]);
-      await notify(law.proposer_id, 'POLITIK', 'UU-mu disahkan', `"${law.title}" lolos voting dan mulai berlaku.`);
+      await applyLawEffect(law);
+      await notify(law.proposer_id, 'POLITIK', 'UU-mu disahkan', `"${law.title}" lolos voting dan mulai berlaku. ${lawEffectText(law.kind || 'general', law.value)}`);
     } else {
       await run("UPDATE laws SET status = 'failed' WHERE id = ?", [law.id]);
       await notify(law.proposer_id, 'POLITIK', 'UU-mu gagal', `"${law.title}" tidak lolos voting.`);
+    }
+  }
+
+  // 4b) Anggaran (Tahap 5): tutup voting yang berakhir. Lolos = potong
+  // biaya dari kas negara (bila kas kurang, anggaran gagal dengan
+  // pemberitahuan) + efek berlaku 7 hari (country.budget_kind/until).
+  // Anggaran baru menggantikan anggaran yang sedang berlaku.
+  const budgets = await sql("SELECT * FROM budgets WHERE status = 'voting' AND ends_at <= ?", [now]);
+  for (const b of budgets) {
+    if (b.yes > b.no) {
+      const country = await one('SELECT * FROM country WHERE id = 1');
+      if (Number(country.treasury) < b.amount) {
+        await run("UPDATE budgets SET status = 'failed' WHERE id = ?", [b.id]);
+        await notify(b.proposer_id, 'POLITIK', 'Anggaran gagal dicairkan', `"${BUDGET_KINDS[b.kind]?.label || b.kind}" lolos voting, tetapi kas negara tidak cukup (${b.amount} emas dibutuhkan).`);
+      } else {
+        await run('UPDATE country SET treasury = treasury - ?, budget_kind = ?, budget_until = ? WHERE id = 1',
+          [b.amount, b.kind, now + BUDGET_DURATION_MS]);
+        await run("INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES ('anggaran','gold',?,?,?) RETURNING id",
+          [-b.amount, `Anggaran disahkan: ${BUDGET_KINDS[b.kind]?.label || b.kind} (7 hari)`, now]);
+        await run("UPDATE budgets SET status = 'passed' WHERE id = ?", [b.id]);
+        await notify(b.proposer_id, 'POLITIK', 'Anggaran disahkan', `"${BUDGET_KINDS[b.kind]?.label || b.kind}" lolos voting (${b.amount} emas dari kas negara) dan berlaku 7 hari.`);
+      }
+    } else {
+      await run("UPDATE budgets SET status = 'failed' WHERE id = ?", [b.id]);
+      await notify(b.proposer_id, 'POLITIK', 'Anggaran gagal', `"${BUDGET_KINDS[b.kind]?.label || b.kind}" tidak lolos voting.`);
+    }
+  }
+
+  // 4c) Pemakzulan (Tahap 5): tutup voting yang berakhir. Lolos = presiden
+  // dicopot (president_id = NULL) sampai pemilu berikutnya; semua warga
+  // diberitahu. Gagal = presiden tetap menjabat.
+  const impeachments = await sql("SELECT * FROM impeachments WHERE status = 'voting' AND ends_at <= ?", [now]);
+  for (const imp of impeachments) {
+    if (imp.yes > imp.no) {
+      await run("UPDATE impeachments SET status = 'passed' WHERE id = ?", [imp.id]);
+      await run('UPDATE country SET president_id = NULL WHERE id = 1 AND president_id = ?', [imp.president_id]);
+      await notify(imp.president_id, 'POLITIK', 'Kamu dimakzulkan', 'Parlemen meloloskan pemakzulan — kamu tidak lagi menjadi Presiden.');
+      await notifyAll('POLITIK', 'Presiden dimakzulkan', 'Parlemen meloloskan pemakzulan. Jabatan presiden kosong sampai pemilu berikutnya.');
+    } else {
+      await run("UPDATE impeachments SET status = 'failed' WHERE id = ?", [imp.id]);
+      await notify(imp.president_id, 'POLITIK', 'Pemakzulan gagal', 'Parlemen menolak pemakzulan terhadapmu — kamu tetap menjadi Presiden.');
     }
   }
 

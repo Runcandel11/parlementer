@@ -5,7 +5,9 @@
 //   (2) dua klaim harian paralel — tepat 1 berhasil,
 //   (3) dua shift paralel — tepat 1 berhasil,
 //   (4) dua klaim pencapaian paralel — tepat 1 berhasil (ON CONFLICT),
-//   (5) dua blokir paralel — keduanya 200 (idempotent, tanpa 500).
+//   (6) dua penjual berebut 1 order beli — tepat 1 berhasil,
+//   (7) dua usulan pakta paralel pasangan+jenis sama — tepat 1 berhasil,
+//   (8) dua vote anggaran paralel oleh MP yang sama — tepat 1 terhitung.
 // Di akhir: tidak ada saldo/energi/stok negatif di mana pun.
 // Perlu Postgres 16 lokal + role/db tes (lihat test/pg-verify.mjs).
 // Jalankan: npm run test:conc   (atau: node test/pg-concurrency.mjs)
@@ -136,6 +138,13 @@ async function main() {
     r = await W.get('/api/jobs');
     const job = r.data.jobs.find((j) => j.title === 'Pekerja Gudang Pelabuhan');
     check('Lowongan ADMIN ditemukan', !!job);
+    // Melamar mensyaratkan warga di wilayah lowongan — sejak Tahap 5
+    // wilayah lahir acak, jadi bepergian dulu bila belum di sana.
+    const wMe = await W.get('/api/me');
+    if (wMe.data.citizen.region_id !== job.region_id) {
+      r = await W.post('/api/regions/travel', { region_id: job.region_id });
+      check('Bepergian ke wilayah lowongan (biaya 1 Tiket)', r.status === 200, `status=${r.status}`);
+    }
     r = await W.post('/api/jobs/apply', { job_id: job.id });
     check('Lamar pekerjaan berhasil', r.status === 200 && r.data.ok);
     const [sh1, sh2] = await Promise.all([W.post('/api/jobs/shift'), W.post('/api/jobs/shift')]);
@@ -215,7 +224,53 @@ async function main() {
     const orderLeft = await pool.query('SELECT COUNT(*) AS n FROM market_buy_orders WHERE id = $1', [orderId]);
     check('Order beli terisi penuh lalu terhapus', Number(orderLeft.rows[0].n) === 0);
 
-    console.log('\n[7] Invarian akhir: tidak ada saldo/stok negatif');
+    console.log('\n[7] Race: dua usulan pakta paralel untuk pasangan+jenis yang sama (Tahap 5)');
+    const L1 = await register('ketua-org1@conc.local', 'ketua_org_satu');
+    const L2 = await register('ketua-org2@conc.local', 'ketua_org_dua');
+    const l1Id = await citizenIdOf(L1);
+    const l2Id = await citizenIdOf(L2);
+    await pool.query('UPDATE citizens SET gold = 500 WHERE id IN ($1, $2)', [l1Id, l2Id]);
+    r = await L1.post('/api/orgs', { name: 'Org Race Satu', tag: 'ORS', type: 'Kerja Sama' });
+    check('L1 mendirikan org (100 emas)', r.status === 200 && !!r.data.orgId, `status=${r.status}`);
+    const orgA = r.data.orgId;
+    r = await L2.post('/api/orgs', { name: 'Org Race Dua', tag: 'ORD', type: 'Keamanan' });
+    check('L2 mendirikan org (100 emas)', r.status === 200 && !!r.data.orgId, `status=${r.status}`);
+    const orgB = r.data.orgId;
+    // Dua arah sekaligus (L1: A→B, L2: B→A) — pasangan ternormalisasi sama.
+    const [pc1, pc2] = await Promise.all([
+      L1.post(`/api/orgs/${orgA}/pact`, { target_org_id: orgB, kind: 'trade' }),
+      L2.post(`/api/orgs/${orgB}/pact`, { target_org_id: orgA, kind: 'trade' }),
+    ]);
+    const pcWins = [pc1, pc2].filter((x) => x.status === 200).length;
+    const pcLosses = [pc1, pc2].filter((x) => x.status === 400).length;
+    check('Tepat 1 usulan pakta berhasil, 1 ditolak 400 (tanpa 500)', pcWins === 1 && pcLosses === 1, `status=${pc1.status}/${pc2.status}`);
+    const pactCount = await pool.query("SELECT COUNT(*) AS n FROM org_pacts WHERE kind = 'trade' AND status = 'pending'");
+    check('Tepat 1 baris pakta pending tercatat', Number(pactCount.rows[0].n) === 1, `n=${pactCount.rows[0].n}`);
+
+    console.log('\n[8] Race: dua vote anggaran paralel oleh MP yang sama (Tahap 5)');
+    const M = await register('mp-race@conc.local', 'mp_race');
+    const mId = await citizenIdOf(M);
+    await pool.query("INSERT INTO parties (name, tag, ideology, leader_id, type, seats, created_at) VALUES ('Partai Race','PTR','Konservatif',$1,'open',31,$2)", [mId, Date.now()]);
+    const partyRace = await pool.query("SELECT id FROM parties WHERE tag = 'PTR'");
+    await pool.query('UPDATE citizens SET party_id = $1, level = 5, gold = 500 WHERE id = $2', [partyRace.rows[0].id, mId]);
+    await pool.query('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES ($1, $2, $3, $4)', [partyRace.rows[0].id, mId, 'leader', Date.now()]);
+    await pool.query('UPDATE country SET minister_economy = $1, treasury = 1000 WHERE id = 1', [mId]);
+    r = await M.post('/api/country/budget', { kind: 'claim', amount: 100 });
+    check('M mengusulkan anggaran (100 emas)', r.status === 200 && !!r.data.budgetId, `status=${r.status}`);
+    const budgetRace = r.data.budgetId;
+    const [bv1, bv2] = await Promise.all([
+      M.post(`/api/country/budget/${budgetRace}/vote`, { vote: 'yes' }),
+      M.post(`/api/country/budget/${budgetRace}/vote`, { vote: 'yes' }),
+    ]);
+    const bvWins = [bv1, bv2].filter((x) => x.status === 200).length;
+    const bvLosses = [bv1, bv2].filter((x) => x.status === 400).length;
+    check('Tepat 1 vote anggaran berhasil, 1 ditolak 400 (tanpa 500)', bvWins === 1 && bvLosses === 1, `status=${bv1.status}/${bv2.status}`);
+    const voteCount = await pool.query('SELECT COUNT(*) AS n FROM budget_votes WHERE budget_id = $1', [budgetRace]);
+    check('Tepat 1 baris vote tercatat', Number(voteCount.rows[0].n) === 1, `n=${voteCount.rows[0].n}`);
+    const budgetRow = await pool.query('SELECT yes FROM budgets WHERE id = $1', [budgetRace]);
+    check('Suara YA anggaran tepat 1', Number(budgetRow.rows[0].yes) === 1, `yes=${budgetRow.rows[0].yes}`);
+
+    console.log('\n[9] Invarian akhir: tidak ada saldo/stok negatif');
     const neg = await pool.query(
       `SELECT (SELECT COUNT(*) FROM citizens WHERE gold < 0 OR usd < 0 OR energy < 0) AS c1,
               (SELECT COUNT(*) FROM inventory WHERE qty < 0) AS c2,

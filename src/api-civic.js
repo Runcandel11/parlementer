@@ -1,7 +1,7 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
 import { sql, one, run, tx, forUpdate, convoyBuildings } from './db.js';
 import { authRequired, citizenRequired, loadCitizen, todayStr } from './util.js';
-import { warDamage, warDamageWithBonus, CHRONICLE } from './game.js';
+import { warDamage, warDamageWithBonus, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT } from './game.js';
 
 const CHAT_ROOMS = ['global', 'indonesia', 'negara'];
 
@@ -9,6 +9,85 @@ const CHAT_ROOMS = ['global', 'indonesia', 'negara'];
 export async function notify(citizenId, category, title, content = '') {
   await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?) RETURNING id',
     [citizenId, category, title, content, Date.now()]);
+}
+
+// Kirim notifikasi ke SEMUA warga (pengumuman negara: mobilisasi, hari
+// libur, hasil pemakzulan). Satu INSERT ... SELECT — atomik.
+export async function notifyAll(category, title, content = '') {
+  await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) SELECT id, ?, ?, ?, ? FROM citizens',
+    [category, title, content, Date.now()]);
+}
+
+// --- Helper bersama Tahap 5 (dipakai juga api-core.js + tick.js) ---
+// Satu-satunya sumber kebenaran angka negara adalah baris country (id=1).
+// t adalah handle transaksi (punya .one) atau { one } di luar transaksi.
+export async function getCountryRow(t) {
+  const row = await t.one('SELECT * FROM country WHERE id = 1');
+  return row || { tax_income: 2, admin_pay_mult: 1, travel_tickets: 1, mobilization_until: 0, budget_kind: '', budget_until: 0, holiday_at: 0 };
+}
+// Tarif pajak penghasilan yang berlaku saat ini, sebagai pecahan (0.02).
+export async function getIncomeTaxRate(t) {
+  const c = await getCountryRow(t);
+  return (Number(c.tax_income) || 0) / 100;
+}
+export async function getAdminPayMult(t) {
+  const c = await getCountryRow(t);
+  return Number(c.admin_pay_mult) || 1;
+}
+export async function getTravelTickets(t) {
+  const c = await getCountryRow(t);
+  return Number(c.travel_tickets) || 1;
+}
+// Anggaran yang sedang berlaku (kind) atau null bila tidak ada/kedaluwarsa.
+export function budgetActive(country, now = Date.now()) {
+  if (!country || !country.budget_kind) return null;
+  if (Number(country.budget_until) <= now) return null;
+  return country.budget_kind;
+}
+// Jabatan menteri seorang warga ('economy'|'foreign'|'home'|'defense') atau null.
+export function ministerRole(country, citizenId) {
+  if (!country || !citizenId) return null;
+  if (country.minister_economy === citizenId) return 'economy';
+  if (country.minister_foreign === citizenId) return 'foreign';
+  if (country.minister_home === citizenId) return 'home';
+  if (country.minister_defense === citizenId) return 'defense';
+  return null;
+}
+export async function isMpCitizen(citizen) {
+  if (!citizen?.party_id) return false;
+  const p = await one('SELECT seats FROM parties WHERE id = ?', [citizen.party_id]);
+  return !!(p && p.seats > 0);
+}
+// Apakah ada perjanjian dagang AKTIF antara organisasi pembeli & penjual?
+// Bila ya, pajak penghasilan transaksi mereka dipotong setengah.
+export async function hasTradePact(t, buyerId, sellerId) {
+  if (!buyerId || !sellerId || buyerId === sellerId) return false;
+  const [a, b] = await Promise.all([
+    t.one('SELECT org_id FROM org_members WHERE citizen_id = ?', [buyerId]),
+    t.one('SELECT org_id FROM org_members WHERE citizen_id = ?', [sellerId]),
+  ]);
+  if (!a || !b || a.org_id === b.org_id) return false;
+  const lo = Math.min(a.org_id, b.org_id), hi = Math.max(a.org_id, b.org_id);
+  const pact = await t.one("SELECT id FROM org_pacts WHERE org_a_id = ? AND org_b_id = ? AND kind = 'trade' AND status = 'active'", [lo, hi]);
+  return !!pact;
+}
+// Apakah warga ini anggota organisasi yang punya pakta pertahanan AKTIF?
+export async function hasDefensePact(t, citizenId) {
+  const mine = await t.one('SELECT org_id FROM org_members WHERE citizen_id = ?', [citizenId]);
+  if (!mine) return false;
+  const pact = await t.one("SELECT id FROM org_pacts WHERE kind = 'defense' AND status = 'active' AND (org_a_id = ? OR org_b_id = ?)", [mine.org_id, mine.org_id]);
+  return !!pact;
+}
+// Pengali kerusakan perang dari bonus Tahap 5 (anggaran perang, mobilisasi,
+// pakta pertahanan) + label bonus yang diterapkan (untuk ditampilkan).
+export async function warDamageBonus(t, citizenId, country) {
+  const now = Date.now();
+  let mult = 1;
+  const labels = [];
+  if (budgetActive(country, now) === 'war') { mult *= BUDGET_WAR_DAMAGE_MULT; labels.push('Dana Perang +10%'); }
+  if (Number(country?.mobilization_until) > now) { mult *= MOBILIZE_DAMAGE_MULT; labels.push('Mobilisasi +10%'); }
+  if (await hasDefensePact(t, citizenId)) { mult *= DEFENSE_PACT_DAMAGE_MULT; labels.push('Pakta Pertahanan +10%'); }
+  return { mult, labels };
 }
 
 export function registerCivic(app) {
@@ -46,6 +125,12 @@ export function registerCivic(app) {
       citizens: Number(stats.citizens), parties: Number(parties.n), regions: Number(regions.n),
       seats: Number(seats.n), capitalRebellion: Number(capitalSupport.n), wars,
       treasuryTx,
+      // Tahap 5: jabatan pemanggil + status wewenang menteri (untuk UI).
+      myMinisterRole: ministerRole(country, req.citizen.id),
+      isPresident: country.president_id === req.citizen.id,
+      activeBudget: budgetActive(country) ? { kind: budgetActive(country), until: Number(country.budget_until) } : null,
+      mobilizationUntil: Number(country.mobilization_until) || 0,
+      holidayAt: Number(country.holiday_at) || 0,
     });
   }));
 
@@ -59,6 +144,89 @@ export function registerCivic(app) {
     if (!target) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
     await run(`UPDATE country SET ${col} = ? WHERE id = 1`, [citizen_id]);
     await notify(citizen_id, 'POLITIK', 'Kamu diangkat jadi menteri', `Presiden mengangkatmu sebagai menteri (${role}).`);
+    res.json({ ok: true });
+  }));
+
+  // ---------- ANGGARAN NEGARA ---------- (Tahap 5 — Menteri Ekonomi)
+  // Menteri Ekonomi mengusulkan anggaran; parlemen voting 3 hari; bila
+  // lolos, biaya dipotong dari kas negara saat tick menutup voting dan
+  // efeknya berlaku 7 hari (lihat tick.js §4b). Satu voting anggaran aktif
+  // dalam satu waktu. Anggaran yang sedang berlaku boleh diganti oleh
+  // anggaran baru yang lolos.
+  app.post('/api/country/budget', authRequired, citizenRequired, r(async (req, res) => {
+    const { kind, amount } = req.body || {};
+    const country = await one('SELECT * FROM country WHERE id = 1');
+    if (ministerRole(country, req.citizen.id) !== 'economy') return res.status(403).json({ error: 'Hanya Menteri Ekonomi yang bisa mengusulkan anggaran.' });
+    if (!BUDGET_KINDS[kind]) return res.status(400).json({ error: 'Jenis anggaran tidak dikenal.' });
+    const amt = Math.floor(Number(amount));
+    if (!Number.isFinite(amt) || amt < 50 || amt > 500) return res.status(400).json({ error: 'Jumlah anggaran 50–500 emas.' });
+    const active = await one("SELECT id FROM budgets WHERE status = 'voting' AND ends_at > ?", [Date.now()]);
+    if (active) return res.status(400).json({ error: 'Sudah ada anggaran yang sedang divoting.' });
+    const b = await run('INSERT INTO budgets (proposer_id, kind, amount, status, ends_at, created_at) VALUES (?,?,?,\'voting\',?,?) RETURNING id',
+      [req.citizen.id, kind, amt, Date.now() + BUDGET_VOTE_DAYS * 24 * 60 * 60 * 1000, Date.now()]);
+    res.json({ ok: true, budgetId: b.id });
+  }));
+
+  app.post('/api/country/budget/:id/vote', authRequired, citizenRequired, r(async (req, res) => {
+    const { vote } = req.body || {};
+    if (!['yes', 'no'].includes(vote)) return res.status(400).json({ error: 'Pilihan suara tidak dikenal.' });
+    if (!await isMpCitizen(req.citizen)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa memilih anggaran.' });
+    const b = await one("SELECT * FROM budgets WHERE id = ? AND status = 'voting' AND ends_at > ?", [req.params.id, Date.now()]);
+    if (!b) return res.status(404).json({ error: 'Anggaran tidak ditemukan / voting sudah ditutup.' });
+    const col = vote === 'yes' ? 'yes' : 'no';
+    await tx(async (t) => {
+      const ins = await t.run('INSERT INTO budget_votes (budget_id, citizen_id, vote) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING budget_id', [b.id, req.citizen.id, vote]);
+      if (!ins.changes) throw Object.assign(new Error('Kamu sudah memilih untuk anggaran ini.'), { status: 400 });
+      await t.run(`UPDATE budgets SET ${col} = ${col} + 1 WHERE id = ?`, [b.id]);
+    });
+    res.json({ ok: true });
+  }));
+
+  // ---------- MOBILISASI & HARI LIBUR ---------- (Tahap 5 — wewenang menteri)
+  // Mobilisasi (Menteri Pertahanan): 100 emas kas negara, kerusakan perang
+  // semua warga +10% selama 24 jam. Hari libur (Menteri Dalam Negeri):
+  // 50 emas kas negara, semua warga +20 energi (maks batas masing-masing),
+  // sekali per 24 jam. Biaya dipotong atomik dari kas negara; bila kas
+  // kurang, aksi ditolak.
+  app.post('/api/country/mobilize', authRequired, citizenRequired, r(async (req, res) => {
+    const country = await one('SELECT * FROM country WHERE id = 1');
+    if (ministerRole(country, req.citizen.id) !== 'defense') return res.status(403).json({ error: 'Hanya Menteri Pertahanan yang bisa memobilisasi.' });
+    if (Number(country.mobilization_until) > Date.now()) return res.status(400).json({ error: 'Mobilisasi sudah aktif.' });
+    await tx(async (t) => {
+      const locked = await t.one(forUpdate('SELECT * FROM country WHERE id = 1'));
+      if (Number(locked.treasury) < MOBILIZE_COST_GOLD) throw Object.assign(new Error(`Mobilisasi butuh ${MOBILIZE_COST_GOLD} emas dari kas negara.`), { status: 400 });
+      if (Number(locked.mobilization_until) > Date.now()) throw Object.assign(new Error('Mobilisasi sudah aktif.'), { status: 400 });
+      await t.run('UPDATE country SET treasury = treasury - ?, mobilization_until = ? WHERE id = 1', [MOBILIZE_COST_GOLD, Date.now() + MOBILIZE_DURATION_MS]);
+      await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES ('anggaran','gold',?,?,?) RETURNING id",
+        [-MOBILIZE_COST_GOLD, 'Mobilisasi pertahanan (+10% kerusakan perang 24 jam)', Date.now()]);
+    });
+    await notifyAll('POLITIK', 'Mobilisasi pertahanan', 'Menteri Pertahanan memobilisasi negara: kerusakan perang semua warga +10% selama 24 jam.');
+    res.json({ ok: true });
+  }));
+
+  app.post('/api/country/holiday', authRequired, citizenRequired, r(async (req, res) => {
+    const country = await one('SELECT * FROM country WHERE id = 1');
+    if (ministerRole(country, req.citizen.id) !== 'home') return res.status(403).json({ error: 'Hanya Menteri Dalam Negeri yang bisa menetapkan hari libur.' });
+    if (Date.now() - Number(country.holiday_at) < HOLIDAY_COOLDOWN_MS) return res.status(400).json({ error: 'Hari libur baru bisa ditetapkan lagi setelah 24 jam.' });
+    await tx(async (t) => {
+      const locked = await t.one(forUpdate('SELECT * FROM country WHERE id = 1'));
+      if (Number(locked.treasury) < HOLIDAY_COST_GOLD) throw Object.assign(new Error(`Hari libur butuh ${HOLIDAY_COST_GOLD} emas dari kas negara.`), { status: 400 });
+      if (Date.now() - Number(locked.holiday_at) < HOLIDAY_COOLDOWN_MS) throw Object.assign(new Error('Hari libur baru bisa ditetapkan lagi setelah 24 jam.'), { status: 400 });
+      await t.run('UPDATE country SET treasury = treasury - ?, holiday_at = ? WHERE id = 1', [HOLIDAY_COST_GOLD, Date.now()]);
+      await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES ('anggaran','gold',?,?,?) RETURNING id",
+        [-HOLIDAY_COST_GOLD, 'Hari libur nasional (+20 energi semua warga)', Date.now()]);
+      // +20 energi untuk semua warga, dibatasi batas maksimum masing-masing
+      // (rumus yang sama dengan tick harian: 100 + 5×(level−1), +20 Premium,
+      // +10 RS Lapangan). Satu UPDATE seragam dengan CASE — atomik.
+      const cap = `100 + 5 * (CASE WHEN level > 1 THEN level - 1 ELSE 0 END)
+        + CASE WHEN (SELECT premium_until FROM users WHERE users.id = citizens.user_id) > ? THEN 20 ELSE 0 END
+        + CASE WHEN EXISTS (SELECT 1 FROM convoys WHERE citizen_id = citizens.id AND building = 'health' AND expires_at > ?) THEN 10 ELSE 0 END`;
+      // Placeholder: energi+? (1) + cap dipakai 2× (2+2) + energi+? (1) = 6.
+      const now = Date.now();
+      await t.run(`UPDATE citizens SET energy = CASE WHEN energy + ? > (${cap}) THEN (${cap}) ELSE energy + ? END`,
+        [HOLIDAY_ENERGY, now, now, now, now, HOLIDAY_ENERGY]);
+    });
+    await notifyAll('POLITIK', 'Hari libur nasional', 'Menteri Dalam Negeri menetapkan hari libur: semua warga mendapat +20 energi.');
     res.json({ ok: true });
   }));
 
@@ -154,26 +322,70 @@ export function registerCivic(app) {
        JOIN citizens cc ON cc.id = l.proposer_id JOIN users u ON u.id = cc.user_id
        ORDER BY l.created_at DESC LIMIT 20`);
     const myVotes = await sql('SELECT law_id, vote FROM law_votes WHERE citizen_id = ?', [c.id]);
+    // Anggaran (Tahap 5): voting + arsip, lengkap dengan suaraku.
+    const budgets = await sql(
+      `SELECT b.*, u.username AS proposer_name FROM budgets b
+       JOIN citizens cc ON cc.id = b.proposer_id JOIN users u ON u.id = cc.user_id
+       ORDER BY b.created_at DESC LIMIT 10`);
+    const myBudgetVotes = await sql('SELECT budget_id, vote FROM budget_votes WHERE citizen_id = ?', [c.id]);
+    // Pemakzulan (Tahap 5): voting + arsip.
+    const impeachments = await sql(
+      `SELECT i.*, u.username AS proposer_name, pu.username AS president_name FROM impeachments i
+       JOIN citizens cc ON cc.id = i.proposer_id JOIN users u ON u.id = cc.user_id
+       JOIN citizens pc ON pc.id = i.president_id JOIN users pu ON pu.id = pc.user_id
+       ORDER BY i.created_at DESC LIMIT 10`);
+    const myImpeachVotes = await sql('SELECT impeachment_id, vote FROM impeachment_votes WHERE citizen_id = ?', [c.id]);
+    // Aturan yang berlaku saat ini (Tahap 5): angka negara hasil UU yang
+    // sudah disahkan — satu-satunya sumber kebenaran tarif/angka.
+    const country = await one('SELECT * FROM country WHERE id = 1');
     res.json({
       totalSeats: 60, filledSeats: Number(seats.n), majority: 31, isMp,
       laws, myVotes: Object.fromEntries(myVotes.map((v) => [v.law_id, v.vote])),
+      budgets, myBudgetVotes: Object.fromEntries(myBudgetVotes.map((v) => [v.budget_id, v.vote])),
+      impeachments, myImpeachVotes: Object.fromEntries(myImpeachVotes.map((v) => [v.impeachment_id, v.vote])),
+      effects: {
+        taxIncome: Number(country.tax_income), adminPayMult: Number(country.admin_pay_mult),
+        travelTickets: Number(country.travel_tickets),
+        budgetKind: budgetActive(country), budgetUntil: Number(country.budget_until) || 0,
+        mobilizationUntil: Number(country.mobilization_until) || 0,
+      },
     });
   }));
 
   app.post('/api/parliament/law', authRequired, citizenRequired, r(async (req, res) => {
-    const { title, content } = req.body || {};
+    const { title, content, kind, value } = req.body || {};
     const c = req.citizen;
     if (c.level < 5) return res.status(400).json({ error: 'Mengusulkan UU butuh Level 5.' });
     if (!title || title.length < 5 || title.length > 120) return res.status(400).json({ error: 'Judul UU 5–120 karakter.' });
     if (!content || content.length < 10) return res.status(400).json({ error: 'Isi UU minimal 10 karakter.' });
+    // Jenis UU (Tahap 5, BUG-9): 'general' = UU umum tanpa efek angka;
+    // jenis lain wajib punya nilai dalam rentang yang diizinkan.
+    const lawKind = LAW_KINDS[kind] ? kind : 'general';
+    let lawValue = null;
+    if (lawKind !== 'general') {
+      lawValue = Number(value);
+      const def = LAW_KINDS[lawKind];
+      if (!Number.isFinite(lawValue) || lawValue < def.min || lawValue > def.max
+        || (lawKind === 'travel' && !Number.isInteger(lawValue))) {
+        return res.status(400).json({ error: `${def.label}: nilai ${def.min}–${def.max}.` });
+      }
+    }
+    // Menteri Ekonomi mengusulkan UU gratis (wewenang jabatan) — warga lain
+    // membayar biaya notaris 5 emas seperti sebelumnya.
+    const country = await one('SELECT * FROM country WHERE id = 1');
+    const free = ministerRole(country, c.id) === 'economy';
     // Atomik: kunci baris warga + potong 5 emas bersyarat di dalam tx.
     const lawId = await tx(async (t) => {
       await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
       const law = await t.run(
-        'INSERT INTO laws (proposer_id, title, content, status, ends_at, created_at) VALUES (?,?,?,\'voting\',?,?) RETURNING id',
-        [c.id, title, content, Date.now() + 7 * 24 * 60 * 60 * 1000, Date.now()]);
-      const upd = await t.run('UPDATE citizens SET gold = gold - 5, laws_proposed = laws_proposed + 1 WHERE id = ? AND gold >= 5', [c.id]);
-      if (!upd.changes) throw Object.assign(new Error('Biaya notaris pengusulan UU: 5 emas.'), { status: 400 });
+        'INSERT INTO laws (proposer_id, title, content, kind, value, status, ends_at, created_at) VALUES (?,?,?,?,?,\'voting\',?,?) RETURNING id',
+        [c.id, title, content, lawKind, lawValue, Date.now() + 7 * 24 * 60 * 60 * 1000, Date.now()]);
+      if (free) {
+        await t.run('UPDATE citizens SET laws_proposed = laws_proposed + 1 WHERE id = ?', [c.id]);
+      } else {
+        const upd = await t.run('UPDATE citizens SET gold = gold - 5, laws_proposed = laws_proposed + 1 WHERE id = ? AND gold >= 5', [c.id]);
+        if (!upd.changes) throw Object.assign(new Error('Biaya notaris pengusulan UU: 5 emas.'), { status: 400 });
+      }
       return law.id;
     });
     await chronicleDone(c, 'law');
@@ -197,6 +409,38 @@ export function registerCivic(app) {
       await t.run(`UPDATE laws SET ${col} = ${col} + 1 WHERE id = ?`, [law.id]);
     });
     await chronicleDone(c, 'vote');
+    res.json({ ok: true });
+  }));
+
+  // ---------- PEMAKZULAN ---------- (Tahap 5)
+  // Anggota parlemen mengusulkan pemakzulan presiden; voting 3 hari;
+  // bila lolos, presiden dicopot (president_id = NULL) sampai pemilu
+  // berikutnya — penutupannya di tick.js §4c. Satu pemakzulan aktif
+  // dalam satu waktu. Presiden tidak bisa memakzulkan dirinya sendiri.
+  app.post('/api/parliament/impeach', authRequired, citizenRequired, r(async (req, res) => {
+    if (!await isMpCitizen(req.citizen)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa mengusulkan pemakzulan.' });
+    const country = await one('SELECT * FROM country WHERE id = 1');
+    if (!country.president_id) return res.status(400).json({ error: 'Tidak ada presiden yang menjabat.' });
+    if (country.president_id === req.citizen.id) return res.status(400).json({ error: 'Presiden tidak bisa memakzulkan dirinya sendiri.' });
+    const active = await one("SELECT id FROM impeachments WHERE status = 'voting' AND ends_at > ?", [Date.now()]);
+    if (active) return res.status(400).json({ error: 'Sudah ada pemakzulan yang sedang divoting.' });
+    const imp = await run('INSERT INTO impeachments (president_id, proposer_id, status, ends_at, created_at) VALUES (?,?,\'voting\',?,?) RETURNING id',
+      [country.president_id, req.citizen.id, Date.now() + BUDGET_VOTE_DAYS * 24 * 60 * 60 * 1000, Date.now()]);
+    res.json({ ok: true, impeachmentId: imp.id });
+  }));
+
+  app.post('/api/parliament/impeach/:id/vote', authRequired, citizenRequired, r(async (req, res) => {
+    const { vote } = req.body || {};
+    if (!['yes', 'no'].includes(vote)) return res.status(400).json({ error: 'Pilihan suara tidak dikenal.' });
+    if (!await isMpCitizen(req.citizen)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa memilih pemakzulan.' });
+    const imp = await one("SELECT * FROM impeachments WHERE id = ? AND status = 'voting' AND ends_at > ?", [req.params.id, Date.now()]);
+    if (!imp) return res.status(404).json({ error: 'Pemakzulan tidak ditemukan / voting sudah ditutup.' });
+    const col = vote === 'yes' ? 'yes' : 'no';
+    await tx(async (t) => {
+      const ins = await t.run('INSERT INTO impeachment_votes (impeachment_id, citizen_id, vote) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING impeachment_id', [imp.id, req.citizen.id, vote]);
+      if (!ins.changes) throw Object.assign(new Error('Kamu sudah memilih untuk pemakzulan ini.'), { status: 400 });
+      await t.run(`UPDATE impeachments SET ${col} = ${col} + 1 WHERE id = ?`, [imp.id]);
+    });
     res.json({ ok: true });
   }));
 
@@ -273,7 +517,11 @@ export function registerCivic(app) {
       [war.id]);
     const totals = await one('SELECT COUNT(*) AS attacks, COALESCE(SUM(damage),0) AS damage FROM war_attacks WHERE war_id = ?', [war.id]);
     const atFront = req.citizen.region_id === war.region_id;
-    res.json({ war, fighters, feed, totals, atFront, myRegion: req.citizen.region_id });
+    // Bonus Tahap 5 yang sedang berlaku untuk pemanggil (untuk ditampilkan
+    // jujur di halaman perang: anggaran perang / mobilisasi / pakta).
+    const country = await one('SELECT * FROM country WHERE id = 1');
+    const bonus = await warDamageBonus({ one }, req.citizen.id, country);
+    res.json({ war, fighters, feed, totals, atFront, myRegion: req.citizen.region_id, bonuses: bonus.labels, mobilizationActive: Number(country.mobilization_until) > Date.now(), budgetWarActive: budgetActive(country) === 'war' });
   }));
 
   app.post('/api/wars/:id/attack', authRequired, citizenRequired, r(async (req, res) => {
@@ -289,6 +537,14 @@ export function registerCivic(app) {
     // Bonus konvoi (Tahap 3, BUG-7): Pos Militer aktif -> kerusakan +10%.
     const buildings = await convoyBuildings(c.id);
     if (buildings.has('military')) damage = warDamageWithBonus(damage);
+    // Bonus Tahap 5: anggaran perang, mobilisasi, pakta pertahanan.
+    // Dihitung SEBELUM tx (hanya baca; nilai dipakai di dalam tx apa adanya).
+    const country = await one('SELECT * FROM country WHERE id = 1');
+    const bonus = await warDamageBonus({ one }, c.id, country);
+    const appliedBonuses = [];
+    if (buildings.has('military')) appliedBonuses.push('Pos Militer +10%');
+    appliedBonuses.push(...bonus.labels);
+    damage = Math.round(damage * bonus.mult);
     // Atomik: kunci baris warga, baca amunisi segar di dalam tx, potong
     // energi + amunisi + catat serangan + update skor + progres misi — semua
     // dari nilai yang dikunci (dulu misi dihitung dari objek basi di luar tx).
@@ -311,7 +567,7 @@ export function registerCivic(app) {
       await t.run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), locked.id]);
     });
     await chronicleDone(c, 'attack');
-    res.json({ ok: true, damage });
+    res.json({ ok: true, damage, bonuses: appliedBonuses });
   }));
 
   // ---------- PERS ----------
@@ -615,7 +871,16 @@ export function registerCivic(app) {
        FROM organizations o JOIN citizens c ON c.id = o.leader_id JOIN users u ON u.id = c.user_id
        ORDER BY members DESC`);
     const mine = await one('SELECT org_id FROM org_members WHERE citizen_id = ?', [req.citizen.id]);
-    res.json({ organizations: rows, myOrgId: mine?.org_id || null });
+    // Pakta (Tahap 5): semua pakta aktif (publik) + pakta pending yang
+    // melibatkan organisasiku (agar ketuaku bisa menyetujui/menolak).
+    const myOrgId = mine?.org_id || -1;
+    const pacts = await sql(
+      `SELECT p.*, oa.name AS org_a_name, ob.name AS org_b_name, oa.leader_id AS org_a_leader_id, ob.leader_id AS org_b_leader_id
+       FROM org_pacts p JOIN organizations oa ON oa.id = p.org_a_id JOIN organizations ob ON ob.id = p.org_b_id
+       WHERE p.status = 'active' OR p.org_a_id = ? OR p.org_b_id = ? ORDER BY p.created_at DESC`,
+      [myOrgId, myOrgId]);
+    const country = await one('SELECT * FROM country WHERE id = 1');
+    res.json({ organizations: rows, myOrgId: mine?.org_id || null, pacts, myMinisterRole: ministerRole(country, req.citizen.id) });
   }));
 
   app.post('/api/orgs', authRequired, citizenRequired, r(async (req, res) => {
@@ -633,6 +898,102 @@ export function registerCivic(app) {
       return o.id;
     });
     res.json({ ok: true, orgId });
+  }));
+
+  // ---------- PAKTA ANTAR ORGANISASI ---------- (Tahap 5 — diplomasi)
+  // Dua organisasi mengikat pakta (dagang: pajak antar anggota dipotong
+  // 50%; pertahanan: anggota +10% kerusakan perang). Pasangan disimpan
+  // terurut (org_a_id < org_b_id) agar UNIQUE(org_a_id, org_b_id, kind)
+  // bekerja dua arah. Mengusulkan: ketua organisasi pengusul ATAU Menteri
+  // Luar Negeri (sebagai mediator). Menyetujui: ketua organisasi satunya
+  // (bila pengusul adalah ketua salah satu organisasi); bila pengusulnya
+  // Menteri Luar Negeri, ketua salah satu organisasi boleh menyetujui.
+  async function pactOrgs(pact) {
+    const [a, b] = await Promise.all([
+      one('SELECT * FROM organizations WHERE id = ?', [pact.org_a_id]),
+      one('SELECT * FROM organizations WHERE id = ?', [pact.org_b_id]),
+    ]);
+    return [a, b];
+  }
+  // Ketua organisasi mana (a/b) yang diwakili pemanggil, atau null.
+  function pactMyOrg(a, b, citizenId) {
+    if (a.leader_id === citizenId) return a.id;
+    if (b.leader_id === citizenId) return b.id;
+    return null;
+  }
+  // Organisasi mana (a/b) yang diwakili pengusul pakta, atau null bila
+  // pengusul bukan ketua salah satu organisasi (mis. Menteri Luar Negeri).
+  function pactProposerOrg(a, b, proposerId) {
+    if (a.leader_id === proposerId) return a.id;
+    if (b.leader_id === proposerId) return b.id;
+    return null;
+  }
+
+  app.post('/api/orgs/:id/pact', authRequired, citizenRequired, r(async (req, res) => {
+    const { target_org_id, kind } = req.body || {};
+    if (!PACT_KINDS[kind]) return res.status(400).json({ error: 'Jenis pakta tidak dikenal.' });
+    const o = await one('SELECT * FROM organizations WHERE id = ?', [req.params.id]);
+    if (!o) return res.status(404).json({ error: 'Organisasi tidak ditemukan.' });
+    const target = await one('SELECT * FROM organizations WHERE id = ?', [target_org_id]);
+    if (!target) return res.status(404).json({ error: 'Organisasi tujuan tidak ditemukan.' });
+    if (o.id === target.id) return res.status(400).json({ error: 'Tidak bisa berpakta dengan organisasi sendiri.' });
+    const country = await one('SELECT * FROM country WHERE id = 1');
+    const isLeader = o.leader_id === req.citizen.id;
+    const isForeignMinister = ministerRole(country, req.citizen.id) === 'foreign';
+    if (!isLeader && !isForeignMinister) return res.status(403).json({ error: 'Hanya ketua organisasi atau Menteri Luar Negeri yang bisa mengusulkan pakta.' });
+    const lo = Math.min(o.id, target.id), hi = Math.max(o.id, target.id);
+    const existing = await one("SELECT id, status FROM org_pacts WHERE org_a_id = ? AND org_b_id = ? AND kind = ? AND status IN ('pending','active')", [lo, hi, kind]);
+    if (existing) return res.status(400).json({ error: existing.status === 'active' ? 'Pakta sejenis sudah aktif antara kedua organisasi ini.' : 'Usulan pakta sejenis masih menunggu persetujuan.' });
+    const pact = await tx(async (t) => {
+      // ON CONFLICT DO NOTHING: dua usulan paralel untuk pasangan+jenis
+      // yang sama — yang kalah dapat 400, bukan 500 (pola vote UU).
+      // (Tolak/bubarkan menghapus baris, jadi UNIQUE tidak pernah
+      // menghalangi usulan baru setelah pakta dibubarkan.)
+      const ins = await t.run('INSERT INTO org_pacts (org_a_id, org_b_id, kind, status, proposer_id, created_at) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id',
+        [lo, hi, kind, 'pending', req.citizen.id, Date.now()]);
+      if (!ins.changes) throw Object.assign(new Error('Pakta sejenis baru saja diusulkan antara kedua organisasi ini.'), { status: 400 });
+      return ins;
+    });
+    await notify(target.leader_id, 'DIPLOMASI', 'Usulan pakta baru', `${o.name} mengusulkan ${PACT_KINDS[kind].label} dengan ${target.name}. Setujui atau tolak di halaman Organisasi.`);
+    res.json({ ok: true, pactId: pact.id });
+  }));
+
+  app.post('/api/orgs/pacts/:id/accept', authRequired, citizenRequired, r(async (req, res) => {
+    const pact = await one("SELECT * FROM org_pacts WHERE id = ? AND status = 'pending'", [req.params.id]);
+    if (!pact) return res.status(404).json({ error: 'Usulan pakta tidak ditemukan.' });
+    const [a, b] = await pactOrgs(pact);
+    const myOrg = pactMyOrg(a, b, req.citizen.id);
+    if (!myOrg) return res.status(403).json({ error: 'Hanya ketua salah satu organisasi yang bisa menerima pakta.' });
+    const proposerOrg = pactProposerOrg(a, b, pact.proposer_id);
+    if (proposerOrg && proposerOrg === myOrg) return res.status(400).json({ error: 'Kamu yang mengusulkan — ketua organisasi satunya yang harus menyetujui.' });
+    await run("UPDATE org_pacts SET status = 'active' WHERE id = ?", [pact.id]);
+    const otherLeader = myOrg === a.id ? b.leader_id : a.leader_id;
+    await notify(otherLeader, 'DIPLOMASI', 'Pakta disetujui', `${PACT_KINDS[pact.kind].label} antara ${a.name} dan ${b.name} kini aktif.`);
+    res.json({ ok: true });
+  }));
+
+  app.post('/api/orgs/pacts/:id/reject', authRequired, citizenRequired, r(async (req, res) => {
+    const pact = await one("SELECT * FROM org_pacts WHERE id = ? AND status = 'pending'", [req.params.id]);
+    if (!pact) return res.status(404).json({ error: 'Usulan pakta tidak ditemukan.' });
+    const [a, b] = await pactOrgs(pact);
+    const myOrg = pactMyOrg(a, b, req.citizen.id);
+    if (!myOrg) return res.status(403).json({ error: 'Hanya ketua salah satu organisasi yang bisa menolak pakta.' });
+    const proposerOrg = pactProposerOrg(a, b, pact.proposer_id);
+    if (proposerOrg && proposerOrg === myOrg) return res.status(400).json({ error: 'Kamu yang mengusulkan — ketua organisasi satunya yang memutuskan.' });
+    await run('DELETE FROM org_pacts WHERE id = ?', [pact.id]);
+    await notify(pact.proposer_id, 'DIPLOMASI', 'Usulan pakta ditolak', `Usulan ${PACT_KINDS[pact.kind].label} antara ${a.name} dan ${b.name} ditolak.`);
+    res.json({ ok: true });
+  }));
+
+  app.post('/api/orgs/pacts/:id/dissolve', authRequired, citizenRequired, r(async (req, res) => {
+    const pact = await one("SELECT * FROM org_pacts WHERE id = ? AND status = 'active'", [req.params.id]);
+    if (!pact) return res.status(404).json({ error: 'Pakta aktif tidak ditemukan.' });
+    const [a, b] = await pactOrgs(pact);
+    if (a.leader_id !== req.citizen.id && b.leader_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya ketua salah satu organisasi yang bisa membubarkan pakta.' });
+    await run('DELETE FROM org_pacts WHERE id = ?', [pact.id]);
+    const otherLeader = a.leader_id === req.citizen.id ? b.leader_id : a.leader_id;
+    await notify(otherLeader, 'DIPLOMASI', 'Pakta dibubarkan', `${PACT_KINDS[pact.kind].label} antara ${a.name} dan ${b.name} telah dibubarkan.`);
+    res.json({ ok: true });
   }));
 
   app.post('/api/orgs/:id/join', authRequired, citizenRequired, r(async (req, res) => {

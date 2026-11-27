@@ -5,10 +5,21 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const fmt = (n, d = 0) => Number(n || 0).toLocaleString('id-ID', { maximumFractionDigits: d });
 const fmtUSD = (n) => Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
 const fmtIDR = (n) => 'Rp' + Number(n || 0).toLocaleString('id-ID');
-const fmtTime = (ts) => new Date(ts).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-const fmtDate = (ts) => new Date(ts).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+const fmtTime = (ts) => { const d = toDate(ts); return d ? d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '—'; };
+const fmtDate = (ts) => { const d = toDate(ts); return d ? d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'; };
+// Normalisasi timestamp ke Date — menerima number MAUPUN string angka
+// (driver Postgres mengembalikan BIGINT sebagai string; tanpa Number() di
+// sini, new Date("1793...") = Invalid Date — bug 27 Nov 2026). null/kosong/
+// bukan-angka → null (ditampilkan '—', bukan "Invalid Date").
+const toDate = (ts) => {
+  if (ts == null || ts === '') return null;
+  const d = new Date(Number(ts));
+  return Number.isNaN(d.getTime()) ? null : d;
+};
 const ago = (ts) => {
-  const s = Math.floor((Date.now() - ts) / 1000);
+  const d = toDate(ts);
+  if (!d) return '—';
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
   if (s < 60) return 'baru saja';
   if (s < 3600) return Math.floor(s / 60) + ' mnt lalu';
   if (s < 86400) return Math.floor(s / 3600) + ' jam lalu';
@@ -17,6 +28,7 @@ const ago = (ts) => {
 
 let ME = null; // hasil /api/me
 let chatTimer = null;
+let chatRoom = null; // ruangan chat yang sedang dibuka (untuk refresh saat tab kembali aktif)
 let chatSince = 0;
 
 // Avatar bulat: foto (data URL) bila ada, huruf awal nama bila tidak.
@@ -262,7 +274,15 @@ async function showApp() {
   window.addEventListener('hashchange', route);
   route();
   maybeShowAnnouncement();
-  setInterval(refreshMe, 30000);
+  // Polling hemat (Tahap 5 — lag): saat tab tidak aktif, jangan membebani
+  // server dengan polling /api/me tiap 30 detik + chat tiap 5 detik.
+  // Saat tab kembali aktif, langsung refresh sekali (listener di bawah).
+  setInterval(() => { if (!document.hidden) refreshMe(); }, 30000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    refreshMe();
+    if (chatRoom) renderChatRoom(chatRoom);
+  });
 }
 
 async function refreshMe() {
@@ -301,7 +321,7 @@ const ROUTES = {};
 // ID publik pemain: PL- + nomor urut 6 digit (mis. PL-000001).
 const pubId = (id) => 'PL-' + String(id).padStart(6, '0');
 function route() {
-  clearInterval(chatTimer); chatTimer = null; chatSince = 0;
+  clearInterval(chatTimer); chatTimer = null; chatRoom = null; chatSince = 0;
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
   const [slug, arg] = hash.split('/');
   // Akun banned: tampilkan pesan banned, bukan dashboard/game.
@@ -774,10 +794,11 @@ ROUTES.admin = async (q) => {
     return renderAdminInbox(params.get('status') || '');
   }
   const query = q ? decodeURIComponent(q) : '';
-  const [list, logs, appeals] = await Promise.all([
+  const [list, logs, appeals, status] = await Promise.all([
     api('/api/admin/players' + (query ? '?q=' + encodeURIComponent(query) : '')),
     api('/api/admin/actions'),
     api('/api/admin/appeals'),
+    api('/api/admin/status'),
   ]);
   const pendingAppeals = appeals.appeals.filter((a) => a.status === 'menunggu').length;
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Hanya akun admin yang bisa melihat halaman ini.', `
@@ -790,6 +811,7 @@ ROUTES.admin = async (q) => {
     <button class="tab" onclick="location.hash='#/admin/flags'">🚩 Tanda Pasar</button>
   </div>
   <div class="panel"><h3>🔍 CARI PEMAIN</h3>
+    <p class="muted small">Jalan darurat admin (kode bootstrap): <b>${status?.bootstrapActive ? 'AKTIF — registrasi dengan kode yang benar bisa membuat admin' : 'TIDAK AKTIF — tidak ada jalan membuat admin lewat registrasi (aman)'}</b></p>
     <div class="row"><input id="adm-q" placeholder="Nama / email / ID (cth: PL-000001)" value="${esc(query)}" style="flex:2">
     <button class="btn-gold" id="adm-search">Cari</button>
     ${query ? '<button class="btn-ghost" id="adm-reset">Reset</button>' : ''}</div>
@@ -1157,7 +1179,7 @@ function marketPage(scope) {
       <div id="price-chart" style="margin-top:10px"><p class="muted">Memuat grafik…</p></div>
     </div>
     <div class="panel"><h3>🛒 ORDER BELI</h3>
-      <p class="muted small">Pembeli memasang harga yang mereka mau. Punya barangnya? Jual langsung ke order mereka — dana pembeli sudah dikunci, jadi kamu pasti dibayar (dikurangi pajak 2% ke kas negara).</p>
+      <p class="muted small">Pembeli memasang harga yang mereka mau. Punya barangnya? Jual langsung ke order mereka — dana pembeli sudah dikunci, jadi kamu pasti dibayar (dikurangi pajak penghasilan sesuai UU yang berlaku ke kas negara).</p>
       ${data.buyOrders.length ? data.buyOrders.map((o) => `<div class="kv"><span class="k">🧑 ${esc(o.buyer)} · ${esc(o.commodity_name)} T${o.tier} · butuh ${o.qty - o.qty_filled}/${o.qty}<br><small class="muted">${fmt(o.price, 2)} ${cur}/unit</small></span>
         <span class="v"><input type="number" value="${Math.min(o.qty - o.qty_filled, 10)}" min="1" max="${o.qty - o.qty_filled}" style="width:70px" id="qo-${o.id}">
         <button class="btn-gold btn-sm" data-sell-order="${o.id}">JUAL</button></span></div>`).join('')
@@ -1185,7 +1207,7 @@ function marketPage(scope) {
         <label>JUMLAH (min 10)<input id="sell-qty" type="number" value="10" min="10"></label>
         <label>HARGA / UNIT (${cur})<input id="sell-price" type="number" step="0.01" placeholder="cth: 10.80"></label>
       </div>
-      <p class="muted small">Pajak penghasilan 2% dipotong saat barang terjual dan masuk kas negara (lihat halaman Negara). Contoh: jual 10,00 → diterima 9,80.</p>
+      <p class="muted small">Pajak penghasilan ${data.taxRate ?? 2}% dipotong saat barang terjual dan masuk kas negara (lihat halaman Negara). Contoh: jual 10,00 → diterima ${fmt(10 * (1 - (data.taxRate ?? 2) / 100), 2)}.</p>
       <button class="btn-gold" id="btn-sell">PAJANG PENAWARAN</button>
     </div>
     <div class="panel"><h3>🧾 PENAWARANKU</h3>
@@ -1359,14 +1381,16 @@ ROUTES.fx = async () => {
 };
 
 // Label upah lowongan: ADMIN dibayar bahan mentah, perusahaan bayar USD/bagi hasil.
+// Untuk lowongan ADMIN, pakai effectiveQty (jumlah setelah pengali UU upah
+// ADMIN yang berlaku) bila ada — sama dengan yang diterima saat shift.
 const payLabel = (j) => j.salary_type === 'goods'
-  ? `${fmt(j.pay_qty)}× ${j.resource} / shift`
+  ? `${fmt(j.effectiveQty ?? j.pay_qty)}× ${j.resource} / shift`
   : `${fmt(j.salary)} USD / shift`;
 
 // ---------- PEKERJAAN ----------
 ROUTES.jobs = async () => {
   const data = await api('/api/jobs');
-  const myJob = ME.job;
+  const myJob = ME.job ? (data.jobs.find((j) => j.id === ME.job.id) || ME.job) : null;
   $('#page').innerHTML = page('KANTOR KETENAGAKERJAAN', 'Lowongan resmi ADMIN tersedia sebagai modal awal. Perusahaan warga juga bisa membuka lowongan.', `
   <div class="stat-grid">
     <div class="stat-cell"><div class="stat-label">📋 Lowongan Terbuka</div><div class="stat-num">${fmt(data.jobs.length)}</div><div class="stat-sub">di seluruh negeri</div></div>
@@ -1376,10 +1400,11 @@ ROUTES.jobs = async () => {
   </div>
   ${myJob ? `<div class="panel"><h3>💼 PEKERJAANMU</h3>
     <div class="kv"><span class="k">${esc(myJob.title)} · ${esc(myJob.company_name || 'ADMIN')}</span><span class="v">${payLabel(myJob)}</span></div>
-    <p class="muted small">Satu giliran memakai 100 energi. ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan 2%.'}</p>
+    <p class="muted small">Satu giliran memakai 100 energi. ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan (tarif sesuai UU yang berlaku).'}</p>
     <div class="row"><button class="btn-gold" id="btn-shift">KERJAKAN SATU GILIRAN (100 ⚡)</button>
     <button class="btn-ghost" id="btn-quit">Berhenti Kerja</button></div></div>` : ''}
   <div class="panel"><h3>📋 PAPAN LOWONGAN</h3>
+    ${data.adminPayMult && data.adminPayMult !== 1 ? `<p class="muted small">Upah ADMIN saat ini ${Math.round(data.adminPayMult * 100)}% dari upah dasar (UU yang berlaku).</p>` : ''}
     ${data.jobs.length ? data.jobs.map((j) => `
       <div class="card">
         <h4>${esc(j.title)} ${j.is_admin ? '<span class="chip">ADMIN</span>' : ''}</h4>
@@ -1508,13 +1533,13 @@ ROUTES.regions = async (id) => {
       <div class="kv"><span class="k">Kapasitas wilayah</span><span class="v">${r.capacity}% ${d.home ? '· Ini wilayah asalmu' : ''}</span></div>
     </div>
     <div class="panel"><h3>⚖️ POLITIK</h3>
-      <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">2%</span></div>
+      <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${d.taxIncome ?? 2}%</span></div>
       <div class="kv"><span class="k">Pajak produksi</span><span class="v">1%</span></div>
       <div class="kv"><span class="k">Pajak impor / ekspor</span><span class="v">2% / 2%</span></div>
       <div class="kv"><span class="k">Perbatasan</span><span class="v">Terbuka</span></div>
     </div>
     <div class="panel"><h3>✈️ PERJALANAN</h3>
-      ${d.mine ? '<p class="muted">Kamu di sini.</p>' : `<button class="btn-gold" id="btn-travel">PINDAH KE SINI (1 🎫)</button>`}
+      ${d.mine ? '<p class="muted">Kamu di sini.</p>' : `<button class="btn-gold" id="btn-travel">PINDAH KE SINI (${d.travelTickets || 1} 🎫)</button>`}
     </div>
     <div class="panel"><h3>🔥 PEMBERONTAKAN</h3>
       <p class="muted small">5 warga berbeda harus mendukung untuk menyulut perang pemberontakan di wilayah ini. Dukunganmu hangus (tidak kembali).</p>
@@ -1560,19 +1585,55 @@ ROUTES.country = async () => {
     <div class="kv"><span class="k">Kas negara</span><span class="v gold-text">${fmt(c.treasury)} emas</span></div>
     <div class="kv"><span class="k">Kas negara (USD)</span><span class="v gold-text">${fmtUSD(c.treasury_usd || 0)} USD</span></div>
     <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${c.tax_income}%</span></div>
+    <div class="kv"><span class="k">Upah lowongan ADMIN</span><span class="v">${Math.round((c.admin_pay_mult || 1) * 100)}% dari upah dasar</span></div>
+    <div class="kv"><span class="k">Biaya perjalanan</span><span class="v">${c.travel_tickets || 1} Tiket</span></div>
     <div class="kv"><span class="k">Pajak produksi</span><span class="v">${c.tax_production}%</span></div>
     <div class="kv"><span class="k">Pajak impor / ekspor</span><span class="v">${c.tax_import}% / ${c.tax_export}%</span></div>
-    <p class="muted small">Pajak dikelola parlemen. Gaji menteri 113 emas/hari (dicetak permainan). Pajak pasar 2% masuk ke kas ini.</p>
+    <p class="muted small">Pajak dikelola parlemen. Gaji menteri 113 emas/hari (dicetak permainan). Pajak pasar ${c.tax_income}% masuk ke kas ini.</p>
     ${d.treasuryTx?.length ? `<h3 style="margin-top:12px">📒 ARUS KAS (20 TERAKHIR)</h3>
       ${d.treasuryTx.map((t) => `<div class="kv"><span class="k">${esc(t.note || t.kind)}<br><small class="muted">${ago(t.created_at)}</small></span>
-      <span class="v">+${fmt(t.amount, 2)} ${t.currency === 'gold' ? 'emas' : 'USD'}</span></div>`).join('')}`
+      <span class="v">${t.amount >= 0 ? '+' : ''}${fmt(t.amount, 2)} ${t.currency === 'gold' ? 'emas' : 'USD'}</span></div>`).join('')}`
       : '<p class="muted small" style="margin-top:8px">Belum ada pemasukan pajak — kas negara masih 0 sampai ada yang berdagang.</p>'}
+  </div>
+  <div class="panel"><h3>⚖️ WEWENANG MENTERI</h3>
+    ${d.activeBudget ? `<div class="kv"><span class="k">Anggaran aktif</span><span class="v">${{ claim: 'Pasokan +2 Emas', train: 'Latihan −10%', war: 'Dana Perang +10%' }[d.activeBudget.kind] || d.activeBudget.kind} · sampai ${fmtDate(d.activeBudget.until)}</span></div>` : '<p class="muted small">Tidak ada anggaran aktif.</p>'}
+    ${d.mobilizationUntil > Date.now() ? `<div class="kv"><span class="k">Mobilisasi</span><span class="v">aktif sampai ${fmtDate(d.mobilizationUntil)} · +10% kerusakan perang</span></div>` : ''}
+    ${d.myMinisterRole === 'economy' ? `
+      <label>JENIS ANGGARAN<select id="budget-kind">
+        <option value="claim">Pasokan Harian +2 Emas</option>
+        <option value="train">Latihan 10% Lebih Murah</option>
+        <option value="war">Dana Perang (+10% Kerusakan)</option>
+      </select></label>
+      <label>JUMLAH (50–500 EMAS DARI KAS NEGARA)<input id="budget-amount" type="number" value="100" min="50" max="500"></label>
+      <p class="muted small">Diisulkan Menteri Ekonomi · voting parlemen 3 hari · efek 7 hari bila lolos.</p>
+      <button class="btn-gold" id="btn-budget">USULKAN ANGGARAN</button>` : ''}
+    ${d.myMinisterRole === 'defense' ? `
+      <p class="muted small">Mobilisasi: 100 emas kas negara · kerusakan perang semua warga +10% selama 24 jam.</p>
+      <button class="btn-gold" id="btn-mobilize" ${d.mobilizationUntil > Date.now() ? 'disabled' : ''}>${d.mobilizationUntil > Date.now() ? 'MOBILISASI AKTIF' : 'MOBILISASI PERTAHANAN'}</button>` : ''}
+    ${d.myMinisterRole === 'home' ? `
+      <p class="muted small">Hari libur: 50 emas kas negara · semua warga +20 energi · sekali per 24 jam.</p>
+      <button class="btn-gold" id="btn-holiday">TETAPKAN HARI LIBUR</button>` : ''}
+    ${!d.myMinisterRole ? '<p class="muted small">Kamu bukan menteri. Wewenang ini hanya untuk Menteri Ekonomi, Pertahanan, dan Dalam Negeri.</p>' : ''}
   </div>
   <div class="panel"><h3>🔥 PEMBERONTAKAN IBU KOTA</h3>
     <p class="muted small">Dukungan ibu kota: ${d.capitalRebellion}/5 · Dukung: 100 emas hangus.</p>
     <button class="btn-gold btn-sm" onclick="location.hash='#/regions/2'">Buka Jakarta</button>
   </div>
   ${d.wars.length ? `<div class="panel"><h3>⚔️ PERANG AKTIF</h3>${d.wars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}</div>` : ''}`);
+  $('#btn-budget')?.addEventListener('click', async () => {
+    try { await post('/api/country/budget', { kind: $('#budget-kind').value, amount: Number($('#budget-amount').value) }); toast('Anggaran diusulkan! Voting parlemen 3 hari.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-mobilize')?.addEventListener('click', async () => {
+    if (!confirm('Mobilisasi pertahanan? 100 emas dari kas negara. Kerusakan perang semua warga +10% selama 24 jam.')) return;
+    try { await post('/api/country/mobilize', {}); toast('Negara dimobilisasi!'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-holiday')?.addEventListener('click', async () => {
+    if (!confirm('Tetapkan hari libur? 50 emas dari kas negara. Semua warga +20 energi.')) return;
+    try { await post('/api/country/holiday', {}); toast('Hari libur ditetapkan!'); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
 };
 
 // ---------- STATISTIK ----------
@@ -1683,6 +1744,9 @@ ROUTES.parliament = async () => {
   for (let i = 0; i < d.totalSeats; i++) {
     dots.push(`<span class="seat-dot" style="background:${i < d.filledSeats ? seatColors[i % seatColors.length] : '#26324a'}"></span>`);
   }
+  const LAW_KIND_LABEL = { tax_income: 'Pajak Penghasilan', admin_pay: 'Upah ADMIN', travel: 'Biaya Perjalanan', general: 'UU Umum' };
+  const BUDGET_LABEL = { claim: 'Pasokan Harian +2 Emas', train: 'Latihan 10% Lebih Murah', war: 'Dana Perang (+10% Kerusakan)' };
+  const eff = d.effects || { taxIncome: 2, adminPayMult: 1, travelTickets: 1, budgetKind: null, budgetUntil: 0, mobilizationUntil: 0 };
   $('#page').innerHTML = page('PARLEMEN', 'Demokrasi · 60 kursi · Mayoritas 31', `
   <div class="tabs">
     <button class="tab active">🏛️ Dewan</button>
@@ -1700,32 +1764,106 @@ ROUTES.parliament = async () => {
     <p style="text-align:center" class="gold-text">◆ MAYORITAS ${d.majority}</p>
     <p class="muted small" style="text-align:center">${d.isMp ? 'Kamu anggota parlemen — kamu bisa memilih UU.' : 'Partaimu belum punya kursi. Menangkan pemilu parlemen untuk masuk dewan.'}</p>
   </div>
+  <div class="panel"><h3>📏 ATURAN YANG BERLAKU SAAT INI</h3>
+    <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${eff.taxIncome}%</span></div>
+    <div class="kv"><span class="k">Upah lowongan ADMIN</span><span class="v">${Math.round(eff.adminPayMult * 100)}% dari upah dasar</span></div>
+    <div class="kv"><span class="k">Biaya perjalanan</span><span class="v">${eff.travelTickets} Tiket</span></div>
+    ${eff.budgetKind ? `<div class="kv"><span class="k">Anggaran aktif</span><span class="v">${BUDGET_LABEL[eff.budgetKind] || eff.budgetKind} · sampai ${fmtDate(eff.budgetUntil)}</span></div>` : '<p class="muted small">Tidak ada anggaran aktif.</p>'}
+    ${eff.mobilizationUntil > Date.now() ? `<div class="kv"><span class="k">Mobilisasi</span><span class="v">aktif sampai ${fmtDate(eff.mobilizationUntil)} · +10% kerusakan perang</span></div>` : ''}
+    <p class="muted small">Angka-angka ini diubah oleh UU yang disahkan parlemen — bukan angka tetap.</p>
+  </div>
   <div class="panel"><h3>📜 USULKAN UNDANG-UNDANG</h3>
-    <p class="muted small">Butuh Level 5 · biaya notaris 5 emas · voting 7 hari.</p>
+    <p class="muted small">Butuh Level 5 · biaya notaris 5 emas (gratis untuk Menteri Ekonomi) · voting 7 hari.</p>
     <label>JUDUL UU<input id="law-title" placeholder="cth: Ambang batas parlemen 3%"></label>
     <label>ISI UU<textarea id="law-content" rows="3" placeholder="Tulis isi undang-undang..."></textarea></label>
+    <label>JENIS UU<select id="law-kind">
+      <option value="general">UU Umum (tanpa efek angka)</option>
+      <option value="tax_income">Ubah Pajak Penghasilan (1–5%)</option>
+      <option value="admin_pay">Ubah Upah Lowongan ADMIN (80–120%)</option>
+      <option value="travel">Ubah Biaya Perjalanan (1–2 Tiket)</option>
+    </select></label>
+    <label id="law-value-wrap" style="display:none">NILAI BARU<input id="law-value" type="number" placeholder="cth: 4"></label>
+    <p class="muted small" id="law-hint">UU umum: pernyataan/aturan tanpa mengubah angka game.</p>
     <button class="btn-gold" id="btn-law">USULKAN UU</button>
   </div>
   <div class="panel"><h3>🗳️ UU SEDANG DIVOTING &amp; TERBARU</h3>
     ${d.laws.length ? d.laws.map((l) => {
       const total = l.yes + l.abstain + l.no;
       const myVote = d.myVotes[l.id];
+      const valTxt = l.value == null ? '' : l.kind === 'travel' ? ` → ${l.value} Tiket` : ` → ${l.value}%`;
       return `<div class="card"><h4>${esc(l.title)}</h4>
       <p class="muted small">Pengusul: ${esc(l.proposer_name)} · ${esc(l.status)} ${l.status === 'voting' ? '· berakhir ' + fmtDate(l.ends_at) : ''}</p>
       <p class="small">${esc(l.content)}</p>
+      <p class="muted small">Jenis: ${LAW_KIND_LABEL[l.kind] || 'UU Umum'}${valTxt}${l.status === 'executed' ? (l.effect_applied ? ' · efek diterapkan ✓' : ' · tanpa efek angka') : ''}</p>
       <div class="kv"><span class="k">Ya ${l.yes} · Abstain ${l.abstain} · Tidak ${l.no}</span><span class="v">${total ? Math.round(l.yes / total * 100) : 0}% Ya</span></div>
       ${l.status === 'voting' ? (myVote ? `<p class="teal-text small">✓ Kamu memilih: ${myVote === 'yes' ? 'Ya' : myVote === 'abstain' ? 'Abstain' : 'Tidak'}</p>`
         : `<div class="row"><button class="btn-gold btn-sm" data-vote="${l.id}|yes">YA</button><button class="btn-ghost btn-sm" data-vote="${l.id}|abstain">ABSTAIN</button><button class="btn-danger btn-sm" data-vote="${l.id}|no">TIDAK</button></div>`) : ''}
       </div>`;
     }).join('') : '<p class="muted">Belum ada undang-undang. Jadilah pengusul pertama!</p>'}
+  </div>
+  <div class="panel"><h3>💰 ANGGARAN NEGARA</h3>
+    <p class="muted small">Diisulkan Menteri Ekonomi · voting parlemen 3 hari · dibayar kas negara · efek 7 hari.</p>
+    ${d.budgets?.length ? d.budgets.map((b) => {
+      const myVote = d.myBudgetVotes[b.id];
+      return `<div class="card"><h4>${BUDGET_LABEL[b.kind] || esc(b.kind)}</h4>
+      <p class="muted small">Pengusul: ${esc(b.proposer_name)} · ${b.amount} emas · ${esc(b.status)} ${b.status === 'voting' ? '· berakhir ' + fmtDate(b.ends_at) : ''}</p>
+      <div class="kv"><span class="k">Ya ${b.yes} · Tidak ${b.no}</span></div>
+      ${b.status === 'voting' ? (myVote ? `<p class="teal-text small">✓ Kamu memilih: ${myVote === 'yes' ? 'Ya' : 'Tidak'}</p>`
+        : `<div class="row"><button class="btn-gold btn-sm" data-bvote="${b.id}|yes">YA</button><button class="btn-danger btn-sm" data-bvote="${b.id}|no">TIDAK</button></div>`) : ''}
+      </div>`;
+    }).join('') : '<p class="muted">Belum ada anggaran yang diusulkan.</p>'}
+  </div>
+  <div class="panel"><h3>⚖️ PEMAKZULAN PRESIDEN</h3>
+    <p class="muted small">Hanya anggota parlemen · voting 3 hari · bila lolos, presiden dicopot sampai pemilu berikutnya.</p>
+    ${d.isMp ? `<button class="btn-danger btn-sm" id="btn-impeach">USULKAN PEMAKZULAN</button>` : '<p class="muted small">Kamu bukan anggota parlemen.</p>'}
+    ${d.impeachments?.length ? d.impeachments.map((im) => {
+      const myVote = d.myImpeachVotes[im.id];
+      return `<div class="card" style="margin-top:10px"><h4>Pemakzulan ${esc(im.president_name)}</h4>
+      <p class="muted small">Pengusul: ${esc(im.proposer_name)} · ${esc(im.status)} ${im.status === 'voting' ? '· berakhir ' + fmtDate(im.ends_at) : ''}</p>
+      <div class="kv"><span class="k">Ya ${im.yes} · Tidak ${im.no}</span></div>
+      ${im.status === 'voting' ? (myVote ? `<p class="teal-text small">✓ Kamu memilih: ${myVote === 'yes' ? 'Ya' : 'Tidak'}</p>`
+        : `<div class="row"><button class="btn-gold btn-sm" data-ivote="${im.id}|yes">YA</button><button class="btn-danger btn-sm" data-ivote="${im.id}|no">TIDAK</button></div>`) : ''}
+      </div>`;
+    }).join('') : ''}
   </div>`);
+  const lawHints = {
+    general: 'UU umum: pernyataan/aturan tanpa mengubah angka game.',
+    tax_income: `Tarif pajak penghasilan baru 1–5% (saat ini ${eff.taxIncome}%).`,
+    admin_pay: `Upah lowongan ADMIN baru 80–120% dari upah dasar (saat ini ${Math.round(eff.adminPayMult * 100)}%).`,
+    travel: `Tiket per perjalanan: 1 atau 2 (saat ini ${eff.travelTickets}).`,
+  };
+  $('#law-kind').onchange = () => {
+    const k = $('#law-kind').value;
+    $('#law-value-wrap').style.display = k === 'general' ? 'none' : '';
+    $('#law-hint').textContent = lawHints[k];
+  };
   $('#btn-law').onclick = async () => {
-    try { await post('/api/parliament/law', { title: $('#law-title').value.trim(), content: $('#law-content').value.trim() }); toast('UU diusulkan! Voting dibuka 7 hari.'); route(); }
+    try {
+      const kind = $('#law-kind').value;
+      const value = kind === 'general' ? undefined : Number($('#law-value').value);
+      await post('/api/parliament/law', { title: $('#law-title').value.trim(), content: $('#law-content').value.trim(), kind, value });
+      toast('UU diusulkan! Voting dibuka 7 hari.'); route();
+    }
     catch (e) { toast(e.message); }
   };
   $$('[data-vote]').forEach((b) => b.onclick = async () => {
     const [id, vote] = b.dataset.vote.split('|');
     try { await post('/api/parliament/vote', { law_id: Number(id), vote }); toast('Suaramu tercatat.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-bvote]').forEach((b) => b.onclick = async () => {
+    const [id, vote] = b.dataset.bvote.split('|');
+    try { await post(`/api/country/budget/${id}/vote`, { vote }); toast('Suaramu tercatat.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-ivote]').forEach((b) => b.onclick = async () => {
+    const [id, vote] = b.dataset.ivote.split('|');
+    try { await post(`/api/parliament/impeach/${id}/vote`, { vote }); toast('Suaramu tercatat.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-impeach')?.addEventListener('click', async () => {
+    if (!confirm('Usulkan pemakzulan presiden? Voting parlemen dibuka 3 hari. Bila lolos, presiden dicopot.')) return;
+    try { await post('/api/parliament/impeach', {}); toast('Pemakzulan diusulkan!'); route(); }
     catch (e) { toast(e.message); }
   });
 };
@@ -1781,6 +1919,7 @@ ROUTES.war = async (id) => {
         : !d.atFront ? `<p class="red-text"><b>TIDAK DI GARIS DEPAN</b> — Kamu harus berada di ${esc(w.region_name)} untuk menyerang.</p>
           <button class="btn-gold" onclick="location.hash='#/regions/${w.region_id}'">TERBANG KE SANA →</button>`
         : `<p class="muted small">Energi ${ME.citizen.energy}/100 · Senjata di inventaris dipakai sebagai amunisi (1 senjata per serangan).</p>
+          ${d.bonuses?.length ? `<p class="muted small">Bonus aktif: ${d.bonuses.map(esc).join(' · ')}</p>` : ''}
           <div class="row">
             <button class="btn-gold" data-attack="attacker|Senjata">SERANG SEBAGAI PENYERANG 🔥</button>
             <button class="btn-ghost" data-attack="defender|Senjata">BELAH SEBAGAI PEMBELA 🛡️</button>
@@ -1801,7 +1940,7 @@ ROUTES.war = async (id) => {
     <button class="btn-gold" onclick="location.hash='#/chat/war_${w.id}'">💬 Buka Obrolan Perang</button>`);
     $$('[data-attack]').forEach((b) => b.onclick = async () => {
       const [side, ammo] = b.dataset.attack.split('|');
-      try { const r = await post(`/api/wars/${w.id}/attack`, { side, ammo }); toast(`Seranganmu menimbulkan ${r.damage} kerusakan!`); await refreshMe(); route(); }
+      try { const r = await post(`/api/wars/${w.id}/attack`, { side, ammo }); toast(`Seranganmu menimbulkan ${r.damage} kerusakan!${r.bonuses?.length ? ' (' + r.bonuses.join(', ') + ')' : ''}`); await refreshMe(); route(); }
       catch (e) { toast(e.message); }
     });
     return;
@@ -2054,8 +2193,10 @@ ROUTES.chat = async (sub) => {
   $('#btn-send').onclick = send;
   $('#chat-text').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
   chatSince = 0;
+  chatRoom = room;
   await renderChatRoom(room);
-  chatTimer = setInterval(() => renderChatRoom(room), 5000);
+  // Polling hemat (Tahap 5 — lag): lewati polling saat tab tidak aktif.
+  chatTimer = setInterval(() => { if (!document.hidden) renderChatRoom(room); }, 5000);
 };
 
 // ---------- PESAN (DM) ----------
@@ -2112,6 +2253,31 @@ ROUTES.orgs = async () => {
       <button class="btn-gold" id="btn-org">DIRIKAN</button>
     </div>
   </div>
+  <div class="panel"><h3>🤝 PAKTA ANTAR ORGANISASI</h3>
+    <p class="muted small">Perjanjian Dagang: pajak penghasilan antar anggota kedua organisasi dipotong 50%. Pakta Pertahanan: anggota kedua organisasi +10% kerusakan perang. Pakta harus disetujui ketua kedua organisasi dan bisa dibubarkan kapan saja.</p>
+    ${data.pacts?.length ? data.pacts.map((p) => {
+      const label = p.kind === 'trade' ? 'Perjanjian Dagang' : 'Pakta Pertahanan';
+      const amLeader = p.org_a_leader_id === ME.citizen.id || p.org_b_leader_id === ME.citizen.id;
+      return `<div class="card"><h4>${label}</h4>
+      <p class="muted small">${esc(p.org_a_name)} ↔ ${esc(p.org_b_name)} · ${p.status === 'active' ? 'AKTIF' : 'menunggu persetujuan'}</p>
+      ${p.status === 'pending' && amLeader ? `<div class="row"><button class="btn-gold btn-sm" data-pact-accept="${p.id}">SETUJUI</button><button class="btn-danger btn-sm" data-pact-reject="${p.id}">TOLAK</button></div>` : ''}
+      ${p.status === 'active' && amLeader ? `<button class="btn-ghost btn-sm" data-pact-dissolve="${p.id}">Bubarkan Pakta</button>` : ''}
+      </div>`;
+    }).join('') : '<p class="muted">Belum ada pakta.</p>'}
+    ${(() => {
+      const myLedOrg = data.organizations.find((o) => o.id === data.myOrgId && o.leader_name === ME.citizen.username);
+      const canPropose = myLedOrg || data.myMinisterRole === 'foreign';
+      if (!canPropose) return '<p class="muted small">Hanya ketua organisasi atau Menteri Luar Negeri yang bisa mengusulkan pakta.</p>';
+      const fromOrg = myLedOrg || data.organizations[0];
+      if (!fromOrg) return '<p class="muted small">Belum ada organisasi.</p>';
+      const targets = data.organizations.filter((o) => o.id !== fromOrg.id);
+      if (!targets.length) return '<p class="muted small">Butuh minimal dua organisasi untuk berpakta.</p>';
+      return `<div class="card" style="margin-top:10px"><h4>USULKAN PAKTA — dari ${esc(fromOrg.name)}</h4>
+      <label>ORGANISASI TUJUAN<select id="pact-target">${targets.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select></label>
+      <label>JENIS PAKTA<select id="pact-kind"><option value="trade">Perjanjian Dagang (pajak antar anggota −50%)</option><option value="defense">Pakta Pertahanan (+10% kerusakan perang)</option></select></label>
+      <button class="btn-gold" id="btn-pact" data-from="${fromOrg.id}">USULKAN PAKTA</button></div>`;
+    })()}
+  </div>
   <div class="panel" id="org-list"><h3>🏛️ SEMUA ORGANISASI</h3>
     ${data.organizations.length ? data.organizations.map((o) => `
       <div class="card"><h4>${esc(o.name)} <span class="chip">${esc(o.tag)}</span></h4>
@@ -2134,6 +2300,27 @@ ROUTES.orgs = async () => {
     if (!confirm('Keluar dari organisasi ini?')) return;
     try { await post(`/api/orgs/${b.dataset.orgLeave}/leave`); toast('Kamu keluar dari organisasi.'); route(); }
     catch (e) { toast(e.message); }
+  });
+  $$('[data-pact-accept]').forEach((b) => b.onclick = async () => {
+    try { await post(`/api/orgs/pacts/${b.dataset.pactAccept}/accept`, {}); toast('Pakta disetujui — kini aktif!'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-pact-reject]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Tolak usulan pakta ini?')) return;
+    try { await post(`/api/orgs/pacts/${b.dataset.pactReject}/reject`, {}); toast('Usulan pakta ditolak.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-pact-dissolve]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Bubarkan pakta ini? Bonusnya langsung hilang untuk kedua organisasi.')) return;
+    try { await post(`/api/orgs/pacts/${b.dataset.pactDissolve}/dissolve`, {}); toast('Pakta dibubarkan.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-pact')?.addEventListener('click', async () => {
+    try {
+      const from = Number($('#btn-pact').dataset.from);
+      await post(`/api/orgs/${from}/pact`, { target_org_id: Number($('#pact-target').value), kind: $('#pact-kind').value });
+      toast('Usulan pakta dikirim ke ketua organisasi tujuan.'); route();
+    } catch (e) { toast(e.message); }
   });
   $$('[data-filter]').forEach((b) => b.onclick = () => {
     $$('#org-list .card').forEach((card) => {
@@ -2215,7 +2402,7 @@ ROUTES.book = async () => {
     3) Naik level lewat XP dari shift, perang, misi, dan pasokan.<br>
     4) Gabung partai / perusahaan / negara — lalu kuasai dunia.</p></div>
   <div class="panel"><h3>💰 EKONOMI</h3>
-    <p>Pasar lokal memakai USD, Pasar Global memakai emas. Pajak penghasilan 2% saat menjual. Valas: 1 emas dicetak jadi 10 USD. Mata uang tidak bisa ditukar langsung — harus lewat emas.</p></div>
+    <p>Pasar lokal memakai USD, Pasar Global memakai emas. Pajak penghasilan saat menjual sesuai UU yang berlaku (lihat halaman Parlemen). Valas: 1 emas dicetak jadi 10 USD. Mata uang tidak bisa ditukar langsung — harus lewat emas.</p></div>
   <div class="panel"><h3>🏛️ POLITIK</h3>
     <p>Dirikan partai (Level 10 + 50 emas). Menangkan pemilu parlemen untuk merebut 60 kursi (mayoritas 31). Presiden dipilih warga Level 5+ yang sudah 3 hari menjadi warga.</p></div>
   <div class="panel"><h3>⚔️ PERANG</h3>

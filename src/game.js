@@ -21,10 +21,12 @@ export function fatigueMult(fatigue) {
 // Gaji shift: 100 energi = 1 shift penuh.
 // Gaji dasar per 10 energi 4,80 USD + bonus Ekonomi (0,30 USD per level Ekonomi per 10 energi).
 // Contoh referensi: shift penuh ~48 USD sebelum pajak.
-export function shiftSalary(baseSalary, economyAttr, fatigue) {
+// taxRate bisa di-override tarif UU yang berlaku (country.tax_income / 100);
+// default = INCOME_TAX (2%) bila pemanggil tidak memberi tarif.
+export function shiftSalary(baseSalary, economyAttr, fatigue, taxRate = INCOME_TAX) {
   const mult = fatigueMult(fatigue);
   const gross = baseSalary * (1 + 0.03 * economyAttr) * mult;
-  return { gross, net: gross * (1 - INCOME_TAX), tax: gross * INCOME_TAX };
+  return { gross, net: gross * (1 - taxRate), tax: gross * taxRate };
 }
 
 // Latihan: biaya = level atribut saat ini + 1 emas.
@@ -205,3 +207,62 @@ export const CONVOY_BUILDINGS = [
   { type: 'industry', name: 'Gudang Industri', desc: '+10% produksi perusahaan' },
   { type: 'military', name: 'Pos Militer', desc: '+10% kerusakan perang' },
 ];
+
+// --- Undang-undang bermuatan mekanik (Tahap 5 — BUG-9) ---
+// Sebelum Tahap 5, UU yang disahkan hanya berubah status jadi 'executed'
+// tanpa efek apa pun (teater). Sekarang tiap UU punya JENIS + NILAI, dan
+// saat lolos voting, tick menerapkan efeknya ke baris country (satu-satunya
+// sumber kebenaran tarif/angka negara — bukan hardcode di game.js).
+// 'general' = UU umum tanpa efek mekanik (tetap boleh diusulkan; UI wajib
+// jujur menyebutnya tidak mengubah angka game).
+// value disimpan apa adanya di laws.value; validasi rentang di api-civic.js.
+export const LAW_KINDS = {
+  tax_income: { label: 'Ubah Pajak Penghasilan', hint: 'Tarif baru 1–5% (saat ini lihat halaman Negara). Berlaku untuk penjualan pasar + gaji.', min: 1, max: 5 },
+  admin_pay: { label: 'Ubah Upah Lowongan ADMIN', hint: 'Upah baru 80–120% dari upah dasar (100% = normal). Berlaku untuk semua lowongan ADMIN.', min: 80, max: 120 },
+  travel: { label: 'Ubah Biaya Perjalanan', hint: 'Tiket yang dibutuhkan per perjalanan: 1 atau 2.', min: 1, max: 2 },
+  general: { label: 'UU Umum (tanpa efek angka)', hint: 'Pernyataan/aturan umum — tidak mengubah angka game.', min: null, max: null },
+};
+// Kalimat efek untuk notifikasi + arsip UU (dipakai tick saat UU disahkan).
+export function lawEffectText(kind, value) {
+  if (kind === 'tax_income') return `Pajak penghasilan kini ${value}%.`;
+  if (kind === 'admin_pay') return `Upah lowongan ADMIN kini ${value}% dari upah dasar.`;
+  if (kind === 'travel') return `Perjalanan kini butuh ${value} Tiket.`;
+  return 'UU umum — tidak mengubah angka game.';
+}
+
+// --- Anggaran negara (Tahap 5) — wewenang Menteri Ekonomi ---
+// Menteri Ekonomi mengusulkan anggaran; parlemen voting 3 hari; bila lolos,
+// biayanya dipotong dari kas negara dan efeknya berlaku 7 hari. Satu
+// anggaran aktif dalam satu waktu (yang baru menggantikan yang lama).
+export const BUDGET_KINDS = {
+  claim: { label: 'Pasokan Harian +2 Emas', desc: 'Klaim harian memberi +2 emas tambahan (7 emas) selama 7 hari.', min: 50, max: 500 },
+  train: { label: 'Latihan 10% Lebih Murah', desc: 'Biaya latihan semua warga 10% lebih murah selama 7 hari.', min: 50, max: 500 },
+  war: { label: 'Dana Perang (+10% Kerusakan)', desc: 'Serangan garis depan semua warga +10% kerusakan selama 7 hari.', min: 50, max: 500 },
+};
+export const BUDGET_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+export const BUDGET_VOTE_DAYS = 3;
+
+// --- Mobilisasi & hari libur (Tahap 5) — wewenang menteri ---
+// Mobilisasi (Menteri Pertahanan): 100 emas kas negara, kerusakan perang
+// semua warga +10% selama 24 jam. Hari libur (Menteri Dalam Negeri):
+// 50 emas kas negara, semua warga +20 energi (maks batas masing-masing),
+// sekali per 24 jam.
+export const MOBILIZE_COST_GOLD = 100;
+export const MOBILIZE_DURATION_MS = 24 * 60 * 60 * 1000;
+export const MOBILIZE_DAMAGE_MULT = 1.1;
+export const HOLIDAY_COST_GOLD = 50;
+export const HOLIDAY_ENERGY = 20;
+export const HOLIDAY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+// --- Pakta antar organisasi (Tahap 5 — diplomasi tanpa multi-negara) ---
+// Dua organisasi bisa mengikat pakta (harus disetujui ketua kedua belah
+// pihak). Perjanjian dagang: pajak penghasilan jual-beli antar anggota
+// kedua organisasi dipotong setengah. Pakta pertahanan: anggota kedua
+// organisasi mendapat +10% kerusakan perang.
+export const PACT_KINDS = {
+  trade: { label: 'Perjanjian Dagang', desc: 'Pajak penghasilan antar anggota kedua organisasi dipotong 50%.' },
+  defense: { label: 'Pakta Pertahanan', desc: 'Anggota kedua organisasi +10% kerusakan perang.' },
+};
+export const TRADE_PACT_TAX_MULT = 0.5;
+export const DEFENSE_PACT_DAMAGE_MULT = 1.1;
+export const BUDGET_WAR_DAMAGE_MULT = 1.1;

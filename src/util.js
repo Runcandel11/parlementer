@@ -18,14 +18,31 @@ if (!process.env.JWT_SECRET) {
 // jalan membuat akun admin baru lewat registrasi sejak pemberian admin
 // berbasis email dicabut (27 Nov 2026 — Khalid sudah menjadi admin).
 // Bila env var kosong, registrasi TIDAK BISA membuat admin sama sekali.
+// Peringatan saat kode tidak diset hanya ditulis di luar production
+// (Tahap 5): di production, "tidak diset" adalah kondisi aman yang
+// diinginkan (Khalid sudah admin), jadi memperingatkannya di setiap cold
+// start serverless hanya membanjiri log. Statusnya tetap bisa dilihat
+// admin lewat GET /api/admin/status (bootstrapActive).
 export const ADMIN_BOOTSTRAP_CODE = process.env.ADMIN_BOOTSTRAP_CODE || '';
-if (ADMIN_BOOTSTRAP_CODE) {
+const bootstrapConfigured = Boolean(ADMIN_BOOTSTRAP_CODE);
+if (bootstrapConfigured) {
   console.log('[security] ADMIN_BOOTSTRAP_CODE aktif — registrasi dengan kode bootstrap yang benar akan menjadi admin.');
-} else {
+} else if (process.env.NODE_ENV !== 'production') {
   console.warn('[security] PERINGATAN: ADMIN_BOOTSTRAP_CODE tidak diset — tidak ada jalan darurat membuat admin lewat registrasi.');
 }
+export function bootstrapActive() {
+  return bootstrapConfigured;
+}
 export function bootstrapCodeMatches(code) {
-  if (!ADMIN_BOOTSTRAP_CODE || typeof code !== 'string' || !code) return false;
+  if (!ADMIN_BOOTSTRAP_CODE) {
+    // Sinyal nyata (bukan noise): ada yang mencoba memakai jalan darurat
+    // padahal tidak dikonfigurasi. Tetap ditolak.
+    if (typeof code === 'string' && code) {
+      console.warn('[security] Registrasi memakai kode bootstrap padahal ADMIN_BOOTSTRAP_CODE tidak diset — ditolak.');
+    }
+    return false;
+  }
+  if (typeof code !== 'string' || !code) return false;
   const a = Buffer.from(code);
   const b = Buffer.from(ADMIN_BOOTSTRAP_CODE);
   return a.length === b.length && crypto.timingSafeEqual(a, b);

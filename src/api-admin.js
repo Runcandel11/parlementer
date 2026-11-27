@@ -5,7 +5,7 @@
 // benar (lihat api-core.js), atau migrasi initDb yang menjaga akun admin
 // Khalid yang sudah ada (koboijuniorkhalid@gmail.com).
 import { sql, one, run, tx, convoyBuildings } from './db.js';
-import { authRequired, publicId } from './util.js';
+import { authRequired, publicId, bootstrapActive } from './util.js';
 import { checkRateLimit } from './rate-limit.js';
 import { energyCapFor } from './game.js';
 
@@ -76,6 +76,15 @@ export function registerAdmin(app) {
     }
     next();
   };
+
+  // ---------- STATUS ADMIN ---------- (Tahap 5)
+  // Apakah jalan darurat bootstrap (ADMIN_BOOTSTRAP_CODE) aktif. Nilai
+  // kode TIDAK PERNAH dikirim — hanya boolean. Sebelumnya status ini hanya
+  // terlihat lewat peringatan berisik di log server; kini admin melihatnya
+  // di Panel Admin.
+  app.get('/api/admin/status', authRequired, admin, r(async (req, res) => {
+    res.json({ bootstrapActive: bootstrapActive() });
+  }));
 
   // ---------- DAFTAR PEMAIN ----------
   app.get('/api/admin/players', authRequired, admin, r(async (req, res) => {

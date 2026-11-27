@@ -8,8 +8,9 @@ import {
   getUserIdFromReq, bootstrapCodeMatches,
 } from './util.js';
 import { dbRateLimit } from './rate-limit.js';
+import { getCountryRow, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive } from './api-civic.js';
 import {
-  WA_TOPUP_URL, MINT_RATE, INCOME_TAX, IMPORT_TAX, MIN_OFFER_QTY,
+  WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT,
   xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, foodEnergy,
   energyCapFor, DAILY_MISSIONS, CHRONICLE,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
@@ -217,7 +218,7 @@ export function registerCore(app) {
   const MAX_PASSWORD_BYTES = 72; // bcrypt memotong password di atas 72 byte
 
   // Registrasi dibatasi 20/IP/24 jam (anti multi-akun massal, DB-backed).
-  // Tes e2e mendaftar 12 akun dari 127.0.0.1 — di bawah batas ini.
+  // Tes e2e mendaftar 15 akun dari 127.0.0.1 — di bawah batas ini.
   const registerRateLimit = dbRateLimit({
     keyFn: (req) => 'register:' + (req.ip || 'unknown'),
     max: 20,
@@ -262,10 +263,19 @@ export function registerCore(app) {
       const user = await t.run(
         'INSERT INTO users (email, username, pass_hash, referred_by, referral_code, premium_until, is_admin, created_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id',
         [email.toLowerCase(), username, hash, referredBy, myCode, 0, isAdmin, now]);
+      // Wilayah awal ACAK dan merata dari semua region yang ada (Tahap 5,
+      // perbaikan bug 2026-11-27: sebelumnya hardcode region 1 = Kepulauan
+      // Riau, sehingga SEMUA pemain baru lahir di sana). Query mengambil
+      // region yang ada saat ini — bila region bertambah/berkurang, peluang
+      // tetap merata tanpa hardcode jumlah. region_id dan home_region_id
+      // diisi region acak yang sama. Fallback 1 hanya bila tabel regions
+      // kosong (tidak pernah terjadi: seed selalu membuat 17 region).
+      const startRegion = await t.one('SELECT id FROM regions ORDER BY RANDOM() LIMIT 1');
+      const startRegionId = startRegion ? startRegion.id : 1;
       const citizen = await t.run(
         `INSERT INTO citizens (user_id, level, xp, energy, energy_updated_at, gold, usd, region_id, home_region_id, created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
-        [user.id, 1, 0, 100, now, 50, 500, 1, 1, now]);
+        [user.id, 1, 0, 100, now, 50, 500, startRegionId, startRegionId, now]);
       // Paket awal: 3 Makanan T1, 3 Senjata T1, 3 Tiket T1.
       for (const name of ['Makanan', 'Senjata', 'Tiket']) {
         const com = await t.one('SELECT id FROM commodities WHERE name = ?', [name]);
@@ -353,10 +363,16 @@ export function registerCore(app) {
     // ini supaya yang ditampilkan sama dengan yang dibebankan server.
     const buildings = await convoyBuildings(c.id);
     const energyCap = energyCapFor(c.level, isPremium, buildings.has('health'));
+    // Anggaran latihan (Tahap 5): bila anggaran 'train' sedang berlaku,
+    // biaya latihan 10% lebih murah lagi (setelah diskon Sekolah Keliling).
+    const country = await getCountryRow({ one });
+    const budgetTrain = budgetActive(country) === 'train';
     const trainCosts = {};
     for (const [key, col] of [['strength', 'attr_str'], ['strategy', 'attr_edu'], ['charisma', 'attr_eco']]) {
       const base = trainCost(c[col]);
-      trainCosts[key] = buildings.has('education') ? trainCostDiscounted(base) : base;
+      let cost = buildings.has('education') ? trainCostDiscounted(base) : base;
+      if (budgetTrain) cost = Math.max(1, Math.round(cost * 0.9));
+      trainCosts[key] = cost;
     }
     const refUses = await one('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?', [c.user_id]);
     const refPaid = await one("SELECT COUNT(*) AS n FROM referral_pending WHERE referrer_id = ? AND status = 'paid'", [c.user_id]);
@@ -386,16 +402,20 @@ export function registerCore(app) {
     const today = todayStr();
     // Atomik: kunci baris warga + UPDATE bersyarat (last_claim_date <> hari
     // ini) + cek changes — dua request paralel, hanya satu yang berhasil.
+    // Anggaran pasokan (Tahap 5): bila anggaran 'claim' sedang berlaku,
+    // klaim harian memberi +2 emas tambahan.
     const locked = await tx(async (t) => {
       const row = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
       if (row.last_claim_date === today) throw Object.assign(new Error('Pasokan hari ini sudah diambil. Kembali besok.'), { status: 400 });
-      const upd = await t.run('UPDATE citizens SET gold = gold + 5, usd = usd + 50, last_claim_date = ? WHERE id = ? AND last_claim_date <> ?', [today, req.citizen.id, today]);
+      const country = await getCountryRow(t);
+      const bonus = budgetActive(country) === 'claim' ? 2 : 0;
+      const upd = await t.run('UPDATE citizens SET gold = gold + ?, usd = usd + 50, last_claim_date = ? WHERE id = ? AND last_claim_date <> ?', [5 + bonus, today, req.citizen.id, today]);
       if (!upd.changes) throw Object.assign(new Error('Pasokan hari ini sudah diambil. Kembali besok.'), { status: 400 });
-      return row;
+      return { row, bonus };
     });
-    await addXp(locked, 2);
-    await chronicleDone(locked, 'claim');
-    res.json({ ok: true, reward: { gold: 5, usd: 50, xp: 2 } });
+    await addXp(locked.row, 2);
+    await chronicleDone(locked.row, 'claim');
+    res.json({ ok: true, reward: { gold: 5 + locked.bonus, usd: 50, xp: 2 }, budgetBonus: locked.bonus > 0 });
   }));
 
   app.post('/api/train', authRequired, citizenRequired, r(async (req, res) => {
@@ -409,9 +429,13 @@ export function registerCore(app) {
       // Bonus konvoi (Tahap 3, BUG-7): Sekolah Keliling aktif -> latihan
       // 10% lebih murah (minimal 1 emas). Biaya yang ditampilkan di
       // dashboard memakai angka yang sama (lihat /api/me: trainCosts).
+      // Anggaran latihan (Tahap 5): anggaran 'train' yang berlaku memotong
+      // 10% lagi (setelah diskon konvoi), minimal 1 emas.
       const buildings = await convoyBuildings(req.citizen.id, t);
       const baseCost = trainCost(row[col]);
-      const cost = buildings.has('education') ? trainCostDiscounted(baseCost) : baseCost;
+      let cost = buildings.has('education') ? trainCostDiscounted(baseCost) : baseCost;
+      const country = await getCountryRow(t);
+      if (budgetActive(country) === 'train') cost = Math.max(1, Math.round(cost * 0.9));
       const upd = await t.run(`UPDATE citizens SET gold = gold - ?, ${col} = ${col} + 1 WHERE id = ? AND gold >= ?`, [cost, req.citizen.id, cost]);
       if (!upd.changes) throw Object.assign(new Error(`Butuh ${cost} emas untuk latihan ini.`), { status: 400 });
       return { row, cost };
@@ -721,7 +745,14 @@ export function registerCore(app) {
        JOIN regions r ON r.id = j.region_id WHERE ${where} ORDER BY ${order}`,
       params);
     const stats = await one('SELECT COUNT(*) AS open, SUM(seats - seats_taken) AS seats, MAX(salary) AS best FROM jobs WHERE seats_taken < seats');
-    res.json({ jobs: rows, stats });
+    // Upah ADMIN yang berlaku (Tahap 5): UU upah ADMIN mengubah jumlah
+    // bahan mentah per shift (pengali admin_pay_mult). Frontend menampilkan
+    // effectiveQty agar yang terlihat sama dengan yang diterima.
+    const adminPayMult = await getAdminPayMult({ one });
+    const jobs = rows.map((j) => j.salary_type === 'goods'
+      ? { ...j, effectiveQty: Math.max(1, Math.floor((j.pay_qty || 0) * adminPayMult)) }
+      : j);
+    res.json({ jobs, stats, adminPayMult });
   }));
 
   app.post('/api/jobs/apply', authRequired, citizenRequired, r(async (req, res) => {
@@ -759,7 +790,12 @@ export function registerCore(app) {
     const c = await loadCitizen(req.userId);
     if (!c.job_id) return res.status(400).json({ error: 'Kamu belum punya pekerjaan. Lamar dulu di Kantor Ketenagakerjaan.' });
     const job = await one('SELECT * FROM jobs WHERE id = ?', [c.job_id]);
-    const { gross, net } = shiftSalary(job.salary, c.attr_eco, c.fatigue);
+    // Tarif pajak + pengali upah ADMIN yang berlaku (Tahap 5 — dari UU yang
+    // disahkan, bukan hardcode). Gaji tetap dipotong tarif UU; lowongan
+    // ADMIN dibayar bahan mentah × pengali UU (tanpa pajak).
+    const taxRate = await getIncomeTaxRate({ one });
+    const adminPayMult = await getAdminPayMult({ one });
+    const { gross, net } = shiftSalary(job.salary, c.attr_eco, c.fatigue, taxRate);
     // Pengurang energi atomik (dipakai ketiga jenis gaji): kunci baris warga,
     // potong 100 energi hanya bila masih >= 100 (cek changes). Dua shift
     // paralel: yang kedua gagal dengan 400, energi tidak pernah negatif.
@@ -774,10 +810,11 @@ export function registerCore(app) {
     let goodsNote = '';
     if (job.salary_type === 'goods') {
       // Lowongan ADMIN: dibayar BAHAN MENTAH, bukan uang (tanpa pajak).
-      // Jumlah dipengaruhi kelelahan seperti gaji (×0,75 / ×0,5).
+      // Jumlah dipengaruhi kelelahan seperti gaji (×0,75 / ×0,5) dan
+      // pengali upah ADMIN dari UU yang berlaku (Tahap 5).
       const com = await one('SELECT * FROM commodities WHERE name = ?', [job.resource]);
       if (!com) throw Object.assign(new Error('Bahan upah lowongan ini tidak dikenal.'), { status: 500 });
-      const qty = Math.max(1, Math.floor((job.pay_qty || 0) * fatigueMult(c.fatigue)));
+      const qty = Math.max(1, Math.floor((job.pay_qty || 0) * fatigueMult(c.fatigue) * adminPayMult));
       const usdValue = Math.round(qty * com.ref_usd * 100) / 100;
       await tx(async (t) => {
         await spendEnergy(t);
@@ -810,7 +847,7 @@ export function registerCore(app) {
     });
     await addXp(c, xpGainForShift());
     await chronicleDone(c, 'shift');
-    res.json({ ok: true, gross, net, tax: gross * INCOME_TAX });
+    res.json({ ok: true, gross, net, tax: gross * taxRate });
   }));
 
   // ---------- PERUSAHAAN ----------
@@ -840,9 +877,13 @@ export function registerCore(app) {
       const upd = await t.run('UPDATE citizens SET gold = gold - ? WHERE id = ? AND gold >= ?', [def.cost, c.id, def.cost]);
       if (!upd.changes) throw Object.assign(new Error(`Mendirikan ${def.name} butuh ${def.cost} emas.`), { status: 400 });
       // Lowongan default perusahaan baru (1 kursi, gaji 40 USD).
+      // Urutan nilai HARUS cocok dengan kolom: seats_taken=0, region_id
+      // = wilayah pemilik (pernah tertukar: seats_taken terisi region_id
+      // warga sehingga CHECK seats_taken<=seats gagal bila region > 1 —
+      // tersembunyi selama semua pendiri lahir di region 1).
       await t.run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, level_min, tier, seats, seats_taken, region_id, description, created_at)
-        VALUES (?,0,?,?,?,?,1,1,?,0,?,?) RETURNING id`,
-        [res2.id, `Pekerja ${def.name}`, 40, 'fixed', 1, c.region_id, 'Lowongan dari perusahaan milik warga.', Date.now()]);
+        VALUES (?,0,?,?,?,1,1,1,0,?,?,?) RETURNING id`,
+        [res2.id, `Pekerja ${def.name}`, 40, 'fixed', c.region_id, 'Lowongan dari perusahaan milik warga.', Date.now()]);
       return res2.id;
     });
     await chronicleDone(c, 'company');
@@ -856,7 +897,7 @@ export function registerCore(app) {
     const { title, salary, salary_type, seats } = req.body || {};
     if (!title || !salary || salary <= 0) return res.status(400).json({ error: 'Judul dan gaji wajib diisi.' });
     const j = await run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, level_min, tier, seats, seats_taken, region_id, description, created_at)
-      VALUES (?,0,?,?,?,?,1,1,?,?,0,?,?) RETURNING id`,
+      VALUES (?,0,?,?,?,1,1,?,0,?,?,?) RETURNING id`,
       [co.id, title.slice(0, 80), Number(salary), salary_type === 'share' ? 'share' : 'fixed', Math.max(1, Math.min(20, Number(seats) || 1)), co.region_id, '', Date.now()]);
     res.json({ ok: true, jobId: j.id });
   }));
@@ -905,6 +946,10 @@ export function registerCore(app) {
       scope, commodities: coms.map((c) => ({ ...c, best: bestMap[c.id]?.best ?? null, offers: bestMap[c.id]?.n ?? 0 })),
       stats: { offers: Number(stats.offers), tx: Number(txStats.tx), units: Number(txStats.units), turnover: Number(txStats.turnover) },
       offers, mine, recentTx, buyOrders, myBuyOrders,
+      // Tarif pajak penghasilan yang berlaku saat ini (Tahap 5 — dari UU
+      // yang disahkan, bukan hardcode 2%). Nilai DB langsung (bukan
+      // tarif/100×100) agar eksak, tanpa galat floating point.
+      taxRate: Number((await getCountryRow({ one })).tax_income),
     });
   }));
 
@@ -957,19 +1002,25 @@ export function registerCore(app) {
       const currency = offer.scope === 'global' ? 'gold' : 'usd';
       const unitPrice = offer.price * (offer.scope === 'global' ? (1 + IMPORT_TAX) : 1);
       const total = unitPrice * q;
-      const sellerReceives = offer.price * q * (1 - INCOME_TAX);
+      // Tarif pajak penghasilan yang berlaku (Tahap 5 — dari UU yang
+      // disahkan). Perjanjian dagang aktif antara organisasi pembeli &
+      // penjual memotong pajak setengah.
+      let taxRate = await getIncomeTaxRate(t);
+      const pactDiscount = await hasTradePact(t, buyerId, sellerId);
+      if (pactDiscount) taxRate *= TRADE_PACT_TAX_MULT;
+      const sellerReceives = offer.price * q * (1 - taxRate);
       const pay = await t.run(`UPDATE citizens SET ${currency} = ${currency} - ? WHERE id = ? AND ${currency} >= ?`, [total, buyer.id, total]);
       if (!pay.changes) throw Object.assign(new Error(`Saldo ${currency === 'gold' ? 'emas' : 'USD'} tidak cukup.`), { status: 400 });
       await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [sellerReceives, seller.id]);
       // Tahap 4 (BUG-8): pajak masuk kas negara, bukan menguap.
-      // Lokal (USD): 2% dari harga jual. Global (emas): 2% pajak penjual
+      // Lokal (USD): pajak dari harga jual. Global (emas): pajak penjual
       // + 2% pajak impor yang dibayar pembeli.
       const gross = offer.price * q;
       if (offer.scope === 'global') {
-        await recordTreasury(t, 'gold', gross * INCOME_TAX + gross * IMPORT_TAX,
+        await recordTreasury(t, 'gold', gross * taxRate + gross * IMPORT_TAX,
           `Pajak penjualan ${q} unit (global)`);
       } else {
-        await recordTreasury(t, 'usd', gross * INCOME_TAX,
+        await recordTreasury(t, 'usd', gross * taxRate,
           `Pajak penjualan ${q} unit (lokal)`);
       }
       if (offer.qty === q) {
@@ -1079,7 +1130,11 @@ export function registerCore(app) {
       if (!ok) throw Object.assign(new Error('Jumlah di inventaris tidak mencukupi.'), { status: 400 });
       const currency = order.scope === 'global' ? 'gold' : 'usd';
       const gross = order.price * q;
-      const sellerReceives = gross * (1 - INCOME_TAX);
+      // Tarif pajak penghasilan yang berlaku (Tahap 5 — dari UU yang
+      // disahkan) + diskon perjanjian dagang antar organisasi.
+      let taxRate = await getIncomeTaxRate(t);
+      if (await hasTradePact(t, buyerId, sellerId)) taxRate *= TRADE_PACT_TAX_MULT;
+      const sellerReceives = gross * (1 - taxRate);
       await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [sellerReceives, seller.id]);
       // Dana pembeli sudah dikunci saat order dipasang — tidak ada tagihan lagi.
       const upd = await t.run('UPDATE market_buy_orders SET qty_filled = qty_filled + ? WHERE id = ? AND qty_filled + ? <= qty', [q, order.id, q]);
@@ -1092,8 +1147,8 @@ export function registerCore(app) {
       await addItem(buyer.id, order.commodity_id, order.tier, q, t);
       await t.run('INSERT INTO market_tx (buyer_id, seller_id, scope, commodity_id, tier, qty, price_each, total, created_at) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id',
         [buyer.id, seller.id, order.scope, order.commodity_id, order.tier, q, order.price, gross, Date.now()]);
-      // Pajak 2% -> kas negara (BUG-8).
-      await recordTreasury(t, currency, gross * INCOME_TAX, `Pajak penjualan ${q} unit via order beli`);
+      // Pajak -> kas negara (BUG-8), dengan tarif yang berlaku.
+      await recordTreasury(t, currency, gross * taxRate, `Pajak penjualan ${q} unit via order beli`);
       await t.run('UPDATE citizens SET purchases = purchases + 1 WHERE id = ?', [buyer.id]);
       await checkWashTrade(t, buyer.id, seller.id, order.commodity_id);
       return { total: gross, sellerReceives, currency, filled: order.qty_filled + q, qty: order.qty };
@@ -1256,7 +1311,10 @@ export function registerCore(app) {
     if (!reg) return res.status(404).json({ error: 'Wilayah tidak ditemukan.' });
     const war = await one("SELECT * FROM wars WHERE region_id = ? AND status = 'active' ORDER BY created_at DESC", [reg.id]);
     const mySupport = await one('SELECT * FROM war_support WHERE region_id = ? AND citizen_id = ?', [reg.id, req.citizen.id]);
-    res.json({ region: reg, war, mySupport: !!mySupport, mine: req.citizen.region_id === reg.id, home: req.citizen.home_region_id === reg.id });
+    // Angka negara yang berlaku (Tahap 5): biaya perjalanan + tarif pajak
+    // — halaman wilayah menampilkannya dinamis, bukan hardcode.
+    const country = await getCountryRow({ one });
+    res.json({ region: reg, war, mySupport: !!mySupport, mine: req.citizen.region_id === reg.id, home: req.citizen.home_region_id === reg.id, travelTickets: Number(country.travel_tickets) || 1, taxIncome: Number(country.tax_income) });
   }));
 
   app.post('/api/regions/travel', authRequired, citizenRequired, r(async (req, res) => {
@@ -1264,17 +1322,24 @@ export function registerCore(app) {
     const c = req.citizen;
     const target = await one('SELECT * FROM regions WHERE id = ?', [region_id]);
     if (!target) return res.status(404).json({ error: 'Wilayah tidak ditemukan.' });
+    // Biaya perjalanan dari UU yang berlaku (Tahap 5): 1 atau 2 Tiket.
+    const ticketsNeeded = await getTravelTickets({ one });
     // Atomik: kunci baris warga, pakai tiket + pindah di dalam tx yang sama.
     await tx(async (t) => {
       const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
       if (locked.region_id === target.id) throw Object.assign(new Error('Kamu sudah berada di wilayah ini.'), { status: 400 });
-      // Tiket: pakai T1 dulu, lalu tingkat lebih tinggi.
+      // Tiket: pakai T1 dulu, lalu tingkat lebih tinggi — sebanyak yang
+      // dibutuhkan UU saat ini (1 atau 2).
       const ticket = await t.one('SELECT id FROM commodities WHERE name = ?', ['Tiket']);
-      let used = false;
-      for (let tier = 1; tier <= 5 && !used; tier++) {
-        used = await takeItem(locked.id, ticket.id, tier, 1, t);
+      let used = 0;
+      for (let tier = 1; tier <= 5 && used < ticketsNeeded; tier++) {
+        let remaining = ticketsNeeded - used;
+        while (remaining > 0) {
+          if (await takeItem(locked.id, ticket.id, tier, 1, t)) { used++; remaining--; }
+          else break;
+        }
       }
-      if (!used) throw Object.assign(new Error('Butuh 1 Tiket untuk bepergian. Beli di pasar.'), { status: 400 });
+      if (used < ticketsNeeded) throw Object.assign(new Error(`Butuh ${ticketsNeeded} Tiket untuk bepergian. Beli di pasar.`), { status: 400 });
       await t.run('UPDATE citizens SET region_id = ? WHERE id = ?', [target.id, locked.id]);
     });
     await chronicleDone(c, 'travel');
@@ -1356,10 +1421,21 @@ export function registerCore(app) {
     res.json({ packages: SHOP_PACKAGES, premium: SHOP_PREMIUM, perks: PREMIUM_PERKS, waUrl: WA_TOPUP_URL });
   }));
 
+  // Cache /api/world 30 detik (Tahap 5 — lag): isinya (hari, populasi,
+  // jumlah wilayah) berubah lambat — populasi hanya berubah saat ada
+  // pendaftaran/perjalanan. Di serverless, cache per instance ini
+  // menghemat 3 query DB di setiap panggilan saat instance masih hangat.
+  // Data per pemain (ME, chat) TIDAK di-cache — hanya data dunia bersama.
+  let worldCache = null;
+  let worldCacheAt = 0;
   app.get('/api/world', r(async (req, res) => {
+    const now = Date.now();
+    if (worldCache && now - worldCacheAt < 30 * 1000) return res.json(worldCache);
     const world = await one('SELECT * FROM world WHERE id = 1');
     const population = await one('SELECT COUNT(*) AS n FROM citizens');
     const regions = await one('SELECT COUNT(*) AS n FROM regions');
-    res.json({ day: world?.day || 1, population: Number(population.n), regions: Number(regions.n), countries: 1 });
+    worldCache = { day: world?.day || 1, population: Number(population.n), regions: Number(regions.n), countries: 1 };
+    worldCacheAt = now;
+    res.json(worldCache);
   }));
 }

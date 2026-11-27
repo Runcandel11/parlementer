@@ -39,7 +39,7 @@ async function main() {
   await dropAll();
 
   // initDb diimpor SETELAH DATABASE_URL disetel (db.js membaca env saat import).
-  const { initDb } = await import('../src/db.js');
+  const { initDb, one } = await import('../src/db.js');
 
   console.log('\n[1] initDb idempotent');
   await initDb();
@@ -164,6 +164,32 @@ async function main() {
   await initDb();
   const t4cols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE (table_name = 'country' AND column_name = 'treasury_usd') OR (table_name = 'citizens' AND column_name = 'energy_updated_at')");
   check('Migrasi: kolom Tahap 4 ditambah kembali', Number(t4cols2.rows[0].n) === 2);
+
+  console.log('\n[8] Tabel + kolom Tahap 5 + seed pengumuman + parser int8');
+  const t5tables = await pool.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'org_pacts')");
+  check('5 tabel Tahap 5 ada', t5tables.rowCount === 5, `n=${t5tables.rowCount}`);
+  const t5cols = await pool.query("SELECT table_name, column_name FROM information_schema.columns WHERE (table_name = 'country' AND column_name IN ('admin_pay_mult', 'travel_tickets', 'mobilization_until', 'budget_kind', 'budget_until', 'holiday_at')) OR (table_name = 'laws' AND column_name IN ('kind', 'value', 'effect_applied'))");
+  check('9 kolom Tahap 5 ada (6 negara + 3 UU)', t5cols.rowCount === 9, `n=${t5cols.rowCount}`);
+  const t5checks = await pool.query("SELECT conname FROM pg_constraint WHERE contype = 'c' AND conname IN ('ck_country_tax_income_range', 'ck_country_admin_pay_mult_range', 'ck_country_travel_tickets', 'ck_budgets_amount_range')");
+  check('4 CHECK Tahap 5 terpasang (pajak/upah/tiket/anggaran)', t5checks.rowCount === 4, `n=${t5checks.rowCount}`);
+  // Tabel announcements tidak punya kolom num (nomor dihitung API dari
+  // urutan created_at) — cari Update #2 lewat judulnya.
+  const ann2 = await pool.query("SELECT title, body FROM announcements WHERE title LIKE 'UU Kini Berpengaruh%'");
+  check('Seed pengumuman Update #2 ada', ann2.rowCount === 1, `n=${ann2.rowCount}`);
+  check('Update #2 berisi wilayah acak + Invalid Date + lag', /acak/.test(ann2.rows[0]?.body || '') && /Invalid Date/.test(ann2.rows[0]?.body || '') && /lebih ringan/.test(ann2.rows[0]?.body || ''), ann2.rows[0]?.title || '');
+  const regionDefaults = await pool.query("SELECT column_name, column_default FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('region_id', 'home_region_id')");
+  check('citizens.region_id/home_region_id TANPA default (bug region 1)', regionDefaults.rows.every((r) => r.column_default === null), JSON.stringify(regionDefaults.rows));
+  // Parser int8: BIGINT dari Postgres HARUS jadi number lewat pool aplikasi
+  // (sebelum Tahap 5, node-postgres mengembalikan string → "Invalid Date").
+  const createdAt = await one("SELECT created_at FROM announcements WHERE title LIKE 'UU Kini Berpengaruh%'");
+  check('Parser int8 aplikasi: created_at berupa number (bukan string)', typeof createdAt?.created_at === 'number', `typeof=${typeof createdAt?.created_at}`);
+  check('Parser int8 aplikasi: created_at valid (mendekati sekarang)', typeof createdAt?.created_at === 'number' && Math.abs(Date.now() - createdAt.created_at) < 60000, `val=${createdAt?.created_at}`);
+  // Migrasi kolom Tahap 5: hapus kolom, initDb menambahkannya kembali.
+  await pool.query('ALTER TABLE country DROP COLUMN admin_pay_mult');
+  await pool.query('ALTER TABLE laws DROP COLUMN effect_applied');
+  await initDb();
+  const t5cols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE (table_name = 'country' AND column_name = 'admin_pay_mult') OR (table_name = 'laws' AND column_name = 'effect_applied')");
+  check('Migrasi: kolom Tahap 5 ditambah kembali', Number(t5cols2.rows[0].n) === 2);
 
   await pool.end();
   console.log(`\n[pg-verify] SELESAI: ${passed} lolos, ${failed} gagal`);

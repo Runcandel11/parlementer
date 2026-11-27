@@ -74,6 +74,14 @@ async function ensurePool() {
         pool = new pgMem.Pool();
       } else {
         const pg = (await import('pg')).default;
+        // BIGINT (int8, oid 20) dikembalikan node-postgres sebagai STRING
+        // secara default — di frontend, new Date("1793...") = Invalid Date,
+        // sehingga SEMUA waktu chat (dan semua fmtTime/fmtDate lain) rusak
+        // di live. Di SQLite lokal angkanya number, jadi bug ini tidak
+        // pernah terlihat di tes lokal. Parse jadi Number: timestamp ms
+        // (~1,8e12) jauh di bawah batas aman 2^53, jadi tidak ada risiko
+        // presisi. (Tahap 5 — bug "Invalid Date" 27 Nov 2026.)
+        pg.types.setTypeParser(20, (v) => parseInt(v, 10));
         // Pool kecil: di serverless tiap instance fungsi punya pool sendiri,
         // dan Neon free tier membatasi jumlah koneksi bersamaan. max 3
         // per instance sudah cukup untuk game ini (mode server biasa juga
@@ -282,8 +290,8 @@ CREATE TABLE IF NOT EXISTS citizens (
   chat_today INTEGER NOT NULL DEFAULT 0,
   last_chat_at BIGINT NOT NULL DEFAULT 0,
   last_claim_date TEXT NOT NULL DEFAULT '',
-  region_id INTEGER NOT NULL DEFAULT 1,
-  home_region_id INTEGER NOT NULL DEFAULT 1,
+  region_id INTEGER NOT NULL,
+  home_region_id INTEGER NOT NULL,
   party_id INTEGER,
   job_id INTEGER,
   bio TEXT NOT NULL DEFAULT '',
@@ -455,7 +463,7 @@ CREATE TABLE IF NOT EXISTS country (
   founded TEXT NOT NULL DEFAULT '2026-09-23',
   treasury REAL NOT NULL DEFAULT 0,
   treasury_usd REAL NOT NULL DEFAULT 0,
-  tax_income REAL NOT NULL DEFAULT 2,
+  tax_income REAL NOT NULL DEFAULT 2 CHECK (tax_income >= 0 AND tax_income <= 10),
   tax_production REAL NOT NULL DEFAULT 1,
   tax_import REAL NOT NULL DEFAULT 2,
   tax_export REAL NOT NULL DEFAULT 2,
@@ -463,7 +471,13 @@ CREATE TABLE IF NOT EXISTS country (
   minister_economy INTEGER,
   minister_foreign INTEGER,
   minister_home INTEGER,
-  minister_defense INTEGER
+  minister_defense INTEGER,
+  admin_pay_mult REAL NOT NULL DEFAULT 1 CHECK (admin_pay_mult >= 0.5 AND admin_pay_mult <= 2),
+  travel_tickets INTEGER NOT NULL DEFAULT 1 CHECK (travel_tickets IN (1, 2)),
+  mobilization_until BIGINT NOT NULL DEFAULT 0,
+  budget_kind TEXT NOT NULL DEFAULT '',
+  budget_until BIGINT NOT NULL DEFAULT 0,
+  holiday_at BIGINT NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS parties (
   id ${id},
@@ -487,6 +501,9 @@ CREATE TABLE IF NOT EXISTS laws (
   proposer_id INTEGER NOT NULL REFERENCES citizens(id),
   title TEXT NOT NULL,
   content TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'general',
+  value REAL,
+  effect_applied INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'voting',
   yes INTEGER NOT NULL DEFAULT 0,
   abstain INTEGER NOT NULL DEFAULT 0,
@@ -499,6 +516,45 @@ CREATE TABLE IF NOT EXISTS law_votes (
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   vote TEXT NOT NULL,
   UNIQUE(law_id, citizen_id)
+);
+-- Anggaran negara (Tahap 5): diusulkan Menteri Ekonomi, divoting parlemen
+-- 3 hari, bila lolos biayanya dipotong dari kas negara dan efeknya berlaku
+-- 7 hari. kind: 'claim' | 'train' | 'war'.
+CREATE TABLE IF NOT EXISTS budgets (
+  id ${id},
+  proposer_id INTEGER NOT NULL REFERENCES citizens(id),
+  kind TEXT NOT NULL CHECK (kind IN ('claim', 'train', 'war')),
+  amount INTEGER NOT NULL CHECK (amount >= 50 AND amount <= 500),
+  status TEXT NOT NULL DEFAULT 'voting',
+  yes INTEGER NOT NULL DEFAULT 0,
+  no INTEGER NOT NULL DEFAULT 0,
+  ends_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS budget_votes (
+  budget_id INTEGER NOT NULL REFERENCES budgets(id),
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  vote TEXT NOT NULL,
+  UNIQUE(budget_id, citizen_id)
+);
+-- Pemakzulan presiden (Tahap 5): diusulkan anggota parlemen, divoting
+-- 3 hari, bila lolos presiden dicopot (president_id = NULL sampai pemilu
+-- berikutnya). Satu pemakzulan aktif dalam satu waktu.
+CREATE TABLE IF NOT EXISTS impeachments (
+  id ${id},
+  president_id INTEGER NOT NULL REFERENCES citizens(id),
+  proposer_id INTEGER NOT NULL REFERENCES citizens(id),
+  status TEXT NOT NULL DEFAULT 'voting',
+  yes INTEGER NOT NULL DEFAULT 0,
+  no INTEGER NOT NULL DEFAULT 0,
+  ends_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS impeachment_votes (
+  impeachment_id INTEGER NOT NULL REFERENCES impeachments(id),
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  vote TEXT NOT NULL,
+  UNIQUE(impeachment_id, citizen_id)
 );
 CREATE TABLE IF NOT EXISTS elections (
   id ${id},
@@ -648,6 +704,21 @@ CREATE TABLE IF NOT EXISTS org_members (
   joined_at BIGINT NOT NULL,
   UNIQUE(org_id, citizen_id)
 );
+-- Pakta antar organisasi (Tahap 5 — diplomasi tanpa multi-negara):
+-- org_a_id < org_b_id selalu (diurutkan di kode agar UNIQUE bekerja dua
+-- arah). kind: 'trade' (pajak antar anggota dipotong 50%) | 'defense'
+-- (anggota +10% kerusakan perang). status: 'pending' (menunggu ketua
+-- organisasi satunya menyetujui) | 'active'.
+CREATE TABLE IF NOT EXISTS org_pacts (
+  id ${id},
+  org_a_id INTEGER NOT NULL REFERENCES organizations(id),
+  org_b_id INTEGER NOT NULL REFERENCES organizations(id),
+  kind TEXT NOT NULL CHECK (kind IN ('trade', 'defense')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active')),
+  proposer_id INTEGER NOT NULL REFERENCES citizens(id),
+  created_at BIGINT NOT NULL,
+  UNIQUE(org_a_id, org_b_id, kind)
+);
 CREATE TABLE IF NOT EXISTS support_tickets (
   id ${id},
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
@@ -760,6 +831,25 @@ PERBAIKAN & TAMPILAN
 • Hadiah barang tanpa batas jumlah: admin kini bisa memberi makanan, bahan mentah, dan barang lain sebanyak apa pun (emas/USD tetap dibatasi 1.000.000, Premium 365 hari).
 • Keamanan pasar: harga jauh di luar batas wajar kini ditolak, dan pola perdagangan bolak-balik yang mencurigakan dicatat untuk ditinjau admin. Data lama (chat >90 hari dan lainnya) kini dibersihkan otomatis setiap hari.`;
 
+// Pengumuman kedua (Update #2, Tahap 5) — di-seed sekali saat judulnya
+// belum ada (bukan saat tabel kosong, karena Update #1 sudah terbit).
+// Isinya ringkasan semua perubahan Tahap 5 + perbaikan bug region awal.
+export const ANNOUNCEMENT_TAHAP5_TITLE = 'UU Kini Berpengaruh, Menteri Punya Wewenang & Pakta Organisasi';
+export const ANNOUNCEMENT_TAHAP5_BODY = `PEMERINTAHAN
+• Undang-undang kini benar-benar berpengaruh: UU yang lolos voting parlemen kini mengubah angka game — pajak penghasilan (1–5%), upah lowongan ADMIN (80–120%), dan biaya perjalanan (1 atau 2 Tiket). UU umum tanpa efek angka tetap bisa diusulkan dan ditandai jelas.
+• Anggaran negara: Menteri Ekonomi bisa mengusulkan anggaran (pasokan harian +2 emas, latihan 10% lebih murah, atau dana perang +10% kerusakan) — diputuskan parlemen lewat voting 3 hari dan dibayar dari kas negara.
+• Menteri punya wewenang nyata: Menteri Pertahanan bisa memobilisasi (+10% kerusakan perang 24 jam, 100 emas kas negara); Menteri Dalam Negeri bisa menetapkan hari libur (+20 energi untuk semua warga, 50 emas kas negara, sekali per 24 jam).
+• Pemakzulan: anggota parlemen kini bisa mengusulkan pemakzulan presiden — bila voting lolos, presiden dicopot sampai pemilu berikutnya.
+
+DIPLOMASI
+• Pakta antar organisasi: dua organisasi kini bisa mengikat perjanjian dagang (pajak penghasilan antar anggotanya dipotong 50%) atau pakta pertahanan (+10% kerusakan perang bagi anggotanya). Pakta harus disetujui ketua kedua organisasi dan bisa dibubarkan kapan saja.
+
+PERBAIKAN BUG
+• Pemain baru tidak lagi semuanya lahir di Kepulauan Riau: wilayah awal kini dipilih acak dan merata dari semua wilayah yang ada. Pemain yang sudah ada tidak dipindah — hanya pendaftaran baru yang memakai wilayah acak.
+• Waktu chat kini tampil benar: semua pesan chat sebelumnya menampilkan "Invalid Date" — penyebabnya format waktu dari database yang tidak dikenali browser. Sekarang waktu tampil sebagai jam yang benar ("baru saja", "5 mnt lalu", dst.).
+• Game lebih ringan: polling otomatis kini berhenti saat tab tidak aktif (dan langsung menyegarkan saat tab dibuka lagi), data dunia di-cache 30 detik, dan pengecekan tick harian dibatasi sekali per menit — supaya koneksi database tidak berebut dan game tidak terasa nge-lag. Catatan jujur: jeda saat membuka game pertama kali (cold start server gratis) masih bisa terjadi — itu batas paket gratis, bukan bug.
+• Log peringatan admin di server kini tidak lagi berisik: status jalan darurat admin cukup dilihat di Panel Admin.`;
+
 export const ADMIN_JOBS = [  { title: 'Pekerja Gudang Pelabuhan', salary: 48, resource: 'Besi Mentah', qty: 44, region: 'Kepulauan Riau', desc: 'Bongkar muat peti kemas di pelabuhan. Kerja fisik, dibayar besi mentah.' },
   { title: 'Kurir Kota', salary: 46, resource: 'Minyak Mentah', qty: 40, region: 'Kepulauan Riau', desc: 'Antar paket keliling kota. Butuh stamina dan hafal jalan.' },
   { title: 'Pembersih Jalan Kota', salary: 44, resource: 'Kayu', qty: 44, region: 'Jakarta', desc: 'Jaga kebersihan jalan ibu kota setiap pagi.' },
@@ -797,6 +887,7 @@ export async function initDb() {
     await migrateAdminJobs(t);
     await migrateSupportTickets(t);
     await migrateTahap4Columns(t);
+    await migrateTahap5Columns(t);
     await seed(t);
   });
   // CHECK saldo/qty untuk database Postgres yang sudah ada: di luar transaksi
@@ -813,7 +904,7 @@ export async function initDb() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world', 'rate_limits', 'referral_pending'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -940,6 +1031,43 @@ async function migrateTahap4Columns(t) {
   }
 }
 
+// Migrasikan kolom Tahap 5 untuk database yang sudah ada (Neon live +
+// SQLite lama): country.admin_pay_mult / travel_tickets / mobilization_until
+// / budget_kind / budget_until / holiday_at, laws.kind / laws.value /
+// laws.effect_applied. Idempotent: kolom yang sudah ada tidak disentuh.
+async function migrateTahap5Columns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('country', 'admin_pay_mult', 'REAL NOT NULL DEFAULT 1');
+  await addCol('country', 'travel_tickets', 'INTEGER NOT NULL DEFAULT 1');
+  await addCol('country', 'mobilization_until', 'BIGINT NOT NULL DEFAULT 0');
+  await addCol('country', 'budget_kind', "TEXT NOT NULL DEFAULT ''");
+  await addCol('country', 'budget_until', 'BIGINT NOT NULL DEFAULT 0');
+  await addCol('country', 'holiday_at', 'BIGINT NOT NULL DEFAULT 0');
+  await addCol('laws', 'kind', "TEXT NOT NULL DEFAULT 'general'");
+  await addCol('laws', 'value', 'REAL');
+  await addCol('laws', 'effect_applied', 'INTEGER NOT NULL DEFAULT 0');
+  // BUG 2026-11-27: kolom citizens.region_id/home_region_id punya
+  // DEFAULT 1 — semua INSERT yang lupa mengisi region diam-diam menaruh
+  // pemain di Kepulauan Riau (region id 1). Sejak Tahap 5, registrasi
+  // selalu mengisi region acak (lihat api-core.js); di sini default lama
+  // dicabut dari database Postgres yang sudah ada agar jalur yang lupa
+  // mengisi region gagal keras, bukan diam-diam ke region 1. SQLite
+  // tidak bisa DROP DEFAULT lewat ALTER (butuh rebuild tabel) — di sana
+  // CREATE TABLE baru sudah tanpa default, jadi tetap fail-closed untuk
+  // database baru. pg-mem dilewati (tidak mengenal sintaks ini).
+  if (isPg && process.env.PG_MEM_TEST !== '1') {
+    await t.exec('ALTER TABLE citizens ALTER COLUMN region_id DROP DEFAULT');
+    await t.exec('ALTER TABLE citizens ALTER COLUMN home_region_id DROP DEFAULT');
+  }
+}
+
 // Migrasikan tabel support_tickets lama (tanpa kolom status) ke status
 // 'baru'/'dibaca'/'selesai' untuk inbox admin. Idempotent: kolom yang sudah
 // ada tidak disentuh.
@@ -976,6 +1104,10 @@ const CHECK_CONSTRAINTS = [
   ['jobs', 'ck_jobs_seats_lte', 'seats_taken <= seats'],
   ['wars', 'ck_wars_score_a_nonneg', 'score_a >= 0'],
   ['wars', 'ck_wars_score_d_nonneg', 'score_d >= 0'],
+  ['country', 'ck_country_tax_income_range', 'tax_income >= 0 AND tax_income <= 10'],
+  ['country', 'ck_country_admin_pay_mult_range', 'admin_pay_mult >= 0.5 AND admin_pay_mult <= 2'],
+  ['country', 'ck_country_travel_tickets', 'travel_tickets IN (1, 2)'],
+  ['budgets', 'ck_budgets_amount_range', 'amount >= 50 AND amount <= 500'],
 ];
 async function migrateChecks() {
   if (!isPg || process.env.PG_MEM_TEST === '1') return;
@@ -1044,5 +1176,13 @@ async function seed(t = { one, run }) {
   if (Number(annCount.c) === 0) {
     await t.run('INSERT INTO announcements (title, body, created_at, created_by) VALUES (?,?,?,NULL) RETURNING id',
       [ANNOUNCEMENT_TAHAP4_TITLE, ANNOUNCEMENT_TAHAP4_BODY, now]);
+  }
+  // Pengumuman kedua (Update #2, Tahap 5): di-seed sekali saat judulnya
+  // belum ada. Dipakai juga sebagai penanda bahwa migrasi Tahap 5 sudah
+  // berjalan di database ini.
+  const ann2 = await t.one('SELECT id FROM announcements WHERE title = ?', [ANNOUNCEMENT_TAHAP5_TITLE]);
+  if (!ann2) {
+    await t.run('INSERT INTO announcements (title, body, created_at, created_by) VALUES (?,?,?,NULL) RETURNING id',
+      [ANNOUNCEMENT_TAHAP5_TITLE, ANNOUNCEMENT_TAHAP5_BODY, now]);
   }
 }

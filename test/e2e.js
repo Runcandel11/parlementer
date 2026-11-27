@@ -24,11 +24,11 @@ function check(name, cond, detail = '') {
 function eq(a, b, eps = 0.001) { return Math.abs(a - b) < eps; }
 
 class Client {
-  constructor() { this.cookie = ''; }
+  constructor() { this.cookie = ''; this.extraHeaders = {}; }
   async req(method, p, body) {
     const res = await fetch(BASE + p, {
       method,
-      headers: { 'Content-Type': 'application/json', ...(this.cookie ? { Cookie: this.cookie } : {}) },
+      headers: { 'Content-Type': 'application/json', ...this.extraHeaders, ...(this.cookie ? { Cookie: this.cookie } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     const setCookie = res.headers.get('set-cookie');
@@ -98,7 +98,7 @@ async function main() {
   const me0 = r.data.citizen;
   check('Level 1, XP 0, energi 100', me0.level === 1 && me0.xp === 0 && me0.energy === 100, `level=${me0.level} xp=${me0.xp} energi=${me0.energy}`);
   check('Paket awal: 50 emas, 500 USD', me0.gold === 50 && me0.usd === 500, `emas=${me0.gold} usd=${me0.usd}`);
-  check('Wilayah awal Kepulauan Riau', r.data.region.name === 'Kepulauan Riau');
+  check('Wilayah awal adalah salah satu wilayah yang ada (acak, bukan hardcode)', (await A.get('/api/regions')).data.regions.some((x) => x.id === me0.region_id), `region=${r.data.region.name} (id ${me0.region_id})`);
   check('Populasi dunia = 1 (tanpa bot)', r.data.population === 1, `populasi=${r.data.population}`);
   check('Tidak ada perang aktif', r.data.activeWars.length === 0);
   check('Tidak ada UU sedang divoting', r.data.votingLaws.length === 0);
@@ -132,6 +132,13 @@ async function main() {
   check('Nilai setara terbaik ADMIN 48 USD', r.data.stats.best === 48, `best=${r.data.stats.best}`);
   const job = adminJobs.find((j) => j.title === 'Pekerja Gudang Pelabuhan');
   check('Lowongan "Pekerja Gudang Pelabuhan" ada (44× Besi Mentah, Kepulauan Riau)', !!job && job.resource === 'Besi Mentah' && job.pay_qty === 44);
+  // Melamar mensyaratkan warga berada di wilayah lowongan — sejak Tahap 5
+  // wilayah lahir acak, jadi A bepergian dulu bila belum di sana.
+  const meA5 = await A.get('/api/me');
+  if (meA5.data.citizen.region_id !== job.region_id) {
+    r = await A.post('/api/regions/travel', { region_id: job.region_id });
+    check('A bepergian ke wilayah lowongan (biaya 1 Tiket)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  }
   r = await A.post('/api/jobs/apply', { job_id: job.id });
   check('Lamar pekerjaan berhasil', r.status === 200 && r.data.ok);
   r = await A.post('/api/jobs/shift');
@@ -194,13 +201,16 @@ async function main() {
   r = await A.get('/api/regions');
   check('17 wilayah terdaftar', r.data.regions.length === 17, `jumlah=${r.data.regions.length}`);
   const jakarta = r.data.regions.find((x) => x.name === 'Jakarta');
+  const tiketBefore9 = (await A.get('/api/inventory')).data.items.find((i) => i.name === 'Tiket')?.qty ?? 0;
   r = await A.post('/api/regions/travel', { region_id: jakarta.id });
   check('Perjalanan ke Jakarta berhasil (1 Tiket)', r.status === 200 && r.data.region === 'Jakarta');
   r = await A.get('/api/me');
   check('Lokasi kini Jakarta', r.data.region.name === 'Jakarta');
   r = await A.get('/api/inventory');
   const tiket = r.data.items.find((i) => i.name === 'Tiket');
-  check('Sisa Tiket T1: 2', tiket && tiket.qty === 2, `tiket=${tiket?.qty}`);
+  // A mungkin sudah memakai 1 Tiket di [5] (bepergian ke wilayah lowongan
+  // karena lahir acak) — jadi yang dicek adalah pengurangan 1, bukan angka mutlak.
+  check('Sisa Tiket T1 berkurang 1 setelah perjalanan', tiket && tiket.qty === tiketBefore9 - 1, `tiket=${tiket?.qty} (sebelum ${tiketBefore9})`);
 
   console.log('\n[10] Obrolan Global & laporan');
   r = await A.get('/api/chat/global');
@@ -270,9 +280,17 @@ async function main() {
   dbTick.prepare('UPDATE world SET last_tick_date = ? WHERE id = 1').run(yesterday);
   dbTick.close();
   await A.get('/api/me'); // request ini memicu maybeTick (async, tanpa await di middleware)
-  await sleep(1500); // beri waktu tick selesai
-  r = await A.get('/api/world');
-  check('Tick berjalan: hari dunia 1 → 2', r.data.day === 2, `day=${r.data.day}`);
+  // Tick dicek maksimal 1×/60 detik per instance (Tahap 5 — lag), jadi
+  // tunggu sampai hari berubah (polling, maks ~66 detik) daripada sleep
+  // tetap. Polling ini juga memicu maybeTick lewat middleware /api/.
+  let day = 0;
+  for (let i = 0; i < 33; i++) {
+    await sleep(2000);
+    r = await A.get('/api/world');
+    day = r.data.day;
+    if (day === 2) break;
+  }
+  check('Tick berjalan: hari dunia 1 → 2', day === 2, `day=${day}`);
   r = await A.get('/api/me');
   check('Energi pulih ke 100 setelah tick', r.data.citizen.energy === 100, `energi=${r.data.citizen.energy}`);
   check('Populasi tetap 2 (A + B)', r.data.population === 2);
@@ -508,6 +526,7 @@ async function main() {
   const dbBan = new DatabaseSync(DB_PATH);
   dbBan.prepare('UPDATE users SET is_banned = 1, banned_reason = ? WHERE id = ?').run('tes migrasi', 8);
   dbBan.close();
+
   stop();
   await sleep(500);
   const upAgain = await startServer();
@@ -955,8 +974,8 @@ async function main() {
   const annTestId = r.data.id;
   r = await C.get('/api/announcements');
   const newest = (r.data.announcements || [])[0];
-  check('Pengumuman baru = Update #2 (terbaru dulu)', !!newest && newest.num === 2 && newest.title === 'Update Tes E2E', JSON.stringify(newest));
-  check('Unread naik lagi (pengumuman baru belum dibaca)', r.data.unreadCount === 1, `unread=${r.data.unreadCount}`);
+  check('Pengumuman baru = Update #3 (terbaru dulu; #2 sudah ter-seed Tahap 5)', !!newest && newest.num === 3 && newest.title === 'Update Tes E2E', JSON.stringify(newest));
+  check('Unread naik lagi (pengumuman baru belum dibaca)', r.data.unreadCount === unread0, `unread=${r.data.unreadCount}`);
   r = await ADM.post('/api/admin/announcements', { title: '', body: 'X' });
   check('Pengumuman tanpa judul ditolak (400)', r.status === 400);
   r = await ADM.post(`/api/admin/announcements/${annTestId}/delete`);
@@ -989,6 +1008,260 @@ async function main() {
   r = await ADM.post('/api/admin/gold', { user_id: cUserId, amount: 1000001 });
   check('Batas emas 1.000.000 TIDAK berubah (400)', r.status === 400);
 
+
+  console.log('\n[23] Tahap 5 — Pemerintahan/Diplomasi + bug region + lag/Invalid Date');
+  // Setup bersama: C = anggota parlemen (partai 31 kursi) + Menteri Ekonomi,
+  // D = presiden + Menteri Pertahanan, E = Menteri Dalam Negeri,
+  // F = Menteri Luar Negeri. Kas negara 1000 emas.
+  const db5 = new DatabaseSync(DB_PATH);
+  db5.prepare("INSERT INTO parties (name, tag, ideology, leader_id, type, seats, created_at) VALUES ('Partai Tes Lima','PTL','Konservatif',?,'open',31,?)").run(cId, Date.now());
+  const party5Id = db5.prepare("SELECT id FROM parties WHERE tag = 'PTL'").get().id;
+  db5.prepare('UPDATE citizens SET party_id = ?, level = 5, gold = 500 WHERE id = ?').run(party5Id, cId);
+  db5.prepare('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?)').run(party5Id, cId, 'leader', Date.now());
+  db5.prepare('UPDATE citizens SET level = 5, gold = 500 WHERE id IN (?,?,?)').run(dId, eId, fId);
+  db5.prepare('UPDATE country SET treasury = 1000, treasury_usd = 0, president_id = ?, minister_economy = ?, minister_defense = ?, minister_home = ?, minister_foreign = ? WHERE id = 1').run(dId, cId, dId, eId, fId);
+  const setEnergy5 = (id, energy) => db5.prepare('UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ?').run(energy, Date.now(), id);
+  const country5 = () => db5.prepare('SELECT * FROM country WHERE id = 1').get();
+  const setInv5 = (citizenId, commodityId, qty) => db5.prepare(
+    'INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = ?')
+    .run(citizenId, commodityId, qty, qty);
+  const invQty5 = (citizenId, commodityId) => {
+    const row = db5.prepare('SELECT qty FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1').get(citizenId, commodityId);
+    return row ? row.qty : 0;
+  };
+
+  console.log('  [23a] Pengumuman Update #2 (Tahap 5) ter-seed');
+  r = await C.get('/api/announcements');
+  const ann2 = (r.data.announcements || []).find((a) => a.num === 2);
+  check('Update #2 ter-seed (Tahap 5)', !!ann2 && /UU Kini Berpengaruh/.test(ann2.title), ann2?.title || '');
+  check('Update #2 menyebut wilayah acak + Invalid Date + lag', !!ann2 && /acak/.test(ann2.body) && /Invalid Date/.test(ann2.body) && /lebih ringan/.test(ann2.body));
+
+  console.log('  [23b] Wilayah awal acak (bug: semua lahir di Kepulauan Riau)');
+  const aRegion0 = (await A.get('/api/me')).data.citizen.region_id;
+  const seenRegions = new Set([aRegion0]);
+  for (let i = 0; i < 3; i++) {
+    const G = new Client();
+    // Batas registrasi 20/IP/24 jam sudah habis dipakai 20 pendaftaran
+    // sebelumnya dalam suite ini — 3 akun ini memakai IP berbeda lewat
+    // X-Forwarded-For (server trust proxy, seperti klien dari IP lain).
+    G.extraHeaders = { 'X-Forwarded-For': '127.0.0.2' };
+    const rr = await G.post('/api/auth/register', { email: `acak${i}@test.local`, password: 'rahasia123', username: `acak_${i}` });
+    check(`Pendaftaran acak ${i + 1} berhasil`, rr.status === 200 && rr.data.ok, `status=${rr.status} ${rr.data.error || ''}`);
+    if (rr.status === 200) seenRegions.add((await G.get('/api/me')).data.citizen.region_id);
+  }
+  const distinctRegions = Number(db5.prepare('SELECT COUNT(DISTINCT region_id) AS n FROM citizens').get().n);
+  check('Wilayah awal tersebar ke >1 wilayah (bukan semua region 1)', distinctRegions > 1, `distinct=${distinctRegions}`);
+  const regionIds5 = (await A.get('/api/regions')).data.regions.map((x) => x.id);
+  check('Semua wilayah awal valid (ada di daftar wilayah)', [...seenRegions].every((id) => regionIds5.includes(id)), `wilayah: ${[...seenRegions].join(',')}`);
+  check('Pemain lama tidak pindah wilayah', (await A.get('/api/me')).data.citizen.region_id === aRegion0, `region A=${aRegion0}`);
+
+  console.log('  [23c] UU berjenis: pajak penghasilan 2% → 4% (BUG-9)');
+  r = await D.post('/api/parliament/law', { title: 'UU Umum Tes', content: 'Isi undang-undang umum untuk tes.', kind: 'general' });
+  check('D (bukan menteri) mengusulkan UU umum: bayar 5 emas', r.status === 200 && (await D.get('/api/me')).data.citizen.gold === 495, `status=${r.status} emas=${(await D.get('/api/me')).data.citizen.gold}`);
+  r = await C.post('/api/parliament/law', { title: 'UU Pajak 4 Persen', content: 'Pajak penghasilan menjadi 4 persen untuk mengisi kas negara.', kind: 'tax_income', value: 9 });
+  check('UU pajak nilai 9 ditolak (batas 1–5)', r.status === 400, `status=${r.status}`);
+  r = await C.post('/api/parliament/law', { title: 'UU Perjalanan 3', content: 'Perjalanan butuh 3 tiket.', kind: 'travel', value: 3 });
+  check('UU perjalanan nilai 3 ditolak (batas 1–2)', r.status === 400, `status=${r.status}`);
+  r = await C.post('/api/parliament/law', { title: 'UU Pajak 4 Persen', content: 'Pajak penghasilan menjadi 4 persen untuk mengisi kas negara.', kind: 'tax_income', value: 4 });
+  check('C (Menteri Ekonomi) mengusulkan UU pajak 4%: gratis + berhasil', r.status === 200 && !!r.data.lawId && (await C.get('/api/me')).data.citizen.gold === 500, `status=${r.status} ${r.data.error || ''}`);
+  const lawId = r.data.lawId;
+  r = await C.post('/api/parliament/vote', { law_id: lawId, vote: 'yes' });
+  check('C (MP) memilih YA untuk UU pajak', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await D.post('/api/parliament/vote', { law_id: lawId, vote: 'yes' });
+  check('D (bukan MP) tidak bisa memilih UU (403)', r.status === 403, `status=${r.status}`);
+  db5.prepare('UPDATE laws SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, lawId);
+  await forceTick(C);
+  check('Tick: UU pajak disahkan + efek diterapkan', db5.prepare("SELECT status, effect_applied FROM laws WHERE id = ?").get(lawId).status === 'executed' && db5.prepare('SELECT effect_applied FROM laws WHERE id = ?').get(lawId).effect_applied === 1);
+  check('Tarif pajak negara kini 4%', country5().tax_income === 4, `tax=${country5().tax_income}`);
+  r = await C.get('/api/parliament');
+  check('Halaman Parlemen menampilkan tarif berlaku 4%', r.data.effects?.taxIncome === 4, `effects=${JSON.stringify(r.data.effects)}`);
+  r = await C.get('/api/market?scope=local');
+  check('Pasar menampilkan tarif pajak 4%', r.data.taxRate === 4, `taxRate=${r.data.taxRate}`);
+  const usdB5 = (await B.get('/api/me')).data.citizen.usd;
+  const treasury5a = country5().treasury_usd;
+  setInv5(2, makananId, 10);
+  r = await B.post('/api/market/sell', { scope: 'local', commodity_id: makananId, tier: 1, qty: 10, price: 9 });
+  const offer5 = r.data.offerId;
+  check('B pasang jual 10× Makanan @9 (tarif 4%)', r.status === 200 && !!offer5, `status=${r.status}`);
+  r = await A.post('/api/market/buy', { offer_id: offer5, qty: 10 });
+  check('A membeli: B terima 86,40 USD (90 − pajak 4%)', r.status === 200 && eq(r.data.sellerReceives, 86.4), JSON.stringify(r.data));
+  check('Saldo B bertambah 86,40 USD', eq((await B.get('/api/me')).data.citizen.usd, usdB5 + 86.4));
+  check('Pajak 3,60 USD masuk kas negara', eq(country5().treasury_usd - treasury5a, 3.6), `delta=${country5().treasury_usd - treasury5a}`);
+
+  console.log('  [23d] UU upah ADMIN + biaya perjalanan');
+  db5.prepare('UPDATE country SET admin_pay_mult = 1.2 WHERE id = 1').run();
+  const jobs5 = (await C.get('/api/jobs')).data;
+  const adminJob = jobs5.jobs.find((j) => j.is_admin);
+  check('Lowongan ADMIN menampilkan effectiveQty (pengali 120%)', !!adminJob && adminJob.effectiveQty === Math.max(1, Math.floor(adminJob.pay_qty * 1.2)), `pay=${adminJob?.pay_qty} eff=${adminJob?.effectiveQty}`);
+  db5.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(adminJob.region_id, cId);
+  r = await C.post('/api/jobs/apply', { job_id: adminJob.id });
+  check('C melamar lowongan ADMIN', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  setEnergy5(cId, 100);
+  r = await C.post('/api/jobs/shift');
+  const expectQty = Math.max(1, Math.floor(adminJob.pay_qty * 1.2));
+  check(`Shift ADMIN dibayar ${expectQty}× bahan (44 × 1,2)`, r.status === 200 && r.data.goods === `${expectQty}× ${adminJob.resource}`, JSON.stringify(r.data));
+  db5.prepare('UPDATE country SET travel_tickets = 2 WHERE id = 1').run();
+  const regions5 = (await C.get('/api/regions')).data.regions;
+  const myRegion5 = (await C.get('/api/me')).data.citizen.region_id;
+  const targetRegion = regions5.find((x) => x.id !== myRegion5);
+  r = await C.get(`/api/regions/${targetRegion.id}`);
+  check('Halaman wilayah menampilkan biaya perjalanan 2 Tiket', r.data.travelTickets === 2, `travelTickets=${r.data.travelTickets}`);
+  const tiket0 = invQty5(cId, (await C.get('/api/market?scope=local')).data.commodities.find((x) => x.name === 'Tiket').id);
+  r = await C.post('/api/regions/travel', { region_id: targetRegion.id });
+  check('Perjalanan memakai 2 Tiket (3 → 1)', r.status === 200 && invQty5(cId, (await C.get('/api/market?scope=local')).data.commodities.find((x) => x.name === 'Tiket').id) === tiket0 - 2, `tiket ${tiket0} → ${invQty5(cId, (await C.get('/api/market?scope=local')).data.commodities.find((x) => x.name === 'Tiket').id)}`);
+  r = await C.post('/api/regions/travel', { region_id: regions5.find((x) => x.id !== targetRegion.id).id });
+  check('Perjalanan kedua ditolak: Tiket kurang (butuh 2)', r.status === 400 && /2 Tiket/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+
+  console.log('  [23e] Anggaran negara (Menteri Ekonomi)');
+  r = await D.post('/api/country/budget', { kind: 'claim', amount: 100 });
+  check('D (bukan Menteri Ekonomi) tidak bisa mengusulkan anggaran (403)', r.status === 403, `status=${r.status}`);
+  r = await C.post('/api/country/budget', { kind: 'claim', amount: 30 });
+  check('Anggaran 30 emas ditolak (batas 50–500)', r.status === 400, `status=${r.status}`);
+  r = await C.post('/api/country/budget', { kind: 'claim', amount: 100 });
+  check('C mengusulkan anggaran Pasokan +2 Emas (100 emas)', r.status === 200 && !!r.data.budgetId, `status=${r.status} ${r.data.error || ''}`);
+  const budgetId = r.data.budgetId;
+  r = await C.post('/api/country/budget', { kind: 'train', amount: 100 });
+  check('Anggaran kedua saat voting berjalan ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await D.post(`/api/country/budget/${budgetId}/vote`, { vote: 'yes' });
+  check('D (bukan MP) tidak bisa memilih anggaran (403)', r.status === 403, `status=${r.status}`);
+  r = await C.post(`/api/country/budget/${budgetId}/vote`, { vote: 'yes' });
+  check('C (MP) memilih YA untuk anggaran', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const treasury5b = country5().treasury;
+  db5.prepare('UPDATE budgets SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, budgetId);
+  await forceTick(C);
+  check('Tick: anggaran lolos + kas negara −100 emas', db5.prepare("SELECT status FROM budgets WHERE id = ?").get(budgetId).status === 'passed' && country5().treasury === treasury5b - 100, `treasury ${treasury5b} → ${country5().treasury}`);
+  check('Anggaran claim kini aktif 7 hari', country5().budget_kind === 'claim' && country5().budget_until > Date.now());
+  r = await D.post('/api/claim');
+  check('Klaim harian dengan anggaran claim: +7 emas (5+2)', r.status === 200 && r.data.reward.gold === 7 && r.data.budgetBonus === true, JSON.stringify(r.data));
+
+  console.log('  [23f] Mobilisasi + hari libur (wewenang menteri)');
+  const treasury5c = country5().treasury;
+  r = await D.post('/api/country/mobilize', {});
+  check('D (Menteri Pertahanan) memobilisasi', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  check('Kas negara −100 emas (mobilisasi)', country5().treasury === treasury5c - 100, `treasury=${country5().treasury}`);
+  check('Mobilisasi aktif 24 jam', country5().mobilization_until > Date.now());
+  r = await D.post('/api/country/mobilize', {});
+  check('Mobilisasi kedua saat aktif ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await C.post('/api/country/mobilize', {});
+  check('C (bukan Menteri Pertahanan) tidak bisa memobilisasi (403)', r.status === 403, `status=${r.status}`);
+  setEnergy5(fId, 50);
+  const treasury5d = country5().treasury;
+  r = await E.post('/api/country/holiday', {});
+  check('E (Menteri Dalam Negeri) menetapkan hari libur', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  check('Kas negara −50 emas (hari libur)', country5().treasury === treasury5d - 50, `treasury=${country5().treasury}`);
+  check('Hari libur: F +20 energi (50 → 70)', (await F.get('/api/me')).data.citizen.energy === 70, `energi=${(await F.get('/api/me')).data.citizen.energy}`);
+  r = await E.post('/api/country/holiday', {});
+  check('Hari libur kedua <24 jam ditolak (400)', r.status === 400, `status=${r.status}`);
+
+  console.log('  [23g] Pemakzulan presiden');
+  // D presiden tapi bukan MP — jadikan MP sementara lewat DB agar jalur
+  // 400 "tidak bisa memakzulkan diri sendiri" teruji, lalu kembalikan.
+  db5.prepare('UPDATE citizens SET party_id = ? WHERE id = ?').run(party5Id, dId);
+  db5.prepare('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?)').run(party5Id, dId, 'member', Date.now());
+  r = await D.post('/api/parliament/impeach', {});
+  check('D (presiden) tidak bisa memakzulkan dirinya sendiri (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  db5.prepare('UPDATE citizens SET party_id = NULL WHERE id = ?').run(dId);
+  db5.prepare('DELETE FROM party_members WHERE party_id = ? AND citizen_id = ?').run(party5Id, dId);
+  r = await C.post('/api/parliament/impeach', {});
+  check('C (MP) mengusulkan pemakzulan presiden D', r.status === 200 && !!r.data.impeachmentId, `status=${r.status} ${r.data.error || ''}`);
+  const impId = r.data.impeachmentId;
+  r = await C.post('/api/parliament/impeach', {});
+  check('Pemakzulan kedua saat voting berjalan ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await C.post(`/api/parliament/impeach/${impId}/vote`, { vote: 'yes' });
+  check('C memilih YA untuk pemakzulan', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  db5.prepare('UPDATE impeachments SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, impId);
+  await forceTick(C);
+  check('Tick: pemakzulan lolos + presiden dicopot', db5.prepare("SELECT status FROM impeachments WHERE id = ?").get(impId).status === 'passed' && country5().president_id === null, `president=${country5().president_id}`);
+  r = await C.get('/api/country');
+  check('Halaman Negara: presiden Kosong', r.data.president === 'Kosong', `president=${r.data.president}`);
+
+  console.log('  [23h] Pakta antar organisasi (diplomasi)');
+  r = await C.post('/api/orgs', { name: 'Org Dagang Tes', tag: 'ODT', type: 'Kerja Sama' });
+  check('C mendirikan Org Dagang Tes (100 emas)', r.status === 200 && !!r.data.orgId, `status=${r.status} ${r.data.error || ''}`);
+  const org1 = r.data.orgId;
+  r = await D.post('/api/orgs', { name: 'Org Bela Tes', tag: 'OBT', type: 'Keamanan' });
+  check('D mendirikan Org Bela Tes (100 emas)', r.status === 200 && !!r.data.orgId, `status=${r.status} ${r.data.error || ''}`);
+  const org2 = r.data.orgId;
+  r = await E.post(`/api/orgs/${org1}/pact`, { target_org_id: org2, kind: 'trade' });
+  check('E (bukan ketua/menlu) tidak bisa mengusulkan pakta (403)', r.status === 403, `status=${r.status}`);
+  r = await C.post(`/api/orgs/${org1}/pact`, { target_org_id: org1, kind: 'trade' });
+  check('Pakta dengan organisasi sendiri ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await C.post(`/api/orgs/${org1}/pact`, { target_org_id: org2, kind: 'trade' });
+  check('C mengusulkan Perjanjian Dagang ke Org Bela Tes', r.status === 200 && !!r.data.pactId, `status=${r.status} ${r.data.error || ''}`);
+  const pactTrade = r.data.pactId;
+  r = await C.post(`/api/orgs/${org1}/pact`, { target_org_id: org2, kind: 'trade' });
+  check('Usulan pakta sejenis kedua ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await C.post(`/api/orgs/pacts/${pactTrade}/accept`, {});
+  check('C (pengusul) tidak bisa menyetujui usulannya sendiri (400)', r.status === 400, `status=${r.status}`);
+  r = await D.post(`/api/orgs/pacts/${pactTrade}/accept`, {});
+  check('D (ketua Org Bela Tes) menyetujui pakta dagang', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await E.post(`/api/orgs/${org1}/join`, {});
+  check('E bergabung Org Dagang Tes', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await F.post(`/api/orgs/${org2}/join`, {});
+  check('F bergabung Org Bela Tes', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const usdF5 = (await F.get('/api/me')).data.citizen.usd;
+  setInv5(eId, makananId, 10);
+  r = await E.post('/api/market/sell', { scope: 'local', commodity_id: makananId, tier: 1, qty: 10, price: 9 });
+  check('E pasang jual 10× Makanan @9 (pakta dagang aktif)', r.status === 200 && !!r.data.offerId, `status=${r.status}`);
+  r = await F.post('/api/market/buy', { offer_id: r.data.offerId, qty: 10 });
+  check('F membeli: E terima 88,20 USD (pajak 4% dipotong 50% → 2%)', r.status === 200 && eq(r.data.sellerReceives, 88.2), JSON.stringify(r.data));
+  r = await C.post(`/api/orgs/${org1}/pact`, { target_org_id: org2, kind: 'defense' });
+  check('C mengusulkan Pakta Pertahanan', r.status === 200 && !!r.data.pactId, `status=${r.status} ${r.data.error || ''}`);
+  const pactDef = r.data.pactId;
+  r = await D.post(`/api/orgs/pacts/${pactDef}/reject`, {});
+  check('D menolak Pakta Pertahanan', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await C.post(`/api/orgs/${org1}/pact`, { target_org_id: org2, kind: 'defense' });
+  const pactDef2 = r.data.pactId;
+  r = await D.post(`/api/orgs/pacts/${pactDef2}/accept`, {});
+  check('D menyetujui Pakta Pertahanan (usulan kedua)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const meF5 = (await F.get('/api/me')).data;
+  const senjataId = (await F.get('/api/market?scope=local')).data.commodities.find((x) => x.name === 'Senjata').id;
+  db5.prepare("INSERT INTO wars (region_id, name, attacker_label, defender_label, status, score_a, score_d, ends_at, created_at) VALUES (?,?,?,?, 'active', 0, 0, ?, ?)").run(meF5.citizen.region_id, 'Perang Tes Pakta', 'Pemberontak Tes', 'Republik Indonesia', Date.now() + 86400000, Date.now());
+  const war5Id = db5.prepare('SELECT id FROM wars ORDER BY id DESC LIMIT 1').get().id;
+  setInv5(fId, senjataId, 5);
+  setEnergy5(fId, 100);
+  r = await F.get(`/api/wars/${war5Id}`);
+  check('Halaman perang menampilkan bonus Pakta + Mobilisasi', (r.data.bonuses || []).includes('Pakta Pertahanan +10%') && (r.data.bonuses || []).includes('Mobilisasi +10%'), `bonuses=${JSON.stringify(r.data.bonuses)}`);
+  r = await F.post(`/api/wars/${war5Id}/attack`, { side: 'defender', ammo: 'Senjata' });
+  check('Serangan F: 20 × 1,1 (mobilisasi) × 1,1 (pakta) = 24 kerusakan', r.status === 200 && r.data.damage === 24 && (r.data.bonuses || []).includes('Pakta Pertahanan +10%'), JSON.stringify(r.data));
+  r = await F.post(`/api/orgs/pacts/${pactTrade}/dissolve`, {});
+  check('F (bukan ketua) tidak bisa membubarkan pakta (403)', r.status === 403, `status=${r.status}`);
+  r = await C.post(`/api/orgs/pacts/${pactTrade}/dissolve`, {});
+  check('C (ketua) membubarkan pakta dagang', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await C.get('/api/orgs');
+  check('Pakta dagang tidak lagi terdaftar setelah dibubarkan', !(r.data.pacts || []).some((p) => p.id === pactTrade));
+  r = await F.post(`/api/orgs/${org2}/pact`, { target_org_id: org1, kind: 'trade' });
+  check('F (Menteri Luar Negeri, bukan ketua) bisa memediasi pakta', r.status === 200 && !!r.data.pactId, `status=${r.status} ${r.data.error || ''}`);
+  const pactMed = r.data.pactId;
+  r = await C.post(`/api/orgs/pacts/${pactMed}/accept`, {});
+  check('C (ketua Org Dagang Tes) menyetujui pakta mediasi', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await C.get('/api/orgs');
+  check('Pakta mediasi kini aktif', (r.data.pacts || []).some((p) => p.id === pactMed && p.status === 'active'));
+
+  console.log('  [23i] Format waktu chat (Invalid Date) + latensi endpoint');
+  r = await A.post('/api/chat/global', { content: 'Pesan waktu tes tiga kata' });
+  check('A mengirim pesan chat', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.get('/api/chat/global');
+  const lastMsg = (r.data.messages || [])[(r.data.messages || []).length - 1];
+  check('created_at pesan chat berupa ANGKA (bukan string — akar Invalid Date)', !!lastMsg && typeof lastMsg.created_at === 'number', `typeof=${typeof lastMsg?.created_at} val=${lastMsg?.created_at}`);
+  check('created_at pesan chat valid (mendekati sekarang)', !!lastMsg && Math.abs(Date.now() - lastMsg.created_at) < 60000, `created_at=${lastMsg?.created_at}`);
+  const tWorld0 = performance.now();
+  r = await A.get('/api/world');
+  const tWorld1 = performance.now() - tWorld0;
+  const tWorld2 = performance.now();
+  r = await A.get('/api/world');
+  const tWorldCache = performance.now() - tWorld2;
+  check('Latensi /api/world < 500ms (lokal hangat)', tWorld1 < 500, `${tWorld1.toFixed(0)}ms`);
+  check('Latensi /api/world ke-2 (cache) < 100ms', tWorldCache < 100, `${tWorldCache.toFixed(0)}ms`);
+  const tMe0 = performance.now();
+  r = await A.get('/api/me');
+  const tMe = performance.now() - tMe0;
+  check('Latensi /api/me < 500ms (lokal hangat)', tMe < 500, `${tMe.toFixed(0)}ms`);
+  const tChat0 = performance.now();
+  r = await A.get('/api/chat/global');
+  const tChat = performance.now() - tChat0;
+  check('Latensi /api/chat/global < 500ms (lokal hangat)', tChat < 500, `${tChat.toFixed(0)}ms`);
+  db5.close();
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);
   process.exit(failed ? 1 : 0);

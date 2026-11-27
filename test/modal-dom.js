@@ -332,6 +332,74 @@ async function main() {
     await sleep(300);
     check('SUDAH DIBACA: menandai dibaca + menutup modal', annCalls.includes('/api/announcements/read') && document.querySelector('#announce-modal').hidden);
 
+    // 14) Tahap 5: halaman Parlemen (UU berjenis + panel aturan berlaku),
+    // halaman Organisasi (panel pakta), dan format waktu chat dengan
+    // timestamp STRING (simulasi BIGINT Postgres → "Invalid Date").
+    window.eval("ME = { user: { id: 1, username: 'warga_tes', publicId: 'PL-000099', is_banned: false }, citizen: { id: 1, username: 'warga_tes', energy: 100, gold: 500, usd: 500, xp: 0, level: 5 }, region: { name: 'Jakarta' }, xpNext: 10, unread: 0, unreadDm: 0 }");
+    window.api = async (path) => {
+      if (path === '/api/parliament') return {
+        filledSeats: 31, majority: 31, isMp: true,
+        laws: [{ id: 1, title: 'UU Pajak 4 Persen', proposer_name: 'warga_tes', status: 'executed', content: 'Pajak menjadi 4 persen.', kind: 'tax_income', value: 4, effect_applied: 1, yes: 31, abstain: 0, no: 0, ends_at: Date.now() }],
+        myVotes: {},
+        budgets: [], myBudgetVotes: {},
+        impeachments: [], myImpeachVotes: {},
+        effects: { taxIncome: 4, adminPayMult: 1.2, travelTickets: 2, budgetKind: null, budgetUntil: 0, mobilizationUntil: 0 },
+      };
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/parliament';
+    window.eval('route()');
+    await sleep(300);
+    const parlText = document.querySelector('#page').textContent;
+    check('Parlemen: panel ATURAN YANG BERLAKU SAAT INI tampil', parlText.includes('ATURAN YANG BERLAKU SAAT INI'));
+    check('Parlemen: panel menampilkan pajak 4% + upah 120% + 2 Tiket', parlText.includes('4%') && parlText.includes('120%') && parlText.includes('2 Tiket'));
+    const lawKind = document.querySelector('#law-kind');
+    check('Parlemen: form UU punya pemilih jenis (tax_income/admin_pay/travel)',
+      !!lawKind && [...lawKind.options].some((o) => o.value === 'tax_income') && [...lawKind.options].some((o) => o.value === 'admin_pay') && [...lawKind.options].some((o) => o.value === 'travel'));
+    check('Parlemen: UU pajak tampil dengan jenis + efek diterapkan', parlText.includes('UU Pajak 4 Persen') && parlText.includes('efek diterapkan'));
+    // Jenis UU mengubah tampilan input nilai (umum: sembunyi; pajak: tampil).
+    lawKind.value = 'tax_income';
+    lawKind.dispatchEvent(new window.Event('change', { bubbles: true }));
+    check('Parlemen: pilih jenis pajak menampilkan input NILAI BARU', document.querySelector('#law-value-wrap').style.display !== 'none');
+    lawKind.value = 'general';
+    lawKind.dispatchEvent(new window.Event('change', { bubbles: true }));
+    check('Parlemen: pilih UU umum menyembunyikan input nilai', document.querySelector('#law-value-wrap').style.display === 'none');
+
+    window.api = async (path) => {
+      if (path === '/api/orgs') return {
+        organizations: [
+          { id: 1, name: 'Org Satu', tag: 'OS', type: 'Kerja Sama', members: 2, leader_name: 'warga_tes' },
+          { id: 2, name: 'Org Dua', tag: 'OD', type: 'Keamanan', members: 1, leader_name: 'warga_dua' },
+        ],
+        myOrgId: 1,
+        pacts: [{ id: 5, kind: 'trade', status: 'active', org_a_name: 'Org Satu', org_b_name: 'Org Dua', org_a_leader_id: 1, org_b_leader_id: 2 }],
+        myMinisterRole: null,
+      };
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/orgs';
+    window.eval('route()');
+    await sleep(300);
+    const orgsText = document.querySelector('#page').textContent;
+    check('Organisasi: panel PAKTA ANTAR ORGANISASI tampil', orgsText.includes('PAKTA ANTAR ORGANISASI'));
+    check('Organisasi: pakta dagang aktif tampil (Org Satu ↔ Org Dua)', orgsText.includes('Perjanjian Dagang') && orgsText.includes('Org Satu') && orgsText.includes('Org Dua'));
+    check('Organisasi: form usulkan pakta punya pemilih jenis (trade/defense)',
+      !!document.querySelector('#pact-kind') && [...document.querySelector('#pact-kind').options].some((o) => o.value === 'defense'));
+    check('Organisasi: tombol Bubarkan Pakta tampil untuk ketua', !!document.querySelector('[data-pact-dissolve="5"]'));
+
+    // Format waktu: node-postgres mengembalikan BIGINT sebagai STRING —
+    // sebelum Tahap 5, new Date('1793...') = Invalid Date di chat.
+    const nowStr = String(Date.now());
+    const fmtNow = window.eval(`fmtTime('${nowStr}')`);
+    check('fmtTime(timestamp STRING) mengembalikan jam valid, bukan Invalid Date', /^\d{1,2}:\d{2}$/.test(fmtNow) || /^\d{2}\.\d{2}$/.test(fmtNow), `fmtTime=${fmtNow}`);
+    const agoNow = window.eval(`ago('${nowStr}')`);
+    check('ago(timestamp STRING, baru saja) = "baru saja"', agoNow === 'baru saja', `ago=${agoNow}`);
+    const hourAgoStr = String(Date.now() - 3600000);
+    const agoHour = window.eval(`ago('${hourAgoStr}')`);
+    check('ago(timestamp STRING, 1 jam lalu) valid (bukan Invalid Date)', agoHour !== 'Invalid Date' && /jam/.test(agoHour), `ago=${agoHour}`);
+    check('fmtTime(null) = "—" (tidak crash)', window.eval('fmtTime(null)') === '—');
+    check('fmtTime(timestamp STRING tidak valid) = "—"', window.eval("fmtTime('bukan-tanggal')") === '—');
+
     dom.window.close();
   } finally {
     stop();
