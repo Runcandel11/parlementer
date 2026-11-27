@@ -2,3 +2,6 @@ node_modules/
 data/
 .env
 *.log
+
+# Laporan audit internal — sengaja untracked (berisi temuan keamanan)
+docs/AUDIT.md
