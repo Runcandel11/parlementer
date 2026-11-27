@@ -2,7 +2,7 @@
 // Dipanggil otomatis saat ada request (cek tanggal) + interval 10 menit.
 // Aman di Render free (tanpa cron eksternal): tick jalan saat ada yang membuka game.
 import { sql, one, run } from './db.js';
-import { DAILY_PRODUCTION } from './game.js';
+import { DAILY_PRODUCTION, ENERGY_DAILY_HEALTH, productionWithBonus } from './game.js';
 
 function todayStr(d = new Date()) { return d.toISOString().slice(0, 10); }
 
@@ -44,11 +44,22 @@ export async function runDailyTick() {
   // 1) Warga: energi pulih, jatah harian reset, kelelahan pulih sebagian.
   await run(`UPDATE citizens SET energy = 100, bread_today = 0, energy_spent_today = 0,
     chat_today = 0, fatigue = CASE WHEN fatigue > 2000 THEN fatigue - 2000 ELSE 0 END, missions = '{}'`);
+  // Bonus konvoi (Tahap 3, BUG-7): Rumah Sakit Lapangan aktif -> pemulihan
+  // energi harian +10% (110, bukan 100). Premium tetap 120 sebagai batas
+  // makan (lihat eat) — reset harian tidak melebihi 110.
+  await run(`UPDATE citizens SET energy = ? WHERE id IN
+    (SELECT citizen_id FROM convoys WHERE building = 'health' AND expires_at > ?)`,
+    [ENERGY_DAILY_HEALTH, now]);
 
   // 2) Produksi perusahaan -> inventaris pemilik.
+  const industryOwners = new Set((await sql(
+    "SELECT citizen_id FROM convoys WHERE building = 'industry' AND expires_at > ?", [now]))
+    .map((r) => r.citizen_id));
   const companies = await sql('SELECT * FROM companies');
   for (const co of companies) {
-    const amount = DAILY_PRODUCTION[co.type] || 0;
+    const baseAmount = DAILY_PRODUCTION[co.type] || 0;
+    // Bonus konvoi (Tahap 3, BUG-7): Gudang Industri aktif -> produksi +10%.
+    const amount = industryOwners.has(co.owner_id) ? productionWithBonus(baseAmount) : baseAmount;
     let commodity = co.resource || '';
     if (co.type === 'factory') commodity = 'Bahan Bangunan';
     if (co.type === 'light') commodity = 'Makanan';

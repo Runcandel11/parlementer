@@ -24,8 +24,10 @@ const avatarHtml = (avatar, username, size = 40) => avatar
   ? `<img src="${esc(avatar)}" class="avatar-img" style="width:${size}px;height:${size}px" alt="">`
   : `<span class="avatar-initial" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px">${esc((username || '?')[0].toUpperCase())}</span>`;
 
-// Baca file gambar → resize/crop persegi 256×256 lewat canvas → data URL JPEG.
-// Mengembalikan null bila file bukan gambar atau hasil akhirnya tetap > 100 KB.
+// Baca file gambar → resize/crop persegi 256×256 lewat canvas → data URL JPEG,
+// plus thumbnail 48×48 untuk daftar chat/DM (Tahap 3, §6.3).
+// Mengembalikan { avatar, avatarSm } atau null bila file bukan gambar atau
+// hasil akhirnya tetap > 100 KB (thumbnail > 25 KB).
 async function processAvatarFile(file) {
   if (!file || !file.type.startsWith('image/')) return null;
   const url = URL.createObjectURL(file);
@@ -43,12 +45,20 @@ async function processAvatarFile(file) {
     const sx = Math.floor((img.width - s) / 2);
     const sy = Math.floor((img.height - s) / 2);
     ctx.drawImage(img, sx, sy, s, s, 0, 0, 256, 256);
+    let avatar = null;
     for (const q of [0.85, 0.6, 0.4]) {
       const dataUrl = canvas.toDataURL('image/jpeg', q);
       // Data URL base64 ≈ 4/3 ukuran biner; 100 KB biner ≈ 136.500 karakter.
-      if (dataUrl.length <= 136500) return dataUrl;
+      if (dataUrl.length <= 136500) { avatar = dataUrl; break; }
     }
-    return null;
+    if (!avatar) return null;
+    // Thumbnail 48×48 dari canvas yang sama (25 KB biner ≈ 34.100 karakter).
+    const sm = document.createElement('canvas');
+    sm.width = 48; sm.height = 48;
+    sm.getContext('2d').drawImage(canvas, 0, 0, 48, 48);
+    const avatarSm = sm.toDataURL('image/jpeg', 0.8);
+    if (avatarSm.length > 34100) return null;
+    return { avatar, avatarSm };
   } catch {
     return null;
   } finally {
@@ -148,6 +158,7 @@ const NAV = [
   { group: 'BERANDA', items: [
     ['dashboard', 'Dashboard', '▦'], ['achievements', 'Pencapaian', '🏆'],
     ['inventory', 'Inventaris', '📦'], ['convoy', 'Konvoi', '🚚'],
+    ['activity', 'Aktivitas Saya', '📋'],
   ]},
   { group: 'DUNIA', items: [
     ['map', 'Peta', '🗺'], ['regions', 'Wilayah', '📍'],
@@ -233,9 +244,12 @@ function renderHUD() {
   $('#hud-xp').textContent = c.xp + '/' + ME.xpNext;
   $('#hud-lv').textContent = c.level;
   const segs = $('#energy-segs');
-  const filled = Math.round(c.energy / 10);
+  // Batas energi tidak selalu 100 (Tahap 3): Premium 120, Rumah Sakit
+  // Lapangan 110 — /api/me mengirim energyCap; default 100 untuk keamanan.
+  const cap = c.energyCap || 100;
+  const filled = Math.round((c.energy / cap) * 10);
   segs.innerHTML = Array.from({ length: 10 }, (_, i) => `<i class="${i < filled ? 'on' : ''}"></i>`).join('');
-  $('#energy-num').textContent = c.energy + '/100';
+  $('#energy-num').textContent = c.energy + '/' + cap;
   const badge = (id, n) => { const el = $(id); el.hidden = !n; el.textContent = n > 99 ? '99+' : n; };
   badge('#badge-notif', ME.unread);
   badge('#badge-chat', ME.unreadDm);
@@ -263,8 +277,19 @@ function route() {
   $('#app').classList.remove('banned');
   $$('#drawer-nav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.route === slug));
   const fn = ROUTES[slug] || ROUTES.dashboard;
-  $('#page').innerHTML = '<div class="panel"><p class="muted">Memuat…</p></div>';
-  fn(arg).catch((e) => {
+  // Skeleton loading (Tahap 3, §7): ganti "Memuat…" polos dengan shimmer
+  // supaya perpindahan halaman terasa instan, bukan kosong.
+  $('#page').innerHTML = `<div role="status" aria-label="Memuat halaman">
+    <div class="skel skel-h"></div>
+    <div class="skel skel-p"></div><div class="skel skel-p"></div>
+    <div class="skel skel-p" style="width:60%"></div></div>`;
+  fn(arg).then(() => {
+    // Aksesibilitas (Tahap 3, §7): setelah halaman termuat, fokus ke judul
+    // halaman supaya pembaca layar tahu halaman sudah berganti. Chat poll
+    // tidak memanggil route(), jadi fokus tidak dicuri saat mengetik.
+    const h = $('#page h2');
+    if (h) h.focus({ preventScroll: true });
+  }).catch((e) => {
     $('#page').innerHTML = `<div class="panel"><h3>Terjadi kesalahan</h3><p class="muted">${esc(e.message)}</p>
       <button class="btn-gold" onclick="location.reload()">Muat Ulang</button></div>`;
   });
@@ -302,7 +327,7 @@ function renderAppealArea(appeals) {
         <div class="msg"><div class="msg-avatar">${m.sender_role === 'admin' ? '🛡' : esc((ME.citizen.username || '?')[0].toUpperCase())}</div>
         <div class="msg-body"><div class="msg-head"><span class="msg-name">${m.sender_role === 'admin' ? 'Admin' : esc(ME.citizen.username)}</span><span class="msg-time">${fmtTime(m.created_at)}</span></div>
         <div class="msg-bubble">${esc(m.text)}</div></div></div>`).join('')}</div>
-      <div class="chat-input"><input id="appeal-reply" placeholder="Tulis balasan untuk admin..." maxlength="1000" autocomplete="off">
+      <div class="chat-input"><input id="appeal-reply" aria-label="Tulis balasan untuk admin" placeholder="Tulis balasan untuk admin..." maxlength="1000" autocomplete="off">
       <button class="btn-gold" id="btn-appeal-reply" type="button">KIRIM</button></div></div>`;
     const send = async () => {
       const input = $('#appeal-reply');
@@ -347,7 +372,7 @@ function showAppealForm() {
 }
 
 const page = (title, sub, body) => `
-  <h2>${title}</h2>
+  <h2 tabindex="-1">${title}</h2>
   ${sub ? `<p class="page-sub">${sub}</p>` : ''}
   ${body}`;
 
@@ -376,9 +401,9 @@ ROUTES.dashboard = async () => {
     <div class="kv"><span class="k">Pekerjaan</span><span class="v">${ME.job ? esc(ME.job.title) : 'Belum bekerja'}</span></div>
     <div class="kv"><span class="k">Level</span><span class="v">${c.level} · ${c.xp}/${ME.xpNext} XP</span></div>
     <div class="bar gold" style="margin:6px 0 12px"><i style="width:${Math.min(100, c.xp / ME.xpNext * 100)}%"></i></div>
-    <div class="kv"><span class="k">⚡ Energi</span><span class="v">${c.energy}/100</span></div>
-    <div class="bar" style="margin:6px 0 12px"><i style="width:${c.energy}%"></i></div>
-    <p class="muted small">${c.energy >= 100 ? 'Penuh — gunakan untuk bekerja' : 'Makan roti untuk mengisi energi.'}</p>
+    <div class="kv"><span class="k">⚡ Energi</span><span class="v">${c.energy}/${c.energyCap || 100}</span></div>
+    <div class="bar" style="margin:6px 0 12px"><i style="width:${Math.min(100, c.energy / (c.energyCap || 100) * 100)}%"></i></div>
+    <p class="muted small">${c.energy >= (c.energyCap || 100) ? 'Penuh — gunakan untuk bekerja' : 'Makan roti untuk mengisi energi.'}</p>
     <div class="row" style="margin-top:12px">
       <button class="btn-gold" id="btn-claim" ${canClaim ? '' : 'disabled'}>${canClaim ? '🎁 AMBIL PASOKAN HARIAN' : '✓ Pasokan hari ini diambil'}</button>
       <button class="btn-ghost" onclick="location.hash='#/inventory'">🍞 Makan Roti</button>
@@ -386,9 +411,9 @@ ROUTES.dashboard = async () => {
   </div>
   <div class="panel">
     <h3>💪 LATIHAN</h3>
-    ${[['str', 'Kekuatan', c.attr_str, 'Kerusakan perang'], ['edu', 'Pendidikan', c.attr_edu, 'Pelatihan lebih cepat'], ['eco', 'Ekonomi', c.attr_eco, 'Hasil produksi lebih banyak']].map(([k, label, lv, desc]) => `
+    ${[['str', 'strength', 'Kekuatan', c.attr_str, 'Kerusakan perang'], ['edu', 'strategy', 'Pendidikan', c.attr_edu, 'Pelatihan lebih cepat'], ['eco', 'charisma', 'Ekonomi', c.attr_eco, 'Hasil produksi lebih banyak']].map(([k, serverKey, label, lv, desc]) => `
       <div class="kv"><span class="k">${label} · LV ${lv}<br><small class="muted">${desc}</small></span>
-      <span class="v"><button class="btn-gold btn-sm" data-train="${k}">LATIH · ${lv + 1} emas</button></span></div>`).join('')}
+      <span class="v"><button class="btn-gold btn-sm" data-train="${k}">LATIH · ${c.trainCosts?.[serverKey] ?? lv + 1} emas</button></span></div>`).join('')}
   </div>
   <div class="panel">
     <h3>🎯 MISI HARIAN <span class="muted small">· masing-masing +10 emas</span></h3>
@@ -481,6 +506,9 @@ ROUTES.convoy = async () => {
     catch (e) { toast(e.message); }
   });
   $$('[data-demolish]').forEach((b) => b.onclick = async () => {
+    // Tahap 3: bongkar konvoi itu destruktif (bonus hilang, 10 emas tidak
+    // kembali) — minta konfirmasi dulu.
+    if (!confirm('Bongkar bangunan konvoi ini? Bonusnya hilang dan 10 emas yang sudah dibayar tidak kembali.')) return;
     try { await post('/api/convoy/demolish', { id: Number(b.dataset.demolish) }); toast('Bangunan dibongkar.'); route(); }
     catch (e) { toast(e.message); }
   });
@@ -511,10 +539,30 @@ ROUTES.notifications = async () => {
     <div class="panel-head"><h3>🔔 Pusat Notifikasi</h3><button class="btn-ghost btn-sm" id="btn-read-all">Tandai Semua Dibaca</button></div>
     ${n.notifications.length ? n.notifications.map((x) => `
       <div class="kv"><span class="k"><span class="chip">${esc(x.category)}</span> <b>${esc(x.title)}</b><br><small class="muted">${esc(x.content)}</small></span>
-      <span class="v small muted">${ago(x.created_at)}</span></div>`).join('')
+      <span class="v small muted" style="white-space:nowrap;flex-shrink:0">${ago(x.created_at)}</span></div>`).join('')
       : '<p class="muted">Belum ada notifikasi.</p>'}
   </div>`);
   $('#btn-read-all').onclick = async () => { await post('/api/notifications/read'); await refreshMe(); route(); };
+};
+
+// ---------- AKTIVITAS SAYA (Tahap 3, §7) ----------
+// Riwayat transaksi pasar + aktivitas/pemberitahuan warga (50 terbaru).
+ROUTES.activity = async () => {
+  const a = await api('/api/activity');
+  $('#page').innerHTML = page('AKTIVITAS SAYA', 'Transaksi pasar dan aktivitas terakhirmu (50 terbaru)', `
+  <div class="panel"><h3>🛒 TRANSAKSI PASAR</h3>
+    ${a.transactions.length ? a.transactions.map((t) => `
+      <div class="kv"><span class="k">${t.direction === 'beli' ? '🛍️ BELI' : '💰 JUAL'} ${esc(t.commodity_name)} · T${t.tier} ×${t.qty}<br>
+        <small class="muted">${fmt(t.price_each, 2)} ${t.scope === 'global' ? 'emas' : 'USD'}/unit · ${esc(t.scope === 'global' ? 'Pasar Global' : 'Pasar Lokal')}</small></span>
+      <span class="v" style="flex-shrink:0">${t.direction === 'beli' ? '−' : '+'}${fmt(t.total, 2)} ${t.scope === 'global' ? 'emas' : 'USD'}<br><small class="muted" style="white-space:nowrap">${ago(t.created_at)}</small></span></div>`).join('')
+      : emptyState('🛒', 'Belum ada transaksi', 'Jual beli di Pasar atau Pasar Global akan tercatat di sini.')}
+  </div>
+  <div class="panel"><h3>🔔 AKTIVITAS &amp; PEMBERITAHUAN</h3>
+    ${a.events.length ? a.events.map((x) => `
+      <div class="kv"><span class="k"><span class="chip">${esc(x.category)}</span> <b>${esc(x.title)}</b><br><small class="muted">${esc(x.content)}</small></span>
+      <span class="v small muted" style="white-space:nowrap;flex-shrink:0">${ago(x.created_at)}</span></div>`).join('')
+      : '<p class="muted">Belum ada aktivitas.</p>'}
+  </div>`);
 };
 
 // ---------- PROFIL ----------
@@ -585,29 +633,31 @@ ROUTES.profile = async (username) => {
   // ---------- FOTO PROFIL (hanya profil sendiri) ----------
   if (pr.username === ME.citizen.username) {
     let pendingAvatar = null;
+    let pendingAvatarSm = null;
     const fileInput = $('#avatar-file');
     $('#btn-avatar-change').onclick = () => fileInput.click();
     fileInput.onchange = async () => {
       const f = fileInput.files?.[0];
       if (!f) return;
-      const dataUrl = await processAvatarFile(f);
-      if (!dataUrl) {
+      const processed = await processAvatarFile(f);
+      if (!processed) {
         toast('Gambar tidak valid atau terlalu besar (maks 100 KB setelah di-resize).');
         fileInput.value = '';
         return;
       }
-      pendingAvatar = dataUrl;
+      pendingAvatar = processed.avatar;
+      pendingAvatarSm = processed.avatarSm;
       $('#avatar-preview').innerHTML = `
-        <img src="${esc(dataUrl)}" class="avatar-img" style="width:96px;height:96px" alt="Pratinjau foto profil">
+        <img src="${esc(pendingAvatar)}" class="avatar-img" style="width:96px;height:96px" alt="Pratinjau foto profil">
         <div class="row" style="margin-top:8px">
           <button class="btn-gold btn-sm" id="btn-avatar-save" type="button">Simpan Foto</button>
           <button class="btn-ghost btn-sm" id="btn-avatar-cancel" type="button">Batal</button>
         </div>`;
       $('#btn-avatar-save').onclick = async () => {
-        try { await post('/api/profile/avatar', { avatar: pendingAvatar }); toast('Foto profil disimpan.'); await refreshMe(); route(); }
+        try { await post('/api/profile/avatar', { avatar: pendingAvatar, avatar_sm: pendingAvatarSm }); toast('Foto profil disimpan.'); await refreshMe(); route(); }
         catch (e) { toast(e.message); }
       };
-      $('#btn-avatar-cancel').onclick = () => { pendingAvatar = null; fileInput.value = ''; $('#avatar-preview').innerHTML = ''; };
+      $('#btn-avatar-cancel').onclick = () => { pendingAvatar = null; pendingAvatarSm = null; fileInput.value = ''; $('#avatar-preview').innerHTML = ''; };
     };
     const delBtn = $('#btn-avatar-delete');
     if (delBtn) delBtn.onclick = async () => {
@@ -1031,6 +1081,9 @@ function marketPage(scope) {
       } catch (e) { toast(e.message); }
     };
     $$('[data-cancel]').forEach((b) => b.onclick = async () => {
+      // Tahap 3: membatalkan penawaran itu destruktif (barang keluar dari
+      // pasar; penawaran harus dipasang ulang bila berubah pikiran).
+      if (!confirm('Batalkan penawaran ini? Barang kembali ke inventaris dan penawaran harus dipasang ulang bila berubah pikiran.')) return;
       try { await post('/api/market/cancel', { offer_id: Number(b.dataset.cancel) }); toast('Penawaran dibatalkan, barang kembali ke inventaris.'); route(); }
       catch (e) { toast(e.message); }
     });
@@ -1103,6 +1156,9 @@ ROUTES.fx = async () => {
     catch (e) { toast(e.message); }
   });
   $$('[data-fx-cancel]').forEach((b) => b.onclick = async () => {
+    // Tahap 3: membatalkan penawaran valas itu destruktif (penawaran harus
+    // dipasang ulang bila berubah pikiran).
+    if (!confirm('Batalkan penawaran valas ini? Dana dikembalikan dan penawaran harus dipasang ulang bila berubah pikiran.')) return;
     try { await post('/api/fx/cancel', { offer_id: Number(b.dataset.fxCancel) }); toast('Penawaran dibatalkan, dana dikembalikan.'); route(); }
     catch (e) { toast(e.message); }
   });
@@ -1412,6 +1468,9 @@ ROUTES.parties = async () => {
     catch (e) { toast(e.message); }
   });
   $$('[data-leave]').forEach((b) => b.onclick = async () => {
+    // Tahap 3: keluar partai itu destruktif (kehilangan jabatan/kursi partai
+    // bila ada) — minta konfirmasi dulu.
+    if (!confirm('Keluar dari partai ini? Kamu kehilangan keanggotaan dan jabatan di partai bila ada.')) return;
     try { await post(`/api/parties/${b.dataset.leave}/leave`); toast('Kamu keluar dari partai.'); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   });
@@ -1767,7 +1826,9 @@ ROUTES.chat = async (sub) => {
     const warId = sub.slice(4);
     try {
       const w = await api('/api/wars/' + warId);
-      subLabel = `GARIS DEPAN: ${w.war.region_name.toUpperCase()} → ${w.war.region_name.toUpperCase()}`;
+      // BUG-12 (Tahap 3): judul lama memakai region_name dua kali
+      // ("JAKARTA → JAKARTA"). Pakai label penyerang/pembela perang.
+      subLabel = `GARIS DEPAN: ${(w.war.attacker_label || 'Penyerang').toUpperCase()} → ${(w.war.defender_label || 'Pembela').toUpperCase()}`;
     } catch { subLabel = 'Obrolan front perang'; }
   }
   $('#page').innerHTML = page('', '', `
@@ -1778,7 +1839,7 @@ ROUTES.chat = async (sub) => {
   <p class="page-sub">${esc(subLabel)}</p>
   <div id="chat-list" style="max-height:55vh;overflow-y:auto"></div>
   <div class="chat-input">
-    <input id="chat-text" placeholder="Kirim pesan ke dunia..." maxlength="500" autocomplete="off">
+    <input id="chat-text" aria-label="Tulis pesan chat" placeholder="Kirim pesan ke dunia..." maxlength="500" autocomplete="off">
     <button class="btn-gold" id="btn-send">KIRIM</button>
   </div>
   <p class="muted small" style="margin-top:8px">Pesan minimal 3 kata dan jeda 30 detik dihitung untuk misi harian. Chat dimulai kosong — hanya pesan pemain asli.</p>`);
@@ -1870,6 +1931,8 @@ ROUTES.orgs = async () => {
     catch (e) { toast(e.message); }
   });
   $$('[data-org-leave]').forEach((b) => b.onclick = async () => {
+    // Tahap 3: keluar organisasi itu destruktif — minta konfirmasi dulu.
+    if (!confirm('Keluar dari organisasi ini?')) return;
     try { await post(`/api/orgs/${b.dataset.orgLeave}/leave`); toast('Kamu keluar dari organisasi.'); route(); }
     catch (e) { toast(e.message); }
   });
@@ -1978,6 +2041,8 @@ $$('#report-reasons button').forEach((b) => b.onclick = () => {
 $('#report-cancel').onclick = () => { $('#report-modal').hidden = true; };
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('#report-modal').hidden) $('#report-modal').hidden = true;
+  // Tahap 3: drawer juga bisa ditutup dengan Escape (sebelumnya hanya modal).
+  if (e.key === 'Escape' && $('#drawer').classList.contains('open')) closeDrawer();
 });
 $('#report-submit').onclick = async () => {
   if (!reportReason) { toast('Pilih alasan laporan dulu.'); return; }

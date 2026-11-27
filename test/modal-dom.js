@@ -193,6 +193,96 @@ async function main() {
     window.dispatchEvent(new window.Event('scroll'));
     check('bar energi muncul lagi saat scroll ke atas', !bar.classList.contains('energy-hidden'));
 
+    // 8) Skeleton loading + fokus judul + HUD batas energi + a11y (Tahap 3, §7).
+    // jsdom tidak mengimplementasikan fokus dokumen (h.focus() no-op di
+    // sini), jadi fokus diuji lewat spy pada HTMLElement.prototype.focus —
+    // yang membuktikan route() memanggil focus() pada judul halaman.
+    const focusedEls = [];
+    const origFocus = window.HTMLElement.prototype.focus;
+    window.HTMLElement.prototype.focus = function (...args) { focusedEls.push(this); return origFocus.apply(this, args); };
+    window.api = async (path) => {
+      if (path === '/api/activity') return { transactions: [], events: [] };
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/activity';
+    window.eval('route()');
+    // Skeleton tampil SEGERA (sinkron) setelah route(), sebelum handler async selesai.
+    const skels = document.querySelectorAll('#page .skel');
+    check('skeleton loading tampil saat halaman dimuat', skels.length >= 3, `${skels.length} elemen .skel`);
+    check('skeleton punya role status (pembaca layar)', !!document.querySelector('#page [role="status"]'));
+    await sleep(300);
+    const lastFocused = focusedEls[focusedEls.length - 1];
+    check('route() memanggil focus() pada judul halaman setelah dimuat',
+      !!lastFocused && lastFocused.tagName === 'H2' && lastFocused.textContent === 'AKTIVITAS SAYA',
+      `terakhir fokus: ${lastFocused?.tagName} "${lastFocused?.textContent}"`);
+    window.HTMLElement.prototype.focus = origFocus;
+    // HUD memakai energyCap dari /api/me (bukan hardcode 100).
+    window.eval("ME = { user: { id: 1, username: 'warga_tes', publicId: 'PL-000099', is_banned: false }, citizen: { username: 'warga_tes', energy: 55, energyCap: 110, gold: 0, usd: 0, xp: 0, level: 1 }, region: { name: 'Jakarta' }, xpNext: 10, unread: 0, unreadDm: 0 }");
+    window.eval('renderHUD()');
+    check('HUD menampilkan batas energi dari server (55/110)', document.querySelector('#energy-num').textContent === '55/110', document.querySelector('#energy-num').textContent);
+    // Atribut aksesibilitas (Tahap 3, §7).
+    check('modal laporan punya role dialog + aria-modal', modal.getAttribute('role') === 'dialog' && modal.getAttribute('aria-modal') === 'true');
+    check('toast punya role status', document.querySelector('#toast').getAttribute('role') === 'status');
+    check('tombol tutup drawer punya aria-label', document.querySelector('#drawer-close').getAttribute('aria-label') === 'Tutup menu');
+    check('tombol chat bawah punya aria-label', document.querySelector('#energy-chat').getAttribute('aria-label') === 'Buka obrolan');
+    // Escape menutup drawer (sebelumnya hanya modal).
+    window.eval('openDrawer()');
+    check('drawer terbuka lewat openDrawer', document.querySelector('#drawer').classList.contains('open'));
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check('tombol Escape menutup drawer', !document.querySelector('#drawer').classList.contains('open'));
+
+    // 9) Halaman "Aktivitas Saya" (Tahap 3, §7): transaksi + peristiwa + NAV.
+    window.api = async (path) => {
+      if (path === '/api/activity') return {
+        transactions: [{ direction: 'beli', commodity_name: 'Makanan', tier: 1, qty: 10, price_each: 9, total: 90, scope: 'local', created_at: Date.now() }],
+        events: [{ category: 'SISTEM', title: 'Aktivitas tes', content: 'Peristiwa tes.', created_at: Date.now() }],
+      };
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/activity';
+    window.eval('route()');
+    await sleep(300);
+    const activityText = document.querySelector('#page').textContent;
+    check('halaman Aktivitas Saya menampilkan transaksi BELI Makanan', activityText.includes('BELI') && activityText.includes('Makanan'));
+    check('halaman Aktivitas Saya menampilkan peristiwa', activityText.includes('Aktivitas tes'));
+    window.eval('buildNav()');
+    check('NAV berisi entri "Aktivitas Saya"', [...document.querySelectorAll('#drawer-nav .nav-item')].some((b) => b.textContent.includes('Aktivitas Saya')));
+
+    // 10) Judul chat perang memakai label penyerang/pembela (BUG-12) dan
+    // konfirmasi sebelum bongkar konvoi (Tahap 3).
+    const apiCalls = [];
+    window.api = async (path, opts) => {
+      if (path === '/api/wars/1') return { war: { region_name: 'Jakarta', attacker_label: 'Pemberontak Jakarta', defender_label: 'Republik Indonesia' } };
+      if (path.startsWith('/api/chat/')) return { room: 'war_1', title: 'PERTEMPURAN', messages: [] };
+      if (path === '/api/convoy') return {
+        used: 1, slots: 2,
+        buildings: [{ type: 'health', name: 'Rumah Sakit Lapangan', desc: '+10% pemulihan energi harian' }],
+        convoys: [{ id: 7, building: 'health', expires_at: Date.now() + 86400000 }],
+      };
+      if (opts?.method === 'POST') { apiCalls.push(path); return { ok: true }; }
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/chat/war_1';
+    window.eval('route()');
+    await sleep(300);
+    check('judul chat perang: PEMBERONTAK JAKARTA → REPUBLIK INDONESIA (bukan JAKARTA → JAKARTA)',
+      document.querySelector('#page').textContent.includes('GARIS DEPAN: PEMBERONTAK JAKARTA → REPUBLIK INDONESIA'));
+    check('input chat punya aria-label', document.querySelector('#chat-text')?.getAttribute('aria-label') === 'Tulis pesan chat');
+    // Konfirmasi bongkar konvoi: tolak dulu, lalu setujui.
+    window.location.hash = '#/convoy';
+    window.eval('route()');
+    await sleep(300);
+    const demolishBtn = document.querySelector('[data-demolish="7"]');
+    check('tombol Bongkar konvoi tampil', !!demolishBtn);
+    window.confirm = () => false;
+    demolishBtn.click();
+    await sleep(100);
+    check('konfirmasi ditolak: tidak ada panggilan demolish', !apiCalls.includes('/api/convoy/demolish'), apiCalls.join(','));
+    window.confirm = () => true;
+    document.querySelector('[data-demolish="7"]').click();
+    await sleep(100);
+    check('konfirmasi disetujui: demolish dipanggil', apiCalls.includes('/api/convoy/demolish'), apiCalls.join(','));
+
     dom.window.close();
   } finally {
     stop();

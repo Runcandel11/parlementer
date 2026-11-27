@@ -1,7 +1,7 @@
 // API inti Parlementer: auth (email+password), dashboard, pekerjaan, perusahaan,
 // pasar, valas, peta, inventaris, konvoi, misi, kronik, pencapaian, notifikasi, profil, toko.
 import bcrypt from 'bcryptjs';
-import { sql, one, run, tx, forUpdate, generateReferralCode } from './db.js';
+import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings } from './db.js';
 import {
   signToken, cookieOptions, COOKIE_NAME, authRequired, citizenRequired,
   loadCitizen, isValidEmail, isValidUsername, todayStr, publicId,
@@ -10,7 +10,8 @@ import {
 import { dbRateLimit } from './rate-limit.js';
 import {
   WA_TOPUP_URL, MINT_RATE, INCOME_TAX, IMPORT_TAX, MIN_OFFER_QTY,
-  xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, foodEnergy, DAILY_MISSIONS, CHRONICLE,
+  xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, foodEnergy,
+  ENERGY_CAP_PREMIUM, ENERGY_DAILY_HEALTH, DAILY_MISSIONS, CHRONICLE,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
 } from './game.js';
@@ -289,6 +290,18 @@ export function registerCore(app) {
     const activeWars = await sql("SELECT w.*, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active' ORDER BY w.created_at DESC");
     const votingLaws = await sql("SELECT l.*, u.username AS proposer FROM laws l JOIN citizens c ON c.id = l.proposer_id JOIN users u ON u.id = c.user_id WHERE l.status = 'voting' AND l.ends_at > ? ORDER BY l.ends_at ASC", [Date.now()]);
     const isPremium = c.premium_until > Date.now();
+    // Batas energi & biaya latihan yang berlaku SAAT INI (Tahap 3, BUG-7):
+    // Premium 120, Rumah Sakit Lapangan 110, normal 100; Sekolah Keliling
+    // memotong biaya latihan 10%. Dashboard memakai angka ini supaya yang
+    // ditampilkan sama dengan yang dibebankan server.
+    const buildings = await convoyBuildings(c.id);
+    const energyCap = isPremium ? ENERGY_CAP_PREMIUM
+      : buildings.has('health') ? ENERGY_DAILY_HEALTH : 100;
+    const trainCosts = {};
+    for (const [key, col] of [['strength', 'attr_str'], ['strategy', 'attr_edu'], ['charisma', 'attr_eco']]) {
+      const base = trainCost(c[col]);
+      trainCosts[key] = buildings.has('education') ? trainCostDiscounted(base) : base;
+    }
     const refUses = await one('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?', [c.user_id]);
     const refPaid = await one("SELECT COUNT(*) AS n FROM referral_pending WHERE referrer_id = ? AND status = 'paid'", [c.user_id]);
     const referral = {
@@ -303,7 +316,7 @@ export function registerCore(app) {
         avatar: c.avatar || null,
         is_admin: !!c.is_admin, is_banned: !!c.is_banned, banned_reason: c.banned_reason || '',
       },
-      citizen: { ...c, isPremium },
+      citizen: { ...c, isPremium, energyCap, trainCosts },
       referral,
       region, party, job,
       unread: Number(unread.n), unreadDm: Number(unreadDm.n),
@@ -337,7 +350,12 @@ export function registerCore(app) {
     // changes — biaya tidak pernah terpotong dua kali dari saldo yang sama.
     const done = await tx(async (t) => {
       const row = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
-      const cost = trainCost(row[col]);
+      // Bonus konvoi (Tahap 3, BUG-7): Sekolah Keliling aktif -> latihan
+      // 10% lebih murah (minimal 1 emas). Biaya yang ditampilkan di
+      // dashboard memakai angka yang sama (lihat /api/me: trainCosts).
+      const buildings = await convoyBuildings(req.citizen.id, t);
+      const baseCost = trainCost(row[col]);
+      const cost = buildings.has('education') ? trainCostDiscounted(baseCost) : baseCost;
       const upd = await t.run(`UPDATE citizens SET gold = gold - ?, ${col} = ${col} + 1 WHERE id = ? AND gold >= ?`, [cost, req.citizen.id, cost]);
       if (!upd.changes) throw Object.assign(new Error(`Butuh ${cost} emas untuk latihan ini.`), { status: 400 });
       return { row, cost };
@@ -357,7 +375,11 @@ export function registerCore(app) {
       const ok = await takeItem(locked.id, food.id, t, 1, tx);
       if (!ok) throw Object.assign(new Error(`Tidak ada Makanan T${t} di inventaris.`), { status: 400 });
       const gain = foodEnergy(t);
-      const cap = locked.premium_until > Date.now() ? 120 : 100;
+      // Batas energi: Premium 120; Rumah Sakit Lapangan aktif 110; normal
+      // 100. Selaras dengan reset harian di tick.js (Tahap 3, BUG-7).
+      const buildings = await convoyBuildings(locked.id, tx);
+      const cap = locked.premium_until > Date.now() ? ENERGY_CAP_PREMIUM
+        : buildings.has('health') ? ENERGY_DAILY_HEALTH : 100;
       const energy = Math.min(cap, locked.energy + gain);
       const upd = await tx.run('UPDATE citizens SET energy = ?, bread_today = bread_today + 1 WHERE id = ? AND bread_today < 10', [energy, locked.id]);
       if (!upd.changes) throw Object.assign(new Error('Jatah roti harian (10) sudah habis.'), { status: 400 });
@@ -477,6 +499,23 @@ export function registerCore(app) {
     res.json({ ok: true, reward: a.reward });
   }));
 
+  // ---------- AKTIVITAS SAYA (Tahap 3, §7) ----------
+  // Riwayat transaksi pasar + aktivitas/pemberitahuan warga. FX tidak punya
+  // tautan warga di fx_history (hanya harga), jadi riwayat FX tidak tampil.
+  app.get('/api/activity', authRequired, citizenRequired, r(async (req, res) => {
+    const transactions = await sql(
+      `SELECT t.*, c.name AS commodity_name,
+        CASE WHEN t.buyer_id = ? THEN 'beli' ELSE 'jual' END AS direction
+       FROM market_tx t JOIN commodities c ON c.id = t.commodity_id
+       WHERE t.buyer_id = ? OR t.seller_id = ?
+       ORDER BY t.created_at DESC LIMIT 50`,
+      [req.citizen.id, req.citizen.id, req.citizen.id]);
+    const events = await sql(
+      'SELECT * FROM notifications WHERE citizen_id = ? ORDER BY created_at DESC LIMIT 50',
+      [req.citizen.id]);
+    res.json({ transactions, events });
+  }));
+
   // ---------- NOTIFIKASI ----------
   app.get('/api/notifications', authRequired, citizenRequired, r(async (req, res) => {
     const rows = await sql('SELECT * FROM notifications WHERE citizen_id = ? ORDER BY created_at DESC LIMIT 50', [req.citizen.id]);
@@ -531,14 +570,19 @@ export function registerCore(app) {
   // me-resize/crop gambar jadi persegi 256×256 sebelum mengirim.
   // Batas: data URL gambar (JPEG/PNG/WebP) yang valid, ≤ 100 KB.
   // Hanya untuk akun sendiri — tidak ada parameter target, selalu req.userId.
+  // Tahap 3 (§6.3): browser juga mengirim avatar_sm — versi 48×48 (≤ 25 KB)
+  // yang dipakai di daftar chat/DM supaya satu polling chat tidak lagi
+  // mengunduh ~136 KB × 100 pesan. avatar_sm NULL untuk foto lama (belum
+  // diunggah ulang) — chat memakai fallback inisial di sana.
   const AVATAR_MAX_BYTES = 100 * 1024;
-  function parseAvatarDataUrl(dataUrl) {
+  const AVATAR_SM_MAX_BYTES = 25 * 1024;
+  function parseAvatarDataUrl(dataUrl, maxBytes = AVATAR_MAX_BYTES) {
     if (typeof dataUrl !== 'string') return null;
     const m = dataUrl.match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
     if (!m) return null;
     let buf;
     try { buf = Buffer.from(m[2], 'base64'); } catch { return null; }
-    if (buf.length === 0 || buf.length > AVATAR_MAX_BYTES) return null;
+    if (buf.length === 0 || buf.length > maxBytes) return null;
     // Periksa magic bytes agar benar-benar file gambar, bukan teks lain.
     const isJpeg = buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
     const isPng = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
@@ -551,11 +595,24 @@ export function registerCore(app) {
     if (!parsed) {
       return res.status(400).json({ error: 'Foto harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 100 KB.' });
     }
-    await run('UPDATE users SET avatar = ? WHERE id = ?', [parsed.dataUrl, req.userId]);
+    // avatar_sm opsional: bila dikirim harus valid dan ≤ 25 KB. Foto lama
+    // yang tidak mengirimkannya tetap tersimpan (avatar_sm NULL).
+    let parsedSm = null;
+    if (req.body?.avatar_sm) {
+      parsedSm = parseAvatarDataUrl(req.body.avatar_sm, AVATAR_SM_MAX_BYTES);
+      if (!parsedSm) {
+        return res.status(400).json({ error: 'Foto kecil (thumbnail) harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 25 KB.' });
+      }
+    }
+    if (parsedSm) {
+      await run('UPDATE users SET avatar = ?, avatar_sm = ? WHERE id = ?', [parsed.dataUrl, parsedSm.dataUrl, req.userId]);
+    } else {
+      await run('UPDATE users SET avatar = ? WHERE id = ?', [parsed.dataUrl, req.userId]);
+    }
     res.json({ ok: true, bytes: parsed.bytes });
   }));
   app.post('/api/profile/avatar/delete', authRequired, r(async (req, res) => {
-    await run('UPDATE users SET avatar = NULL WHERE id = ?', [req.userId]);
+    await run('UPDATE users SET avatar = NULL, avatar_sm = NULL WHERE id = ?', [req.userId]);
     res.json({ ok: true });
   }));
 

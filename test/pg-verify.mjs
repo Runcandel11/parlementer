@@ -130,6 +130,23 @@ async function main() {
   if (process.env.JWT_SECRET) console.log('  (dilewati: JWT_SECRET sudah ada di env pemanggil — hapus env itu untuk menguji fail-closed)');
   check('Server production tanpa JWT_SECRET menolak start', failClosed || !!process.env.JWT_SECRET);
 
+  console.log('\n[6] migrateChecks tanpa warning (Tahap 3: tahan race cold start)');
+  // migrateChecks jalan DI LUAR transaksi ber-advisory-lock initDb — dua
+  // cold start bersamaan bisa sama-sama lolos cek-eksistensi lalu ALTER;
+  // yang kalah dulu mendapat 42P07 dan menulis warning "[db] CHECK ...".
+  // Sekarang 42P07 ditelan diam-diam (hasil idempotent yang diharapkan).
+  const warns = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => { warns.push(a.join(' ')); };
+  try {
+    await pool.query('ALTER TABLE jobs DROP CONSTRAINT IF EXISTS ck_jobs_seats_nonneg');
+    await Promise.all([initDb(), initDb(), initDb()]);
+  } finally { console.warn = origWarn; }
+  const checkWarns = warns.filter((w) => w.includes('[db] CHECK'));
+  check('migrateChecks paralel: tanpa warning CHECK', checkWarns.length === 0, checkWarns[0] || '');
+  const hasCk = await pool.query("SELECT 1 FROM pg_constraint WHERE conname = 'ck_jobs_seats_nonneg'");
+  check('constraint ck_jobs_seats_nonneg terpasang kembali (tepat 1)', hasCk.rowCount === 1);
+
   await pool.end();
   console.log(`\n[pg-verify] SELESAI: ${passed} lolos, ${failed} gagal`);
   process.exit(failed ? 1 : 0);

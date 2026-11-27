@@ -74,7 +74,7 @@
   </header>
 
   <nav id="drawer" class="drawer" aria-label="Menu utama">
-    <button id="drawer-close" class="drawer-close" type="button">✕</button>
+    <button id="drawer-close" class="drawer-close" type="button" aria-label="Tutup menu">✕</button>
     <div id="drawer-nav"></div>
   </nav>
   <div id="drawer-overlay" class="drawer-overlay"></div>
@@ -82,7 +82,7 @@
   <main id="page" class="page"></main>
 
   <div class="energy-bar" id="energy-bar">
-    <button class="energy-chat" id="energy-chat" type="button">💬<span class="badge" id="badge-chat2" hidden>0</span></button>
+    <button class="energy-chat" id="energy-chat" type="button" aria-label="Buka obrolan">💬<span class="badge" id="badge-chat2" hidden>0</span></button>
     <span class="energy-sep"></span>
     <span class="energy-icon">⚡</span>
     <span class="energy-segs" id="energy-segs"></span>
@@ -91,9 +91,9 @@
 </div>
 
 <!-- ============ MODAL LAPORKAN KONTEN ============ -->
-<div id="report-modal" class="modal" hidden>
+<div id="report-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="report-modal-title">
   <div class="modal-card">
-    <h3>LAPORKAN KONTEN</h3>
+    <h3 id="report-modal-title">LAPORKAN KONTEN</h3>
     <p class="modal-sub">Laporanmu ditinjau moderator. Jangan gunakan untuk hal sepele.</p>
     <div class="report-reasons" id="report-reasons">
       <button type="button" data-reason="Pelecehan">Pelecehan</button>
@@ -111,7 +111,7 @@
   </div>
 </div>
 
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" hidden role="status"></div>
 <script src="/js/app.js"></script>
 </body>
 </html>

@@ -224,6 +224,24 @@ async function main() {
   check('A memblokir B', r.status === 200 && r.data.ok);
   r = await A.get('/api/chat/global');
   check('Setelah diblokir, A tidak lagi melihat pesan B', r.data.messages.every((m) => m.username !== 'warga_dua'));
+  // BUG-11 (Tahap 3): filter blokir DI SQL — 100 pesan B yang lebih lama
+  // tidak boleh menghabiskan LIMIT 100 dan menenggelamkan pesan A.
+  // Dipakai room 'indonesia' (bukan global) supaya pesan lama ini tidak
+  // mengotori pembacaan chat global di bagian tes berikutnya.
+  const dbChat = new DatabaseSync(DB_PATH);
+  const meA = await A.get('/api/auth/me');
+  const chatBase = Date.now() - 100000;
+  dbChat.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)')
+    .run(meB.data.citizen.id, 'indonesia', 'pesan B di indonesia', chatBase);
+  for (let i = 0; i < 100; i++) {
+    dbChat.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)')
+      .run(meB.data.citizen.id, 'indonesia', 'pesan lama B #' + i, chatBase - 1000 + i);
+  }
+  dbChat.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)')
+    .run(meA.data.citizen.id, 'indonesia', 'pesan A di indonesia', chatBase + 5000);
+  dbChat.close();
+  r = await A.get('/api/chat/indonesia');
+  check('Blokir di SQL: 100 pesan B tidak menenggelamkan pesan A (A tetap terlihat)', r.data.messages.length === 1 && r.data.messages[0].username === 'warga_satu', `n=${r.data.messages.length}`);
   r = await A.post('/api/chat/unblock', { citizen_id: meB.data.citizen.id });
   check('A membuka blokir B', r.status === 200);
 
@@ -504,7 +522,11 @@ async function main() {
   r = await A.post('/api/auth/login', { email: 'warga1@test.local', password: 'rahasia123' });
   check('A login lagi setelah logout di [13]', r.status === 200 && r.data.ok);
   const TINY_JPEG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAUAQEAAAAAAAAAAAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8AvwH/2Q==';
-  r = await A.post('/api/profile/avatar', { avatar: TINY_JPEG });
+  // Thumbnail 48×48 untuk chat/DM (Tahap 3, §6.3) — JPEG minimal yang valid
+  // (magic bytes FF D8 FF), sengaja berbeda dari TINY_JPEG supaya tes bisa
+  // membedakan avatar penuh vs avatar kecil.
+  const TINY_JPEG_SM = 'data:image/jpeg;base64,' + Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9]).toString('base64');
+  r = await A.post('/api/profile/avatar', { avatar: TINY_JPEG, avatar_sm: TINY_JPEG_SM });
   check('Upload avatar JPEG kecil berhasil', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
   r = await A.get('/api/profile/warga_satu');
   check('Profil menampilkan avatar yang diupload', r.data.profile.avatar === TINY_JPEG);
@@ -515,7 +537,13 @@ async function main() {
   await sleep(6000); // anti-spam chat 5 detik
   r = await B.get('/api/chat/global');
   const withAvatar = r.data.messages.find((m) => m.username === 'warga_satu' && m.content === 'Pesan dengan avatar baru tes');
-  check('Pesan chat membawa avatar pengirim', !!withAvatar && withAvatar.avatar === TINY_JPEG);
+  // Perubahan perilaku yang disengaja (Tahap 3, §6.3): chat kini mengirim
+  // avatar_sm (48×48), bukan avatar penuh — payload polling jauh lebih kecil.
+  check('Pesan chat membawa avatar KECIL pengirim (avatar_sm)', !!withAvatar && withAvatar.avatar === TINY_JPEG_SM, `avatar=${(withAvatar?.avatar || '').slice(0, 40)}`);
+  const bigSmBuf = Buffer.alloc(26 * 1024, 0);
+  bigSmBuf[0] = 0xFF; bigSmBuf[1] = 0xD8; bigSmBuf[2] = 0xFF;
+  r = await A.post('/api/profile/avatar', { avatar: TINY_JPEG, avatar_sm: 'data:image/jpeg;base64,' + bigSmBuf.toString('base64') });
+  check('Thumbnail avatar > 25 KB ditolak (400)', r.status === 400, r.data.error || '');
   r = await ADM.get('/api/admin/players');
   const aPlayer = r.data.players.find((p) => p.username === 'warga_satu');
   check('Daftar pemain admin menampilkan avatar', !!aPlayer && aPlayer.avatar === TINY_JPEG);
@@ -538,6 +566,11 @@ async function main() {
   check('Hapus avatar berhasil', r.status === 200 && r.data.ok);
   r = await A.get('/api/profile/warga_satu');
   check('Profil A kembali tanpa avatar', !r.data.profile.avatar);
+  // Hapus avatar juga membersihkan avatar_sm (Tahap 3, §6.3).
+  const dbAv = new DatabaseSync(DB_PATH);
+  const avRow = dbAv.prepare('SELECT avatar, avatar_sm FROM users WHERE username = ?').get('warga_satu');
+  dbAv.close();
+  check('Hapus avatar juga menghapus avatar_sm di DB', !avRow.avatar && !avRow.avatar_sm);
 
   console.log('\n[17] Jenis HADIAH vs PEMBELIAN + hadiah massal + bahan mentah');
   r = await ADM.post('/api/admin/gold', { user_id: 3, amount: 100, kind: 'hadiah' });
@@ -665,6 +698,67 @@ async function main() {
   const deluxe = r.data.packages.find((p) => p.id === 'deluxe');
   check('Paket Deluxe: best, Rp50.000, HEMAT 14%', deluxe?.best === true && deluxe?.price === 50000 && deluxe?.save === 'HEMAT 14%');
   check('waUrl top-up mengarah ke nomor admin', (r.data.waUrl || '').startsWith('https://wa.me/6285220743283'));
+
+  console.log('\n[20] Bonus konvoi (Tahap 3, BUG-7)');
+  // A: 4 bangunan konvoi aktif (langsung via DB — slot Level 1 hanya 1,
+  // jadi endpoint build tidak bisa dipakai untuk menguji keempat bonus
+  // sekaligus). Perusahaan ringan milik A (produksi dasar 8× Makanan/hari).
+  const meA20 = await A.get('/api/me');
+  const aId = meA20.data.citizen.id;
+  const aRegion = meA20.data.region.id;
+  const dbCv = new DatabaseSync(DB_PATH);
+  const convoyExp = Date.now() + 7 * 86400000;
+  for (const [i, b] of ['health', 'education', 'industry', 'military'].entries()) {
+    dbCv.prepare('INSERT INTO convoys (citizen_id, slot, building, region_id, expires_at, created_at) VALUES (?,?,?,?,?,?)')
+      .run(aId, i + 1, b, aRegion, convoyExp, Date.now());
+  }
+  dbCv.prepare("INSERT INTO companies (owner_id, name, about, type, region_id, resource, created_at) VALUES (?,?,?,?,?,?,?)")
+    .run(aId, 'Perusahaan Tes', '', 'light', aRegion, '', Date.now());
+  const beforeFood = (await A.get('/api/inventory')).data.items.find((x) => x.name === 'Makanan');
+  const beforeFoodQty = beforeFood ? beforeFood.qty : 0;
+  // Picu tick harian lagi (mundurkan tanggal seperti [12]).
+  const yesterday2 = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  dbCv.prepare('UPDATE world SET last_tick_date = ? WHERE id = 1').run(yesterday2);
+  dbCv.close();
+  await A.get('/api/me'); // request ini memicu maybeTick (async)
+  await sleep(1500);
+  r = await A.get('/api/me');
+  check('Rumah Sakit Lapangan: energi pulih ke 110 setelah tick', r.data.citizen.energy === 110, `energi=${r.data.citizen.energy}`);
+  check('/api/me: energyCap 110 dengan Rumah Sakit Lapangan', r.data.citizen.energyCap === 110, `cap=${r.data.citizen.energyCap}`);
+  check('/api/me: trainCosts.strength diskon 10% (2 → 1 emas)', r.data.citizen.trainCosts?.strength === 1, JSON.stringify(r.data.citizen.trainCosts));
+  r = await A.get('/api/inventory');
+  const afterFood = r.data.items.find((x) => x.name === 'Makanan');
+  check('Gudang Industri: produksi Makanan 8 → 9 (+10%)', afterFood && afterFood.qty === beforeFoodQty + 9, `sebelum=${beforeFoodQty} sesudah=${afterFood?.qty}`);
+  const goldBeforeTrain = (await A.get('/api/me')).data.citizen.gold;
+  r = await A.post('/api/train', { attr: 'str' });
+  check('Sekolah Keliling: latih str hanya potong 1 emas (bukan 2)', r.status === 200 && r.data.cost === 1 && (await A.get('/api/me')).data.citizen.gold === goldBeforeTrain - 1, `status=${r.status} cost=${r.data.cost} ${r.data.error || ''}`);
+  // Pos Militer: perang di Jakarta (wilayah A) + serangan pembela.
+  // Kekuatan A kini 2 (latih [4] + latih di atas) → dasar 20+5×2=30 → +10% = 33.
+  const dbWar = new DatabaseSync(DB_PATH);
+  const warIns = dbWar.prepare("INSERT INTO wars (name, region_id, attacker_label, defender_label, score_a, score_d, status, winner, ends_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    .run('Perang Tes Jakarta', aRegion, 'Pemberontak Jakarta', 'Republik Indonesia', 0, 0, 'active', '', Date.now() + 7 * 86400000, Date.now());
+  const warId = Number(warIns.lastInsertRowid);
+  dbWar.close();
+  r = await A.get('/api/wars/' + warId);
+  check('Perang membawa label penyerang/pembela (BUG-12)', r.data.war.attacker_label === 'Pemberontak Jakarta' && r.data.war.defender_label === 'Republik Indonesia', JSON.stringify(r.data.war));
+  r = await A.post(`/api/wars/${warId}/attack`, { side: 'defender', ammo: 'Senjata' });
+  check('Pos Militer: kerusakan perang 30 → 33 (+10%)', r.status === 200 && r.data.damage === 33, `damage=${r.data.damage} ${r.data.error || ''}`);
+
+  console.log('\n[21] Aktivitas Saya + teks Premium (Tahap 3)');
+  const dbAct = new DatabaseSync(DB_PATH);
+  const foodCom = dbAct.prepare("SELECT id FROM commodities WHERE name = 'Makanan'").get();
+  dbAct.prepare('INSERT INTO market_tx (buyer_id, seller_id, scope, commodity_id, tier, qty, price_each, total, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(aId, 2, 'local', foodCom.id, 1, 10, 9, 90, Date.now());
+  dbAct.prepare('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?)')
+    .run(aId, 'SISTEM', 'Aktivitas tes', 'Peristiwa tes aktivitas.', Date.now());
+  dbAct.close();
+  r = await A.get('/api/activity');
+  check('GET /api/activity 200', r.status === 200 && Array.isArray(r.data.transactions) && Array.isArray(r.data.events));
+  const txRow = r.data.transactions.find((t) => t.commodity_name === 'Makanan' && t.direction === 'beli');
+  check('Aktivitas: transaksi BELI Makanan T1 ×10 tercatat', !!txRow && txRow.qty === 10 && txRow.total === 90, JSON.stringify(txRow));
+  check('Aktivitas: peristiwa "Aktivitas tes" tercatat', r.data.events.some((e) => e.title === 'Aktivitas tes'));
+  r = await A.get('/api/shop');
+  check('Toko: teks Premium jujur (batas energi 120, tanpa mode otomatis/roti)', typeof r.data.perks === 'string' && r.data.perks.includes('Batas energi 120') && !r.data.perks.includes('Mode otomatis') && !r.data.perks.includes('roti'), r.data.perks || '');
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

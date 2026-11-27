@@ -1,7 +1,7 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
-import { sql, one, run, tx, forUpdate } from './db.js';
+import { sql, one, run, tx, forUpdate, convoyBuildings } from './db.js';
 import { authRequired, citizenRequired, loadCitizen, todayStr } from './util.js';
-import { warDamage, CHRONICLE } from './game.js';
+import { warDamage, warDamageWithBonus, CHRONICLE } from './game.js';
 
 const CHAT_ROOMS = ['global', 'indonesia', 'negara'];
 
@@ -282,7 +282,10 @@ export function registerCivic(app) {
     if (c.region_id !== war.region_id) return res.status(400).json({ error: 'Kamu harus berada di wilayah perang untuk menyerang dari garis depan.' });
     const useAmmo = ammo === 'Drone' ? 'Drone' : 'Senjata';
     const com = await one('SELECT id FROM commodities WHERE name = ?', [useAmmo]);
-    const damage = warDamage(c.attr_str, useAmmo);
+    let damage = warDamage(c.attr_str, useAmmo);
+    // Bonus konvoi (Tahap 3, BUG-7): Pos Militer aktif -> kerusakan +10%.
+    const buildings = await convoyBuildings(c.id);
+    if (buildings.has('military')) damage = warDamageWithBonus(damage);
     // Atomik: kunci baris warga, baca amunisi segar di dalam tx, potong
     // energi + amunisi + catat serangan + update skor + progres misi — semua
     // dari nilai yang dikunci (dulu misi dihitung dari objek basi di luar tx).
@@ -459,19 +462,25 @@ export function registerCivic(app) {
   app.get('/api/chat/:room', authRequired, citizenRequired, r(async (req, res) => {
     const room = req.params.room;
     const since = Number(req.query.since || 0);
-    const blocked = await sql('SELECT blocked_id FROM blocked WHERE blocker_id = ?', [req.citizen.id]);
-    const blockedSet = new Set(blocked.map((b) => b.blocked_id));
+    // BUG-11 (Tahap 3): pesan dari warga yang diblokir disaring DI SQL,
+    // bukan di JS setelah LIMIT 100 — sebelumnya daftar 100 pesan bisa
+    // terisi pesan terblokir dan pesan valid terpotong. Satu query, satu
+    // parameter tambahan (id warga peminta).
+    // §6.3: avatar yang dikirim adalah avatar_sm (48×48, ≤ 25 KB), bukan
+    // avatar penuh — satu polling chat 100 pesan tidak lagi mengunduh
+    // ~13 MB. Field respons tetap 'avatar'; frontend tidak berubah.
     const rows = await sql(
-      `SELECT m.*, u.username, u.avatar, u.premium_until, p.tag AS party_tag,
+      `SELECT m.*, u.username, u.avatar_sm AS avatar, u.premium_until, p.tag AS party_tag,
         (SELECT COUNT(*) FROM article_comments WHERE article_id = m.article_id) AS article_comments,
         (SELECT title FROM articles WHERE id = m.article_id) AS article_title,
         (SELECT likes FROM articles WHERE id = m.article_id) AS article_likes
        FROM chat_messages m JOIN citizens c ON c.id = m.citizen_id JOIN users u ON u.id = c.user_id
        LEFT JOIN parties p ON p.id = c.party_id
-       WHERE m.room = ? AND m.created_at > ? ORDER BY m.created_at ASC LIMIT 100`,
-      [room, since]);
-    const visible = rows.filter((m) => !blockedSet.has(m.citizen_id));
-    res.json({ room, title: roomTitle(room), messages: visible.map((m) => ({ ...m, isPremium: m.premium_until > Date.now() })) });
+       WHERE m.room = ? AND m.created_at > ?
+       AND m.citizen_id NOT IN (SELECT blocked_id FROM blocked WHERE blocker_id = ?)
+       ORDER BY m.created_at ASC LIMIT 100`,
+      [room, since, req.citizen.id]);
+    res.json({ room, title: roomTitle(room), messages: rows.map((m) => ({ ...m, isPremium: m.premium_until > Date.now() })) });
   }));
 
   app.post('/api/chat/report', authRequired, citizenRequired, r(async (req, res) => {
@@ -575,7 +584,7 @@ export function registerCivic(app) {
   app.get('/api/dms/:citizenId', authRequired, citizenRequired, r(async (req, res) => {
     const other = Number(req.params.citizenId);
     const rows = await sql(
-      `SELECT d.*, u.username AS from_name, u.avatar AS from_avatar FROM dms d JOIN citizens c ON c.id = d.from_id JOIN users u ON u.id = c.user_id
+      `SELECT d.*, u.username AS from_name, u.avatar_sm AS from_avatar FROM dms d JOIN citizens c ON c.id = d.from_id JOIN users u ON u.id = c.user_id
        WHERE (d.from_id = ? AND d.to_id = ?) OR (d.from_id = ? AND d.to_id = ?) ORDER BY d.created_at ASC LIMIT 100`,
       [req.citizen.id, other, other, req.citizen.id]);
     await run('UPDATE dms SET is_read = 1 WHERE from_id = ? AND to_id = ?', [other, req.citizen.id]);

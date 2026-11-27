@@ -33,6 +33,24 @@ body {
   line-height: 1.5;
   min-height: 100vh;
 }
+/* Skeleton loading (Tahap 3, §7): shimmer saat halaman dimuat, menggantikan
+   "Memuat…" polos. Dihormati prefers-reduced-motion. */
+/* Judul halaman difokuskan secara programatik saat navigasi (a11y) — bukan
+   elemen interaktif dan tidak ada di urutan Tab (tabindex=-1), jadi tanpa
+   cincin fokus visual; pembaca layar tetap mengumumkan judulnya. */
+h2[tabindex="-1"]:focus { outline: none; }
+.skel {
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--panel) 25%, var(--panel2) 50%, var(--panel) 75%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.2s ease-in-out infinite;
+  margin: 10px 0;
+}
+.skel-h { height: 28px; width: 45%; }
+.skel-p { height: 16px; width: 100%; }
+@keyframes skel-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
 h1, h2, h3, .caps {
   font-family: 'Oswald', 'Barlow Condensed', sans-serif;
   text-transform: uppercase;

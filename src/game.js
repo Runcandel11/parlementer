@@ -151,7 +151,21 @@ export const SHOP_PREMIUM = [
   { months: 6, price: 25000, perMonth: 4167 },
   { months: 12, price: 45000, perMonth: 3750 },
 ];
-export const PREMIUM_PERKS = 'Mode otomatis, lebih banyak roti, latihan lebih cepat, slot konvoi keempat, dan namamu berwarna Premium.';
+export const PREMIUM_PERKS = 'Batas energi 120 (bukan 100), slot konvoi keempat, dan namamu berwarna Premium di chat.';
+
+// --- Bonus bangunan konvoi (Tahap 3 — BUG-7: janji kini DITERAPKAN) ---
+// Sebelum Tahap 3, CONVOY_BUILDINGS hanya teks di toko/konvoi tanpa efek
+// mekanik. Sekarang tiap bangunan aktif memberi bonus nyata (lihat tick.js,
+// api-core.js latih/makan, api-civic.js serang):
+export const ENERGY_DAILY = 100;        // pemulihan energi harian dasar
+export const ENERGY_DAILY_HEALTH = 110; // Rumah Sakit Lapangan: +10%
+export const ENERGY_CAP_PREMIUM = 120;  // batas energi Premium
+// Sekolah Keliling: latihan 10% lebih murah (minimal 1 emas).
+export function trainCostDiscounted(cost) { return Math.max(1, Math.floor(cost * 0.9)); }
+// Gudang Industri: produksi perusahaan +10% (dibulatkan).
+export function productionWithBonus(amount) { return Math.round(amount * 1.1); }
+// Pos Militer: kerusakan perang +10% (dibulatkan).
+export function warDamageWithBonus(damage) { return Math.round(damage * 1.1); }
 
 // --- Bangunan konvoi ---
 export const CONVOY_BUILDINGS = [
