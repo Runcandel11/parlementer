@@ -13,6 +13,10 @@
 //   (6) LABEL: wilayah tanpa negara menampilkan "Belum Bernegara" dan
 //       kata "Merdeka" tidak muncul di mana pun (dashboard, profil,
 //       detail wilayah, peta).
+//   (7) WARNA WILAYAH (pemilik, 27 Nov 2026): hero profil + kartu wilayah
+//       dashboard TANPA negara = kaca abu-abu (kelas free) + tanda "?",
+//       tanpa dot merah negara; SETELAH mendirikan negara, hero + kartu
+//       kembali merah (dot-red) dan tanda "?" hilang.
 // Jalankan: node test/profile-admin-dom.js
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -117,6 +121,17 @@ async function main() {
     check('Dashboard: label tombol "(100 ⚡)" saat energi penuh', !!btn && btn.textContent.includes('(100 ⚡)'), btn ? btn.textContent.trim() : '');
     check('Dashboard: tidak ada kata "Merdeka"', !/merdeka/i.test(pageText(dom)));
     check('Dashboard: wilayah tampil "Belum Bernegara"', pageText(dom).includes('Belum Bernegara'));
+    // (7) WARNA WILAYAH tanpa negara: hero + kartu wilayah = kaca abu-abu
+    // (kelas free) + tanda "?", tanpa warna negara (merah).
+    const hero = dom.window.document.querySelector('.profile-hero');
+    check('Tanpa negara: hero dashboard kaca abu-abu (kelas free)', !!hero && hero.classList.contains('free'));
+    const heroQ = dom.window.document.querySelector('.profile-hero .hero-q');
+    check('Tanpa negara: hero menampilkan tanda "?"', !!heroQ && heroQ.textContent.trim() === '?');
+    check('Tanpa negara: hero TIDAK memakai dot merah negara', !dom.window.document.querySelector('.profile-hero .dot-red'));
+    const regionPanel = dom.window.document.querySelector('#dash-region');
+    check('Tanpa negara: kartu wilayah kaca abu-abu (kelas free)', !!regionPanel && regionPanel.classList.contains('free'));
+    const regionQ = dom.window.document.querySelector('#dash-region .region-q');
+    check('Tanpa negara: kartu wilayah menampilkan tanda "?"', !!regionQ && regionQ.textContent.trim() === '?');
     btn?.click();
     await sleep(1500);
     let me = (await api(jarA, '/api/me')).data.citizen;
@@ -199,6 +214,33 @@ async function main() {
     await sleep(1500);
     check('Peta: ubin wilayah tampil "Belum Bernegara"', pageText(dom).includes('Belum Bernegara'));
     check('Peta: tidak ada kata "Merdeka"', !/merdeka/i.test(pageText(dom)));
+
+    // (7b) WARNA WILAYAH dengan negara: dirikan Nusantara (wilayah asal A
+    // jadi ibu kota), lalu hero + kartu wilayah harus kembali merah.
+    const db3 = new DatabaseSync(DB_PATH);
+    db3.prepare('UPDATE citizens SET level = 10, gold = 200 WHERE id = ?').run(meA.citizen.id);
+    db3.close();
+    r = await api(jarA, '/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
+    check('Dirikan negara Nusantara (untuk uji warna bernegara)', r.status === 200 && !!r.data.countryId, `status=${r.status} ${r.data.error || ''}`);
+    // Negara didirikan lewat API (di luar UI) — ME di jsdom masih basi;
+    // segarkan dulu supaya dashboard me-render dengan negara yang baru.
+    await dom.window.refreshMe();
+    dom.window.location.hash = '#/stats';
+    await sleep(1500);
+    dom.window.location.hash = '#/dashboard';
+    await sleep(1500);
+    const hero2 = dom.window.document.querySelector('.profile-hero');
+    check('Bernegara: hero TIDAK lagi kaca abu-abu (tanpa kelas free)', !!hero2 && !hero2.classList.contains('free'));
+    check('Bernegara: hero memakai dot merah negara', !!dom.window.document.querySelector('.profile-hero .dot-red'));
+    check('Bernegara: tanda "?" hero hilang', !dom.window.document.querySelector('.profile-hero .hero-q'));
+    const regionPanel2 = dom.window.document.querySelector('#dash-region');
+    check('Bernegara: kartu wilayah TIDAK lagi kaca abu-abu', !!regionPanel2 && !regionPanel2.classList.contains('free'));
+    check('Bernegara: tanda "?" kartu wilayah hilang', !dom.window.document.querySelector('#dash-region .region-q'));
+    // Hero halaman profil orang lain yang bernegara ikut merah.
+    dom.window.location.hash = '#/profile';
+    await sleep(1500);
+    const hero3 = dom.window.document.querySelector('.profile-hero');
+    check('Bernegara: hero halaman profil juga merah (tanpa free)', !!hero3 && !hero3.classList.contains('free') && !!dom.window.document.querySelector('.profile-hero .dot-red'));
   } finally {
     if (dom) dom.window.close();
     stop();

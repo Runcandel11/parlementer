@@ -838,6 +838,10 @@ ROUTES.dashboard = async () => {
   const cap = c.energyCap || 100;
   const fatigue = c.fatigue || 0;
   const fatigueMultNow = fatigue >= 15000 ? '0.5' : fatigue >= 10000 ? '0.75' : '1';
+  // Negara di hero: warna/bendera negara HANYA ada kalau wilayah sudah
+  // punya negara — tanpa negara, hero jadi kaca abu-abu + "?" (aturan
+  // warna wilayah, pemilik 27 Nov 2026).
+  const heroCountry = ME.region?.country_name || ME.country?.name || '';
   let kronikHidden = false;
   try { kronikHidden = localStorage.getItem('parlementer_kronik_hide') === '1'; } catch { /* abaikan */ }
   $('#page').innerHTML = page('DASHBOARD', `Hari ${ME.world.day} · Populasi dunia: ${fmt(ME.population)} warga · <span title="Pemain aktif dalam 5 menit terakhir">🟢 ${fmt(ME.onlineCount ?? 0)} online</span>`, `
@@ -848,10 +852,11 @@ ROUTES.dashboard = async () => {
     ${ME.votingLaws.map((l) => `<div class="kv"><span class="k">${esc(l.title)}</span><span class="v">${l.yes} Ya / ${l.abstain} / ${l.no} Tidak</span></div>`).join('')}
     <button class="btn-gold btn-sm" data-goto="#/parliament">Buka Parlemen</button></div>` : ''}
   <div class="panel">
-    <div class="profile-hero">
+    <div class="profile-hero ${heroCountry ? '' : 'free'}">
+      ${heroCountry ? '' : '<span class="hero-q" aria-hidden="true">?</span>'}
       <a class="profile-hero-name" data-goto="#/profile" title="Lihat profilmu">${esc(c.username)}</a>
       <div class="profile-hero-sub">
-        <span><span class="dot-red">■</span> ${esc(ME.region?.country_name || ME.country?.name || 'Belum Bernegara')}</span>
+        ${heroCountry ? `<span><span class="dot-red">■</span> ${esc(heroCountry)}</span>` : '<span><span class="dot-free">?</span> Belum Bernegara</span>'}
         <span><span class="muted">📍</span> ${esc(ME.region?.name || '')}</span>
       </div>
     </div>
@@ -1055,9 +1060,13 @@ ROUTES.dashboard = async () => {
     const rb = $('#dash-region-body');
     if (rb) {
       const r = s.myRegion;
+      // Aturan warna wilayah (pemilik, 27 Nov 2026): kartu wilayah tanpa
+      // negara = kaca abu-abu + "?" — sama seperti ubin PETA LANGSUNG.
+      document.querySelector('#dash-region')?.classList.toggle('free', !r.country_name);
       const infra = [['Kesehatan', r.health], ['Pendidikan', r.education], ['Militer', r.military], ['Industri', r.industry], ['Listrik', r.electricity]];
       const cost = r.name === 'Jakarta' ? 100 : 50;
       rb.innerHTML = `
+      ${r.country_name ? '' : '<span class="region-q" aria-hidden="true">?</span>'}
       <p class="lbl-gold" style="margin:0">DITEMPATKAN DI</p>
       <h4 style="font-size:22px">${esc(r.name)}</h4>
       ${ME.travel ? `<p class="teal-text small">✈️ Dalam perjalanan ke ${esc(ME.travel.toRegionName)} — tiba ${fmtCountdown(ME.travel.remainingMs)} lagi.</p>` : ''}
@@ -1255,10 +1264,11 @@ ROUTES.profile = async (username) => {
   const p = await api('/api/profile/' + encodeURIComponent(name));
   const pr = p.profile;
   $('#page').innerHTML = page('BERKAS WARGA', '', `
-  <div class="profile-hero">
+  <div class="profile-hero ${pr.country_name ? '' : 'free'}">
+    ${pr.country_name ? '' : '<span class="hero-q" aria-hidden="true">?</span>'}
     <div class="profile-hero-name">${esc(pr.username)}${pr.isPremium ? ' ◆' : ''}</div>
     <div class="profile-hero-sub">
-      <span><span class="dot-red">■</span> ${esc(pr.country_name || 'Belum Bernegara')}</span>
+      ${pr.country_name ? `<span><span class="dot-red">■</span> ${esc(pr.country_name)}</span>` : '<span><span class="dot-free">?</span> Belum Bernegara</span>'}
       <span><span class="muted">📍</span> ${esc(pr.region_name)}</span>
     </div>
   </div>

@@ -688,6 +688,35 @@ body {
   color: rgba(255,255,255,.5); line-height: 1; pointer-events: none;
 }
 
+/* Kartu hero profil + kartu wilayah dashboard: wilayah TANPA negara =
+   kaca abu-abu + tanda "?" — BUKAN merah (aturan warna wilayah, pemilik
+   27 Nov 2026; sama seperti ubin PETA LANGSUNG). Warna/bendera negara
+   HANYA ada kalau wilayah sudah punya negara; bendera ditentukan
+   parlemen, bukan preset — tidak ada fitur bendera baru di sini. */
+.profile-hero.free {
+  position: relative; overflow: hidden;
+  background: var(--glass-free);
+  border-color: var(--glass-free-border);
+}
+.profile-hero.free .profile-hero-sub { color: #c9d2de; }
+.profile-hero.free .profile-hero-sub .muted { color: #9aa7b8; }
+.profile-hero .hero-q {
+  position: absolute; top: 0; right: 10px;
+  font-family: 'Oswald', sans-serif; font-size: 30px; font-weight: 700;
+  color: rgba(255,255,255,.5); line-height: 1; pointer-events: none;
+}
+.profile-hero-sub .dot-free { color: #9aa7b8; font-weight: 700; }
+#dash-region.free {
+  position: relative;
+  background: var(--glass-free);
+  border-color: var(--glass-free-border);
+}
+#dash-region .region-q {
+  position: absolute; top: 2px; right: 10px;
+  font-family: 'Oswald', sans-serif; font-size: 26px; font-weight: 700;
+  color: rgba(255,255,255,.5); line-height: 1; pointer-events: none;
+}
+
 /* ---------- landing page (sebelum login) ---------- */
 .auth-view.landing { display: block; padding: 0; }
 .landing-hero {
