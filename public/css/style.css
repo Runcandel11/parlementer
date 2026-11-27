@@ -105,7 +105,7 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
   background: linear-gradient(180deg, #0d1526, #0a101d);
   border-bottom: 1px solid var(--line); padding: 8px 12px;
 }
-.hud-icon { position: relative; background: #0a0f1c; border: 1px solid var(--line); color: var(--gold-bright); border-radius: 10px; width: 40px; height: 40px; font-size: 18px; flex: none; }
+.hud-icon { position: relative; background: #0a0f1c; border: 1px solid var(--line); color: var(--gold-bright); border-radius: 10px; width: 40px; height: 40px; font-size: 18px; flex: none; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .badge { position: absolute; top: -6px; right: -6px; background: var(--danger); color: #fff; border-radius: 999px; min-width: 18px; height: 18px; font-size: 11px; line-height: 18px; text-align: center; padding: 0 4px; font-weight: 700; }
 /* Perisai HUD (diperbaiki Tahap 4): bentuk perisai TIDAK LAGI dibuat dengan
    clip-path pada elemennya sendiri — clip-path memotong anak-anaknya
@@ -136,13 +136,13 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
 .drawer.open { transform: translateX(0); }
 .drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 55; opacity: 0; pointer-events: none; transition: opacity .25s; }
 .drawer-overlay.open { opacity: 1; pointer-events: auto; }
-.drawer-close { position: absolute; top: 10px; right: 10px; background: #131c2e; border: 1px solid var(--line); color: var(--gold-bright); border-radius: 8px; width: 34px; height: 34px; }
+.drawer-close { position: absolute; top: 10px; right: 10px; background: #131c2e; border: 1px solid var(--line); color: var(--gold-bright); border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; line-height: 1; font-size: 16px; }
 .nav-group { color: var(--muted2); font-family: 'Oswald', sans-serif; font-size: 13px; letter-spacing: .14em; margin: 18px 4px 8px; }
 .nav-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; background: transparent; border: none; color: var(--text); padding: 11px 10px; border-radius: 8px; font-family: 'Oswald', sans-serif; font-size: 16px; letter-spacing: .05em; text-transform: uppercase; }
 /* Item menu berupa link luar (mis. Discord): tampil sama seperti tombol. */
 a.nav-item { text-decoration: none; }
 a.btn-gold { display: inline-block; text-decoration: none; }
-.nav-item .ico { color: var(--gold); font-size: 18px; width: 24px; text-align: center; }
+.nav-item .ico { color: var(--gold); font-size: 18px; width: 26px; height: 26px; flex: none; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .nav-item.active { background: linear-gradient(90deg, rgba(217,164,65,.25), rgba(217,164,65,.06)); color: var(--gold-bright); }
 .nav-item:hover { background: #111a2c; }
 @media (min-width: 900px) {
@@ -389,7 +389,7 @@ a.btn-gold { display: inline-block; text-decoration: none; }
    tetap disorot emas. */
 .nav-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 6px; }
 .nav-grid .nav-item { font-size: 15px; padding: 10px 8px; gap: 8px; }
-.nav-grid .nav-item .ico { width: 22px; font-size: 17px; }
+.nav-grid .nav-item .ico { width: 24px; height: 24px; font-size: 17px; }
 
 /* Banner perang di bawah menu: HANYA bila ada perang aktif (data /api/me).
    Menempel di bawah drawer saat di-scroll. */
@@ -424,8 +424,8 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .page h2 { color: var(--gold-bright); }
 
 /* Header: kolom kiri (hamburger + peti pasokan), perisai tengah besar. */
-.hud-side { display: flex; flex-direction: column; gap: 6px; flex: none; }
-.crate-btn { position: relative; width: 40px; height: 40px; border-radius: 50%; background: #0a0f1c; border: 2px solid var(--gold); color: var(--gold-bright); font-size: 19px; display: flex; align-items: center; justify-content: center; flex: none; }
+.hud-side { display: flex; flex-direction: column; gap: 6px; flex: none; align-items: center; }
+.crate-btn { position: relative; width: 40px; height: 40px; border-radius: 50%; background: #0a0f1c; border: 2px solid var(--gold); color: var(--gold-bright); font-size: 19px; display: flex; align-items: center; justify-content: center; flex: none; line-height: 1; }
 .crate-btn .badge { background: #e8821e; top: -4px; right: -4px; }
 .crate-btn.claimed { border-color: var(--line); color: var(--muted2); }
 .crate-btn:disabled { opacity: .45; cursor: default; }
@@ -455,7 +455,7 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .stat-block:last-child { border-bottom: none; padding-bottom: 2px; }
 .stat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .stat-head .lbl { font-family: 'Oswald', sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--gold-bright); font-size: 15px; }
-.stat-head .lbl .ico { margin-right: 6px; }
+.stat-head .lbl .ico { margin-right: 6px; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; line-height: 1; vertical-align: -4px; }
 .big-num { font-family: 'Oswald', sans-serif; font-size: 40px; font-weight: 700; line-height: 1; color: #fff; white-space: nowrap; }
 .big-num small { font-size: 20px; color: var(--muted); font-weight: 500; }
 .big-num.gold { color: var(--gold-bright); }
@@ -556,8 +556,9 @@ button.food-card:disabled { cursor: default; }
   /* Header: nama + lokasi tidak lagi terpotong jelek — identitas pindah ke
      baris kedua selebar layar penuh, jadi nama warga dan wilayah tampil utuh
      (bukan "TANYA..." / "Kepulau..."). Baris pertama: menu, perisai, dompet,
-     tombol aksi. */
-  .hud { gap: 6px; padding: 6px 8px; flex-wrap: wrap; row-gap: 12px; }
+     tombol aksi. HUD digeser sedikit ke kanan (padding kiri 8px → 16px)
+     supaya avatar + tombol menu tidak mepet/terpotong tepi layar HP. */
+  .hud { gap: 6px; padding: 8px 12px 8px 16px; flex-wrap: wrap; row-gap: 12px; }
   .hud-icon { width: 36px; height: 36px; font-size: 16px; border-radius: 8px; }
   .hud-shield { width: 44px; height: 50px; }
   .hud-shield-big { font-size: 16px; }
@@ -566,7 +567,7 @@ button.food-card:disabled { cursor: default; }
   .hud-region { font-size: 11px; }
   .hud-usd, .hud-gold { font-size: 15px; }
   .hud-actions { gap: 4px; }
-  .page { padding: 12px 10px 180px; }
+  .page { padding: 12px 14px 180px; }
   .page h2 { font-size: 22px; }
   /* Polish Tahap 4: panel sedikit lebih lega di HP (14px) supaya hierarki
      visual tidak terlalu rapat; banner toko menyesuaikan margin negatifnya. */
@@ -670,6 +671,10 @@ body {
 .hud-icon { width: 32px; height: 32px; font-size: 15px; border-radius: 8px; }
 .crate-btn { width: 34px; height: 34px; font-size: 16px; }
 .hud-avatar { width: 38px; height: 38px; }
+/* Kolom kiri HUD seragam: avatar, tombol menu, peti pasokan sama besar
+   (38px) supaya kolomnya lurus — sebelumnya avatar 38px tapi tombol
+   menu 32px dan peti 34px, kolom tampak bergerigi. */
+.hud-side .hud-icon, .hud-side .crate-btn { width: 38px; height: 38px; font-size: 17px; }
 .hud-shield { width: 46px; height: 52px; }
 .hud-shield-big { font-size: 20px; }
 .hud-actions { gap: 4px; }
@@ -756,6 +761,8 @@ body {
   .hud-icon { width: 32px; height: 32px; font-size: 15px; }
   .crate-btn { width: 32px; height: 32px; font-size: 15px; }
   .hud-avatar { width: 36px; height: 36px; }
+  /* Kolom kiri HUD tetap seragam di HP: 36px semua (avatar sudah 36px). */
+  .hud-side .hud-icon, .hud-side .crate-btn { width: 36px; height: 36px; font-size: 16px; }
   .hud-shield { width: 40px; height: 46px; }
   .hud-shield-big { font-size: 16px; }
   .landing-title { font-size: clamp(40px, 12vw, 56px); }

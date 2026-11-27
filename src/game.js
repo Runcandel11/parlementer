@@ -13,8 +13,11 @@
 // Update sedang v2.3.0 = timing emas pasar: buy-order tanpa escrow — pembeli
 // baru dipotong saat penjual memenuhi order (sell-to-order), bukan saat
 // order dipasang; batal order tanpa refund.
+// Update kecil v2.3.1 = rapikan UI atas + ikon: HUD geser ke kanan
+// (padding kiri 16px di HP), kolom kiri HUD seragam 38px (36px di HP),
+// semua ikon di tengah dengan flex (HUD, drawer, peti, tutup drawer).
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '2.3.0';
+export const VERSION = '2.3.1';
 
 export const WA_TOPUP_URL = 'https://wa.me/6285220743283';
 export const MINT_RATE = 10; // 1 emas dicetak jadi 10 USD
