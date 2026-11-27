@@ -196,8 +196,11 @@ export function todayStr(d = new Date()) {
   return d.toISOString().slice(0, 10);
 }
 
-export function fmtUSD(n) {
-  return Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+// Kurs tampilan Rupiah — SATU tempat: 1 USD = Rp18.300. Semua teks yang
+// dilihat pemain memakai fmtRp; nilai di database & API tetap USD.
+export const RP_PER_USD = 18300;
+export function fmtRp(usd) {
+  return 'Rp' + Math.round(Number(usd || 0) * RP_PER_USD).toLocaleString('id-ID');
 }
 
 export function fmtGold(n) {

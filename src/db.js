@@ -834,7 +834,7 @@ PERBAIKAN & TAMPILAN
 • Tampilan lebih hidup: animasi halus saat pindah halaman dan tombol beranimasi saat ditekan.
 • Suara ketukan halus setiap kali menekan tombol — bisa dimatikan di Pengaturan.
 • Baru: pengumuman update ("Apa yang Baru") di Notifikasi, dan arsip lengkapnya di Buku Panduan → Riwayat Update.
-• Hadiah barang tanpa batas jumlah: admin kini bisa memberi makanan, bahan mentah, dan barang lain sebanyak apa pun (emas/USD tetap dibatasi 1.000.000, Premium 365 hari).
+• Hadiah barang tanpa batas jumlah: admin kini bisa memberi makanan, bahan mentah, dan barang lain sebanyak apa pun (emas/Rupiah tetap dibatasi 1.000.000, Premium 365 hari).
 • Keamanan pasar: harga jauh di luar batas wajar kini ditolak, dan pola perdagangan bolak-balik yang mencurigakan dicatat untuk ditinjau admin. Data lama (chat >90 hari dan lainnya) kini dibersihkan otomatis setiap hari.`;
 
 // Pengumuman kedua (Update #2, Tahap 5) — di-seed sekali saat judulnya

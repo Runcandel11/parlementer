@@ -582,6 +582,15 @@ async function main() {
   check('Avatar A tetap milik A (tidak tertimpa B)', r.data.profile.avatar === TINY_JPEG);
   r = await B.get('/api/profile/warga_dua');
   check('Avatar B kini terisi', r.data.profile.avatar === TINY_JPEG);
+  // Lookup profil case-insensitive (Masalah 1): nama tampil huruf kapital
+  // semua di UI, jadi tautan #/profile/NAMA-KAPITAL harus tetap ketemu
+  // walau yang tersimpan huruf kecil. Sebelum perbaikan, lookup ini 404.
+  r = await A.get('/api/profile/WARGA_SATU');
+  check('Profil ditemukan walau nama diketik huruf kapital (WARGA_SATU)', r.status === 200 && r.data.profile.username === 'warga_satu', `status=${r.status}`);
+  r = await A.get('/api/profile/Warga_Satu');
+  check('Profil ditemukan walau nama diketik campur huruf (Warga_Satu)', r.status === 200 && r.data.profile.username === 'warga_satu', `status=${r.status}`);
+  r = await A.get('/api/profile/tidak_ada_nama_ini');
+  check('Profil yang memang tidak ada tetap 404', r.status === 404, `status=${r.status}`);
   r = await A.post('/api/profile/avatar/delete');
   check('Hapus avatar berhasil', r.status === 200 && r.data.ok);
   r = await A.get('/api/profile/warga_satu');
@@ -607,8 +616,8 @@ async function main() {
   r = await ADM.post('/api/admin/usd', { user_id: 3, amount: 25, kind: 'pembelian' });
   check('Admin: beri 25 USD (pembelian)', r.status === 200 && r.data.ok);
   r = await R.get('/api/notifications');
-  const nBuyUsd = r.data.notifications.find((n) => n.title === 'Pembelian diterima' && (n.content || '').includes('25 USD diterima dari pembelian'));
-  check('Notifikasi pembelian USD', !!nBuyUsd);
+  const nBuyUsd = r.data.notifications.find((n) => n.title === 'Pembelian diterima' && (n.content || '').includes('Rp457.500 diterima dari pembelian'));
+  check('Notifikasi pembelian Rupiah ("Rp457.500 diterima dari pembelian")', !!nBuyUsd, nBuyUsd?.content || '');
   r = await ADM.post('/api/admin/item', { user_id: 3, commodity: 'Senjata', tier: 1, qty: 5, kind: 'pembelian' });
   check('Admin: beri 5× Senjata T1 (pembelian)', r.status === 200 && r.data.ok);
   r = await R.get('/api/notifications');
@@ -652,6 +661,17 @@ async function main() {
   r = await R.get('/api/notifications');
   const nMass = r.data.notifications.find((n) => n.title === 'Hadiah dari admin' && (n.content || '').includes('+50 emas'));
   check('Notifikasi hadiah massal: "Hadiah dari admin"', !!nMass);
+  // Hadiah massal Rupiah (konversi Rp→USD): admin mengetik Rp9.150 yang
+  // dikirim sebagai 0,5 USD (pecahan) — JANGAN dibulatkan ke bawah, kalau
+  // tidak hadiahnya jadi 0 dan ditolak. Notifikasi menampilkan Rupiah.
+  const beforeUsdR = (await R.get('/api/me')).data.citizen.usd;
+  r = await ADM.post('/api/admin/gift-all', { kind: 'usd', amount: 0.5, message: 'Bonus Rupiah!' });
+  check('Hadiah massal Rp9.150 (0,5 USD) terkirim, tidak terpotong jadi 0', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await R.get('/api/me');
+  check('R menerima +0,5 USD dari hadiah massal Rupiah', eq(r.data.citizen.usd, beforeUsdR + 0.5), `usd=${r.data.citizen.usd} sebelum=${beforeUsdR}`);
+  r = await R.get('/api/notifications');
+  const nMassRp = r.data.notifications.find((n) => n.title === 'Hadiah dari admin' && (n.content || '').includes('Rp9.150'));
+  check('Notifikasi hadiah massal Rupiah: "+Rp9.150"', !!nMassRp, nMassRp?.content || '');
   r = await ADM.get('/api/admin/actions');
   check('Log admin mencatat hadiah massal', r.data.actions.some((a) => a.action === 'gift_all'));
   r = await ADM.post('/api/admin/gift-all', { kind: 'item', commodity: 'Kayu', tier: 1, amount: 5 });

@@ -477,7 +477,7 @@ async function main() {
     // angka (regen +2/mnt, ambang 10.000/15.000) dari data game asli.
     const meRevamp = {
       user: { id: 1, username: 'warga_tes', publicId: 'PL-000099', is_banned: false },
-      citizen: { id: 1, username: 'warga_tes', energy: 100, energyCap: 100, gold: 500, usd: 500, xp: 0, level: 1, fatigue: 0, energy_spent_today: 0, bread_today: 0, last_claim_date: '2000-01-01', attr_str: 0, attr_edu: 0, attr_eco: 0, isPremium: false },
+      citizen: { id: 1, user_id: 1, username: 'warga_tes', energy: 100, energyCap: 100, gold: 500, usd: 500, xp: 0, level: 1, fatigue: 0, energy_spent_today: 0, bread_today: 0, last_claim_date: '2000-01-01', attr_str: 0, attr_edu: 0, attr_eco: 0, isPremium: false },
       region: { name: 'Jakarta' }, party: null, job: null, activeWars: [],
       votingLaws: [
         { id: 1, title: 'UU Tes 1', yes: 1, abstain: 0, no: 0, ends_at: Date.now() + 75 * 60000 + 30000 },
@@ -506,7 +506,7 @@ async function main() {
       ] },
       { chapter: 3, title: 'Pebisnis Muda', reward: 25, done: 0, total: 4, claimed: false, tasks: [
         { key: 'company', label: 'Dirikan perusahaan', done: false },
-        { key: 'fx', label: 'Cetak USD dari emas / pasang penawaran valas', done: false },
+        { key: 'fx', label: 'Cetak Rupiah dari emas / pasang penawaran valas', done: false },
         { key: 'level5', label: 'Capai Level 5', done: false },
         { key: 'party', label: 'Gabung atau dirikan partai', done: false },
       ] },
@@ -528,7 +528,8 @@ async function main() {
       ] };
       if (path === '/api/chronicle') return chronicleMock;
       if (path === '/api/inventory') return { items: [{ name: 'Makanan', tier: 1, qty: 3, ref_usd: 9 }], totalQty: 3, marketValue: 27 };
-      if (path === '/api/profile/warga_tes') return { profile: { username: 'warga_tes', isPremium: false, region_name: 'Jakarta', level: 1, avatar: null, publicId: 'PL-000099', party: null, created_at: Date.now(), bio: '', attr_str: 0, attr_edu: 0, attr_eco: 0, total_damage: 0, attacks: 0, frontline_attacks: 0, shifts: 0, total_salary: 0, companies: [], articles: [], referral: null } };
+      if (path === '/api/profile/warga_tes') return { profile: { user_id: 1, username: 'warga_tes', isPremium: false, region_name: 'Jakarta', level: 1, avatar: null, publicId: 'PL-000099', party: null, created_at: Date.now(), bio: '', attr_str: 0, attr_edu: 0, attr_eco: 0, total_damage: 0, attacks: 0, frontline_attacks: 0, shifts: 0, total_salary: 0, companies: [], articles: [], referral: null } };
+      if (path === '/api/profile/orang_lain') return { profile: { user_id: 2, username: 'orang_lain', isPremium: false, region_name: 'Jakarta', level: 3, avatar: null, publicId: 'PL-000100', party: null, created_at: Date.now(), bio: '', attr_str: 0, attr_edu: 0, attr_eco: 0, total_damage: 0, attacks: 0, frontline_attacks: 0, shifts: 0, total_salary: 0, companies: [], articles: [], referral: null } };
       if (opts?.method === 'POST') {
         revampCalls.push(path);
         if (path === '/api/claim') return { reward: { gold: 5, usd: 50, xp: 2 } };
@@ -563,7 +564,25 @@ async function main() {
     const foodCards = document.querySelectorAll('.food-grid .food-card');
     check('Dashboard: grid MAKANAN berisi 5 kartu T1–T5', foodCards.length === 5, `${foodCards.length} kartu`);
     check('Dashboard: kartu T1 ⚡10 ×3 bisa dimakan, T5 kosong & mati', foodCards[0]?.textContent.includes('⚡10') && foodCards[0]?.textContent.includes('×3') && foodCards[4]?.disabled === true, foodCards[0]?.textContent);
-    check('Dashboard: blok DOMPET tampil (emas + USD)', dashText.includes('DOMPET') && dashText.includes('500'));
+    check('Dashboard: blok DOMPET tampil (emas + Rupiah Rp9.150.000, tanpa USD)', dashText.includes('DOMPET') && dashText.includes('Rp9.150.000') && !dashText.includes('USD'));
+    // Dashboard progresif (Masalah 2): cangkang (hero + DOMPET) langsung
+    // ter-render dari ME sebelum /api/missions dkk. kembali; panel-panel
+    // terisi menyusul, masing-masing begitu selesai. Bukti: tahan respons
+    // API panel 300 ms, lalu route() — cangkang sudah ada saat panel masih
+    // "Memuat…", dan panel terisi setelah API kembali.
+    const fastApi = window.api;
+    window.api = async (path, opts) => {
+      if (path === '/api/missions' || path === '/api/chronicle' || path === '/api/inventory') await sleep(300);
+      return fastApi(path, opts);
+    };
+    window.location.hash = '#/dash';
+    window.eval('route()');
+    await sleep(50);
+    check('Dashboard progresif: cangkang (hero + DOMPET) tampil sebelum API panel kembali', !!document.querySelector('.profile-hero-name') && document.querySelector('#page').textContent.includes('DOMPET'));
+    check('Dashboard progresif: panel misi masih "Memuat…" selagi API tertahan', document.querySelector('#dash-missions')?.textContent.includes('Memuat'));
+    await sleep(500);
+    check('Dashboard progresif: panel misi terisi setelah API kembali', !document.querySelector('#dash-missions')?.textContent.includes('Memuat') && document.querySelector('#dash-missions').textContent.includes('Habiskan 500 energi'));
+    window.api = fastApi;
     check('Dashboard: tombol AMBIL PASOKAN lama sudah tidak ada (diganti peti HUD)', !document.querySelector('#btn-claim'));
     // Kartu KRONIKMU baru.
     const kronik = document.querySelector('#kronik-card');
@@ -615,6 +634,16 @@ async function main() {
     window.eval('route()');
     await sleep(300);
     check('Profil: hero tampil (nama + Republik Indonesia + Jakarta)', !!document.querySelector('.profile-hero-name') && document.querySelector('.profile-hero-name').textContent.includes('warga_tes') && document.querySelector('#page').textContent.includes('Republik Indonesia') && document.querySelector('#page').textContent.includes('Jakarta'));
+    // Foto profil (Masalah 1): tombol Ubah Foto muncul di profil sendiri
+    // (user_id sama dengan ME) dan TIDAK muncul di profil orang lain.
+    // Perbandingan memakai user_id, bukan username — nama tampil huruf
+    // kapital semua tapi yang tersimpan bisa campur huruf, jadi
+    // perbandingan nama rapuh dan pernah menyembunyikan tombol ini.
+    check('Profil sendiri: tombol Ubah Foto (#btn-avatar-change) tampil', !!document.querySelector('#btn-avatar-change'));
+    window.location.hash = '#/profile/orang_lain';
+    window.eval('route()');
+    await sleep(300);
+    check('Profil orang lain: tombol Ubah Foto TIDAK tampil', !document.querySelector('#btn-avatar-change') && document.querySelector('#page').textContent.includes('orang_lain'));
     // Halaman Inventaris: grid makanan 5 kartu.
     window.location.hash = '#/inventory';
     window.eval('route()');

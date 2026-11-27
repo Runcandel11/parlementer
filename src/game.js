@@ -77,7 +77,7 @@ export const CHRONICLE = [
     chapter: 3, title: 'Pebisnis Muda', reward: 25,
     tasks: [
       { key: 'company', label: 'Dirikan perusahaan' },
-      { key: 'fx', label: 'Cetak USD dari emas / pasang penawaran valas' },
+      { key: 'fx', label: 'Cetak Rupiah dari emas / pasang penawaran valas' },
       { key: 'level5', label: 'Capai Level 5' },
       { key: 'party', label: 'Gabung atau dirikan partai' },
     ],

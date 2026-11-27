@@ -5,7 +5,7 @@ import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings } f
 import {
   signToken, cookieOptions, COOKIE_NAME, authRequired, citizenRequired,
   loadCitizen, isValidEmail, isValidUsername, todayStr, publicId,
-  getUserIdFromReq, bootstrapCodeMatches,
+  getUserIdFromReq, bootstrapCodeMatches, fmtRp,
 } from './util.js';
 import { dbRateLimit } from './rate-limit.js';
 import { getCountryRow, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive } from './api-civic.js';
@@ -667,8 +667,15 @@ export function registerCore(app) {
   }));
 
   // ---------- PROFIL ----------
+  // Pencarian nama: cocok persis dulu; bila tidak ada, fallback tak peka
+  // huruf besar/kecil. Nama tampil selalu huruf besar (CSS
+  // .profile-hero-name uppercase), jadi pemain yang membuka
+  // #/profile/NAMA-KAPITAL harus tetap menemukan warga yang namanya
+  // tersimpan campuran huruf — sebelumnya `=` peka huruf bisa 404.
   app.get('/api/profile/:username', authRequired, r(async (req, res) => {
-    const u = await one('SELECT u.id, u.username, u.avatar, u.premium_until, u.referral_code, c.* FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.username = ?', [req.params.username]);
+    const q = 'SELECT u.id, u.username, u.avatar, u.premium_until, u.referral_code, c.* FROM users u JOIN citizens c ON c.user_id = u.id WHERE ';
+    let u = await one(q + 'u.username = ?', [req.params.username]);
+    if (!u) u = await one(q + 'LOWER(u.username) = LOWER(?)', [req.params.username]);
     if (!u) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
     const region = await one('SELECT name FROM regions WHERE id = ?', [u.region_id]);
     const party = u.party_id ? await one('SELECT name, tag FROM parties WHERE id = ?', [u.party_id]) : null;
@@ -846,7 +853,7 @@ export function registerCore(app) {
         await spendEnergy(t);
         await addItem(c.id, com.id, 1, qty, t);
       });
-      const note = `Dibayar ${qty}× ${job.resource} (setara ~${usdValue} USD).`;
+      const note = `Dibayar ${qty}× ${job.resource} (setara ~${fmtRp(usdValue)}).`;
       await addXp(c, xpGainForShift());
       await chronicleDone(c, 'shift');
       return res.json({ ok: true, gross: usdValue, net: 0, tax: 0, goods: `${qty}× ${job.resource}`, note });
@@ -1040,7 +1047,7 @@ export function registerCore(app) {
       if (pactDiscount) taxRate *= TRADE_PACT_TAX_MULT;
       const sellerReceives = offer.price * q * (1 - taxRate);
       const pay = await t.run(`UPDATE citizens SET ${currency} = ${currency} - ? WHERE id = ? AND ${currency} >= ?`, [total, buyer.id, total]);
-      if (!pay.changes) throw Object.assign(new Error(`Saldo ${currency === 'gold' ? 'emas' : 'USD'} tidak cukup.`), { status: 400 });
+      if (!pay.changes) throw Object.assign(new Error(`Saldo ${currency === 'gold' ? 'emas' : 'Rupiah'} tidak cukup.`), { status: 400 });
       await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [sellerReceives, seller.id]);
       // Tahap 4 (BUG-8): pajak masuk kas negara, bukan menguap.
       // Lokal (USD): pajak dari harga jual. Global (emas): pajak penjual
@@ -1128,7 +1135,7 @@ export function registerCore(app) {
     const orderId = await tx(async (tx) => {
       const locked = await tx.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
       const bal = currency === 'gold' ? locked.gold : locked.usd;
-      if (bal < escrow) throw Object.assign(new Error(`Saldo ${currency === 'gold' ? 'emas' : 'USD'} tidak cukup untuk mengunci ${escrow.toFixed(2)} ${currency}.`), { status: 400 });
+      if (bal < escrow) throw Object.assign(new Error(`Saldo ${currency === 'gold' ? 'emas' : 'Rupiah'} tidak cukup untuk mengunci ${currency === 'gold' ? escrow.toFixed(2) + ' emas' : fmtRp(escrow)}.`), { status: 400 });
       const upd = await tx.run(`UPDATE citizens SET ${currency} = ${currency} - ? WHERE id = ? AND ${currency} >= ?`, [escrow, req.citizen.id, escrow]);
       if (!upd.changes) throw Object.assign(new Error('Saldo tidak cukup.'), { status: 400 });
       const o = await tx.run(
@@ -1256,7 +1263,7 @@ export function registerCore(app) {
         if (!upd.changes) throw Object.assign(new Error('Emas tidak cukup untuk penawaran jual ini.'), { status: 400 });
       } else {
         const upd = await t.run('UPDATE citizens SET usd = usd - ? WHERE id = ? AND usd >= ?', [p * q, req.citizen.id, p * q]);
-        if (!upd.changes) throw Object.assign(new Error('USD tidak cukup untuk penawaran beli ini.'), { status: 400 });
+        if (!upd.changes) throw Object.assign(new Error('Rupiah tidak cukup untuk penawaran beli ini.'), { status: 400 });
       }
       const o = await t.run('INSERT INTO fx_offers (citizen_id, direction, price, qty_gold, expires_at, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
         [req.citizen.id, direction, p, q, Date.now() + 72 * 60 * 60 * 1000, Date.now()]);
@@ -1287,7 +1294,7 @@ export function registerCore(app) {
       if (offer.direction === 'sell') {
         // Saya membeli emas: bayar USD, terima emas (emas penjual sudah dikunci saat pasang).
         const upd = await t.run('UPDATE citizens SET usd = usd - ?, gold = gold + ? WHERE id = ? AND usd >= ?', [usd, q, meId, usd]);
-        if (!upd.changes) throw Object.assign(new Error('USD tidak cukup.'), { status: 400 });
+        if (!upd.changes) throw Object.assign(new Error('Rupiah tidak cukup.'), { status: 400 });
         await t.run('UPDATE citizens SET usd = usd + ? WHERE id = ?', [usd, otherId]);
       } else {
         // Saya menjual emas ke penawaran beli: terima USD (USD pembeli sudah dikunci).

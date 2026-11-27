@@ -5,7 +5,7 @@
 // benar (lihat api-core.js), atau migrasi initDb yang menjaga akun admin
 // Khalid yang sudah ada (koboijuniorkhalid@gmail.com).
 import { sql, one, run, tx, convoyBuildings } from './db.js';
-import { authRequired, publicId, bootstrapActive } from './util.js';
+import { authRequired, publicId, bootstrapActive, fmtRp } from './util.js';
 import { checkRateLimit } from './rate-limit.js';
 import { energyCapFor } from './game.js';
 
@@ -207,17 +207,17 @@ export function registerAdmin(app) {
     const { user_id, amount } = req.body || {};
     const amt = Number(amount);
     if (!amt || amt <= 0 || amt > MAX_GRANT || !Number.isFinite(amt)) {
-      return res.status(400).json({ error: `Jumlah USD harus 1–${MAX_GRANT}.` });
+      return res.status(400).json({ error: `Jumlah Rupiah harus ${fmtRp(1)}–${fmtRp(MAX_GRANT)}.` });
     }
     const target = await one('SELECT u.*, c.id AS citizen_id FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.id = ?', [Number(user_id)]);
     if (!target) return res.status(404).json({ error: 'Pemain tidak ditemukan.' });
     const kind = grantKind(req.body);
     await tx(async (t) => {
       await t.run('UPDATE citizens SET usd = usd + ? WHERE id = ?', [amt, target.citizen_id]);
-      await logAction(t, req.userId, target.id, 'usd', `+${amt} USD (${kind})`);
+      await logAction(t, req.userId, target.id, 'usd', `+${fmtRp(amt)} (${kind})`);
       const note = kind === 'pembelian'
-        ? { title: 'Pembelian diterima', content: `${amt} USD diterima dari pembelian.` }
-        : { title: 'Hadiah dari admin', content: `Admin memberimu +${amt} USD.` };
+        ? { title: 'Pembelian diterima', content: `${fmtRp(amt)} diterima dari pembelian.` }
+        : { title: 'Hadiah dari admin', content: `Admin memberimu +${fmtRp(amt)}.` };
       await notifyCitizen(t, target.citizen_id, note.title, note.content);
     });
     res.json({ ok: true });
@@ -279,9 +279,12 @@ export function registerAdmin(app) {
   app.post('/api/admin/gift-all', authRequired, admin, r(async (req, res) => {
     const { kind, amount, commodity, tier, message } = req.body || {};
     if (!['gold', 'usd', 'item', 'premium', 'energy'].includes(kind)) {
-      return res.status(400).json({ error: 'Jenis hadiah harus emas, USD, barang, premium, atau isi energi.' });
+      return res.status(400).json({ error: 'Jenis hadiah harus emas, Rupiah, barang, premium, atau isi energi.' });
     }
-    const amt = Math.floor(Number(amount) || 0);
+    // Rupiah dikirim sebagai pecahan USD (rpToUsd di client) — jangan
+    // dibulatkan ke bawah, kalau tidak hadiah kehilangan sampai Rp18.299
+    // per pemain. Emas tetap bilangan bulat.
+    const amt = kind === 'usd' ? Number(amount) || 0 : Math.floor(Number(amount) || 0);
     let t = 1;
     let com = null;
     if (kind === 'gold' || kind === 'usd') {
@@ -307,7 +310,7 @@ export function registerAdmin(app) {
     const healthOwners = new Set((await sql("SELECT citizen_id FROM convoys WHERE building = 'health' AND expires_at > ?", [now]))
       .map((x) => x.citizen_id));
     const label = kind === 'gold' ? `+${amt} emas`
-      : kind === 'usd' ? `+${amt} USD`
+      : kind === 'usd' ? `+${fmtRp(amt)}`
       : kind === 'item' ? `+${amt}× ${commodity} T${t}`
       : kind === 'premium' ? `Premium ${amt} hari`
       : 'Isi energi penuh';

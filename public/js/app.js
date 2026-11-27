@@ -3,8 +3,15 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = (n, d = 0) => Number(n || 0).toLocaleString('id-ID', { maximumFractionDigits: d });
-const fmtUSD = (n) => Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
 const fmtIDR = (n) => 'Rp' + Number(n || 0).toLocaleString('id-ID');
+// Kurs tampilan Rupiah — SATU tempat: 1 USD = Rp18.300. Semua jumlah USD
+// (saldo, harga, gaji, kas negara, hadiah) ditampilkan sebagai Rupiah;
+// database & API tetap dalam USD (tidak ada migrasi saldo — ekonomi tidak
+// berubah). Konversi pulih tepat: nilai USD disimpan REAL, jadi
+// fmtRp(rpToUsd(x)) sama dengan nilai Rupiah asal setelah dibulatkan.
+const RP_PER_USD = 18300;
+const fmtRp = (usd) => fmtIDR(Math.round(Number(usd || 0) * RP_PER_USD));
+const rpToUsd = (rp) => Number(rp || 0) / RP_PER_USD;
 const fmtTime = (ts) => { const d = toDate(ts); return d ? d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '—'; };
 const fmtDate = (ts) => { const d = toDate(ts); return d ? d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'; };
 // Normalisasi timestamp ke Date — menerima number MAUPUN string angka
@@ -257,7 +264,8 @@ async function logout() {
 // ---------- SHELL ----------
 const NAV = [
   { group: 'BERANDA', items: [
-    ['dashboard', 'Dashboard', '▦'], ['achievements', 'Pencapaian', '🏆'],
+    ['dashboard', 'Dashboard', '▦'], ['profile', 'Profil', '👤'],
+    ['achievements', 'Pencapaian', '🏆'],
     ['inventory', 'Inventaris', '📦'], ['convoy', 'Konvoi', '🚚'],
     ['activity', 'Aktivitas Saya', '📋'],
   ]},
@@ -337,7 +345,7 @@ function closeDrawer() { $('#drawer').classList.remove('open'); $('#drawer-overl
 // Pasokan harian (rombak UI): peti di HUD menggantikan tombol AMBIL PASOKAN
 // lama — POST /api/claim, lalu segarkan HUD + halaman.
 async function claimDaily() {
-  try { const r = await post('/api/claim'); toast(`Pasokan diterima: +${r.reward.gold} emas, +${r.reward.usd} USD, +${r.reward.xp} XP.`); await refreshMe(); route(); }
+  try { const r = await post('/api/claim'); toast(`Pasokan diterima: +${r.reward.gold} emas, +${fmtRp(r.reward.usd)}, +${r.reward.xp} XP.`); await refreshMe(); route(); }
   catch (e) { toast(e.message); }
 }
 
@@ -385,7 +393,7 @@ function renderHUD() {
   const c = ME.citizen;
   $('#hud-name').textContent = c.username + (c.isPremium ? ' ◆' : '');
   $('#hud-region').textContent = (ME.region?.name || '') + ' · Republik Indonesia';
-  $('#hud-usd').textContent = fmtUSD(c.usd);
+  $('#hud-usd').textContent = fmtRp(c.usd);
   $('#hud-gold').textContent = fmt(c.gold);
   $('#hud-xp').textContent = c.xp + '/' + ME.xpNext;
   $('#hud-lv').textContent = c.level;
@@ -627,25 +635,23 @@ const TASK_HINTS = {
 const ROMAN = ['I', 'II', 'III', 'IV', 'V'];
 
 // ---------- DASHBOARD ----------
+// Render progresif (perbaikan lag dashboard): kerangka dari data ME (hero,
+// level, energi, kelelahan, dompet, latihan) tampil LANGSUNG tanpa menunggu
+// fetch — tiga panel yang butuh API (misi, kronik, makanan) diisi begitu
+// masing-masing selesai, bukan menunggu semuanya. Sebelumnya seluruh
+// halaman menunggu Promise.all 3 endpoint, jadi satu endpoint yang lambat
+// (cold start / CPU server sibuk, mis. bcrypt saat pemain lain login)
+// menahan semua konten di balik skeleton kosong. Pengukuran lokal: tiap
+// endpoint ~2–4 ms hangat (dashboard Promise.all ~15 ms) — jadi lambatnya
+// di live bukan query-nya, melainkan stall server + render all-or-nothing;
+// perbaikan ini menghilangkan bagian render-nya.
 ROUTES.dashboard = async () => {
-  const [m, ch, inv] = await Promise.all([api('/api/missions'), api('/api/chronicle'), api('/api/inventory')]);
   const c = ME.citizen;
-  const ch1 = ch.chapters[0];
-  const totalDone = ch.chapters.reduce((s, x) => s + x.done, 0);
-  const totalTasks = ch.chapters.reduce((s, x) => s + x.total, 0);
   const cap = c.energyCap || 100;
-  const foods = inv.items.filter((i) => i.name === 'Makanan');
-  const foodQty = (t) => foods.find((f) => f.tier === t)?.qty || 0;
   const fatigue = c.fatigue || 0;
   const fatigueMultNow = fatigue >= 15000 ? '0.5' : fatigue >= 10000 ? '0.75' : '1';
-  const firstTodo = ch1.tasks.find((t) => !t.done);
   let kronikHidden = false;
   try { kronikHidden = localStorage.getItem('parlementer_kronik_hide') === '1'; } catch { /* abaikan */ }
-  const foodCards = [1, 2, 3, 4, 5].map((t) => {
-    const q = foodQty(t);
-    return `<button class="food-card ${q ? '' : 'empty'}" type="button" data-eat="${t}" ${q ? '' : 'disabled'} aria-label="Makan Makanan T${t}, tambah ${t * 10} energi">
-      <span class="tier">T${t}</span><span class="val">⚡${t * 10}</span><span class="qty">×${q}</span>${q ? '<span class="eat">MAKAN</span>' : ''}</button>`;
-  }).join('');
   $('#page').innerHTML = page('DASHBOARD', `Hari ${ME.world.day} · Populasi dunia: ${fmt(ME.population)} warga · <span title="Pemain aktif dalam 5 menit terakhir">🟢 ${fmt(ME.onlineCount ?? 0)} online</span>`, `
   ${ME.activeWars.length ? `<div class="panel"><h3>⚔️ SEDANG TERJADI</h3>
     ${ME.activeWars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}
@@ -655,7 +661,7 @@ ROUTES.dashboard = async () => {
     <button class="btn-gold btn-sm" data-goto="#/parliament">Buka Parlemen</button></div>` : ''}
   <div class="panel">
     <div class="profile-hero">
-      <div class="profile-hero-name">${esc(c.username)}</div>
+      <a class="profile-hero-name" data-goto="#/profile" title="Lihat profilmu">${esc(c.username)}</a>
       <div class="profile-hero-sub">
         <span><span class="dot-red">■</span> Republik Indonesia</span>
         <span><span class="muted">📍</span> ${esc(ME.region?.name || '')}</span>
@@ -680,13 +686,13 @@ ROUTES.dashboard = async () => {
     </button>
     <div class="stat-block">
       <div class="stat-head"><span class="lbl">🌾 MAKANAN</span><span class="muted">Sisa roti hari ini ${10 - (c.bread_today || 0)}/10</span></div>
-      <div class="food-grid" style="margin-top:10px">${foodCards}</div>
+      <div class="food-grid" id="dash-food" style="margin-top:10px"><p class="muted small">Memuat…</p></div>
       <p class="muted small" style="margin-top:8px">Ketuk kartu untuk makan. Batas 10 roti per hari.</p>
     </div>
     <div class="stat-block">
       <div class="stat-head"><span class="lbl">👛 DOMPET</span><button class="btn-text gold" type="button" data-goto="#/shop">TOP-UP ›</button></div>
       <div class="kv"><span class="k">Emas</span><span class="v gold-text">◈ ${fmt(c.gold)}</span></div>
-      <div class="kv"><span class="k">Dolar</span><span class="v">${fmtUSD(c.usd)} USD</span></div>
+      <div class="kv"><span class="k">Rupiah</span><span class="v">${fmtRp(c.usd)}</span></div>
     </div>
   </div>
   <div class="panel">
@@ -695,14 +701,50 @@ ROUTES.dashboard = async () => {
       <div class="kv"><span class="k">${label} · LV ${lv}<br><small class="muted">${desc}</small></span>
       <span class="v"><button class="btn-gold btn-sm" data-train="${k}">LATIH · ${c.trainCosts?.[serverKey] ?? lv + 1} emas</button></span></div>`).join('')}
   </div>
-  <div class="panel">
+  <div class="panel" id="dash-missions">
     <h3>🎯 MISI HARIAN <span class="muted small">· masing-masing +10 emas</span></h3>
-    ${m.missions.map((mi) => `
-      <div class="kv"><span class="k">${esc(mi.label)}</span>
-      <span class="v">${mi.progress}/${mi.target} ${mi.claimed ? '✓ Diklaim' : mi.progress >= mi.target ? `<button class="btn-gold btn-sm" data-mission="${mi.key}">KLAIM +10 🪙</button>` : ''}</span></div>
-      <div class="bar" style="margin:4px 0 10px"><i style="width:${Math.min(100, mi.progress / mi.target * 100)}%"></i></div>`).join('')}
+    <p class="muted">Memuat…</p>
   </div>
   ${kronikHidden ? '' : `<div class="panel" id="kronik-card">
+    <div class="panel-head"><h3>📖 KRONIKMU</h3></div>
+    <p class="muted">Memuat…</p>
+  </div>`}`);
+  // Handler kerangka (data ME, langsung aktif): latihan + popover.
+  $$('[data-train]').forEach((b) => b.onclick = async () => {
+    try { await post('/api/train', { attr: b.dataset.train }); toast('Latihan selesai! Atribut naik 1 level.'); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
+  // Blok ENERGI / KELELAHAN: ketuk = popover rincian.
+  $$('[data-popover]').forEach((b) => b.onclick = () => {
+    if (b.dataset.popover === 'energy') showEnergyPopover();
+    else showFatiguePopover();
+  });
+  // Tiga panel API diisi paralel, masing-masing begitu selesai — gagal satu
+  // tidak menggagalkan yang lain (allSettled + pesan gagal per panel).
+  const eatMeal = async (tier) => {
+    try { const r = await post('/api/eat', { tier }); toast(`Energi +${r.gained} (sekarang ${r.energy}/${ME.citizen.energyCap || 100}).`); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  };
+  const fillMissions = api('/api/missions').then((m) => {
+    const el = $('#dash-missions');
+    if (!el) return;
+    el.innerHTML = `<h3>🎯 MISI HARIAN <span class="muted small">· masing-masing +10 emas</span></h3>` + m.missions.map((mi) => `
+      <div class="kv"><span class="k">${esc(mi.label)}</span>
+      <span class="v">${mi.progress}/${mi.target} ${mi.claimed ? '✓ Diklaim' : mi.progress >= mi.target ? `<button class="btn-gold btn-sm" data-mission="${mi.key}">KLAIM +10 🪙</button>` : ''}</span></div>
+      <div class="bar" style="margin:4px 0 10px"><i style="width:${Math.min(100, mi.progress / mi.target * 100)}%"></i></div>`).join('');
+    $$('#dash-missions [data-mission]').forEach((b) => b.onclick = async () => {
+      try { await post('/api/missions/claim', { key: b.dataset.mission }); toast('Hadiah misi diterima: +10 emas.'); await refreshMe(); route(); }
+      catch (e) { toast(e.message); }
+    });
+  }).catch(() => { const el = $('#dash-missions'); if (el) el.innerHTML = `<h3>🎯 MISI HARIAN</h3><p class="muted">Gagal memuat misi. <button class="btn-text gold" type="button" data-reload="1">Muat Ulang</button></p>`; });
+  const fillChronicle = kronikHidden ? Promise.resolve() : api('/api/chronicle').then((ch) => {
+    const el = $('#kronik-card');
+    if (!el) return;
+    const ch1 = ch.chapters[0];
+    const totalDone = ch.chapters.reduce((s, x) => s + x.done, 0);
+    const totalTasks = ch.chapters.reduce((s, x) => s + x.total, 0);
+    const firstTodo = ch1.tasks.find((t) => !t.done);
+    el.innerHTML = `
     <div class="panel-head"><h3>📖 KRONIKMU</h3><span class="chip">${totalDone}/${totalTasks}</span></div>
     <p class="kronik-sub">Babak I · ${esc(ch1.title)}</p>
     <div class="seg-bar" role="img" aria-label="Progres ${totalDone} dari ${totalTasks} tugas">${Array.from({ length: totalTasks }, (_, i) => `<i class="${i < totalDone ? 'on' : ''}"></i>`).join('')}</div>
@@ -725,47 +767,43 @@ ROUTES.dashboard = async () => {
         ${cc.tasks.map((t) => `<div class="task-row ${t.done ? 'done' : ''} ${!t.done && cc.chapter === 1 && firstTodo && t.key === firstTodo.key ? 'active' : ''}"><span class="task-dot"></span><span>${esc(t.label)}</span></div>`).join('')}
         ${cc.done === cc.total && !cc.claimed ? `<button class="btn-gold btn-sm" data-chronicle="${cc.chapter}">KLAIM +${cc.reward} EMAS</button>` : cc.claimed ? '<p class="teal-text small">✓ Hadiah sudah diklaim.</p>' : ''}
       </div>
-    </div>`).join('')}
-  </div>`}`);
-  $$('[data-train]').forEach((b) => b.onclick = async () => {
-    try { await post('/api/train', { attr: b.dataset.train }); toast('Latihan selesai! Atribut naik 1 level.'); await refreshMe(); route(); }
-    catch (e) { toast(e.message); }
-  });
-  $$('[data-mission]').forEach((b) => b.onclick = async () => {
-    try { await post('/api/missions/claim', { key: b.dataset.mission }); toast('Hadiah misi diterima: +10 emas.'); await refreshMe(); route(); }
-    catch (e) { toast(e.message); }
-  });
-  $$('[data-chronicle]').forEach((b) => b.onclick = async () => {
-    try { await post('/api/chronicle/claim', { chapter: Number(b.dataset.chronicle) }); toast('Hadiah babak diterima!'); await refreshMe(); route(); }
-    catch (e) { toast(e.message); }
-  });
-  // Kartu MAKANAN: ketuk kartu = makan (sama seperti tombol MAKAN di Inventaris).
-  $$('[data-eat]').forEach((b) => b.onclick = async () => {
-    try { const r = await post('/api/eat', { tier: Number(b.dataset.eat) }); toast(`Energi +${r.gained} (sekarang ${r.energy}/${ME.citizen.energyCap || 100}).`); await refreshMe(); route(); }
-    catch (e) { toast(e.message); }
-  });
-  // Blok ENERGI / KELELAHAN: ketuk = popover rincian.
-  $$('[data-popover]').forEach((b) => b.onclick = () => {
-    if (b.dataset.popover === 'energy') showEnergyPopover();
-    else showFatiguePopover();
-  });
-  // Daftar babak KRONIKMU: ketuk judul babak = buka/tutup daftar tugasnya.
-  $$('[data-chapter]').forEach((b) => b.onclick = () => {
-    const body = b.nextElementSibling;
-    const open = body.hidden;
-    body.hidden = !open;
-    b.setAttribute('aria-expanded', String(open));
-    const chev = b.querySelector('.chev');
-    if (chev) chev.textContent = open ? '▲' : '▼';
-  });
-  // LEWATI hanya menyembunyikan kartu dari Dashboard (preferensi lokal) —
-  // tidak ada mekanisme hangus hadiah di server; hadiah babak tetap bisa
-  // diklaim di halaman KRONIKMU.
-  $('#btn-kronik-hide')?.addEventListener('click', () => {
-    try { localStorage.setItem('parlementer_kronik_hide', '1'); } catch { /* abaikan */ }
-    toast('Kartu KRONIKMU disembunyikan dari Dashboard — babak dan hadiahnya tetap ada di halaman KRONIKMU.');
-    route();
-  });
+    </div>`).join('')}`;
+    $$('#kronik-card [data-chronicle]').forEach((b) => b.onclick = async () => {
+      try { await post('/api/chronicle/claim', { chapter: Number(b.dataset.chronicle) }); toast('Hadiah babak diterima!'); await refreshMe(); route(); }
+      catch (e) { toast(e.message); }
+    });
+    // Daftar babak KRONIKMU: ketuk judul babak = buka/tutup daftar tugasnya.
+    $$('#kronik-card [data-chapter]').forEach((b) => b.onclick = () => {
+      const body = b.nextElementSibling;
+      const open = body.hidden;
+      body.hidden = !open;
+      b.setAttribute('aria-expanded', String(open));
+      const chev = b.querySelector('.chev');
+      if (chev) chev.textContent = open ? '▲' : '▼';
+    });
+    // LEWATI hanya menyembunyikan kartu dari Dashboard (preferensi lokal) —
+    // tidak ada mekanisme hangus hadiah di server; hadiah babak tetap bisa
+    // diklaim di halaman KRONIKMU.
+    $('#btn-kronik-hide')?.addEventListener('click', () => {
+      try { localStorage.setItem('parlementer_kronik_hide', '1'); } catch { /* abaikan */ }
+      toast('Kartu KRONIKMU disembunyikan dari Dashboard — babak dan hadiahnya tetap ada di halaman KRONIKMU.');
+      route();
+    });
+  }).catch(() => { const el = $('#kronik-card'); if (el) el.innerHTML = `<div class="panel-head"><h3>📖 KRONIKMU</h3></div><p class="muted">Gagal memuat kronik. <button class="btn-text gold" type="button" data-reload="1">Muat Ulang</button></p>`; });
+  const fillInventory = api('/api/inventory').then((inv) => {
+    const el = $('#dash-food');
+    if (!el) return;
+    const foods = inv.items.filter((i) => i.name === 'Makanan');
+    const foodQty = (t) => foods.find((f) => f.tier === t)?.qty || 0;
+    el.innerHTML = [1, 2, 3, 4, 5].map((t) => {
+      const q = foodQty(t);
+      return `<button class="food-card ${q ? '' : 'empty'}" type="button" data-eat="${t}" ${q ? '' : 'disabled'} aria-label="Makan Makanan T${t}, tambah ${t * 10} energi">
+      <span class="tier">T${t}</span><span class="val">⚡${t * 10}</span><span class="qty">×${q}</span>${q ? '<span class="eat">MAKAN</span>' : ''}</button>`;
+    }).join('');
+    // Kartu MAKANAN: ketuk kartu = makan (sama seperti tombol MAKAN di Inventaris).
+    $$('#dash-food [data-eat]').forEach((b) => b.onclick = () => eatMeal(Number(b.dataset.eat)));
+  }).catch(() => { const el = $('#dash-food'); if (el) el.innerHTML = `<p class="muted">Gagal memuat makanan.</p>`; });
+  await Promise.allSettled([fillMissions, fillChronicle, fillInventory]);
 };
 
 ROUTES.chronicle = async () => {
@@ -789,7 +827,7 @@ ROUTES.inventory = async () => {
   const inv = await api('/api/inventory');
   const foods = inv.items.filter((i) => i.name === 'Makanan');
   const foodQty = (t) => foods.find((f) => f.tier === t)?.qty || 0;
-  $('#page').innerHTML = page('INVENTARIS', `${inv.totalQty} unit · ${inv.items.length} jenis barang · nilai pasar ±${fmtUSD(inv.marketValue)} USD`, `
+  $('#page').innerHTML = page('INVENTARIS', `${inv.totalQty} unit · ${inv.items.length} jenis barang · nilai pasar ±${fmtRp(inv.marketValue)}`, `
   <div class="panel"><h3>🍞 MAKANAN</h3>
     <p class="muted small">Sisa roti hari ini: ${10 - ME.citizen.bread_today}/10 · Ketuk kartu untuk makan.</p>
     <div class="food-grid" style="margin-top:10px">${[1, 2, 3, 4, 5].map((t) => {
@@ -801,7 +839,7 @@ ROUTES.inventory = async () => {
   </div>
   <div class="panel"><h3>📦 SEMUA BARANG</h3>
     ${inv.items.length ? `<table class="table"><tr><th>Barang</th><th>Tingkat</th><th>Jumlah</th><th>Nilai</th></tr>
-    ${inv.items.map((i) => `<tr><td>${esc(i.name)}</td><td>T${i.tier}</td><td>×${i.qty}</td><td>${fmtUSD(i.qty * i.ref_usd)} USD</td></tr>`).join('')}</table>`
+    ${inv.items.map((i) => `<tr><td>${esc(i.name)}</td><td>T${i.tier}</td><td>×${i.qty}</td><td>${fmtRp(i.qty * i.ref_usd)}</td></tr>`).join('')}</table>`
       : '<p class="muted">Inventaris kosong.</p>'}
   </div>`);
   $$('[data-eat]').forEach((b) => b.onclick = async () => {
@@ -890,12 +928,15 @@ ROUTES.notifications = async () => {
 // Riwayat transaksi pasar + aktivitas/pemberitahuan warga (50 terbaru).
 ROUTES.activity = async () => {
   const a = await api('/api/activity');
+  // Uang transaksi per baris mengikuti mata uang ruangannya (global = emas,
+  // lokal = Rupiah) — nilai API tetap USD, diformat di sini.
+  const txMoney = (t, v) => t.scope === 'global' ? fmt(v, 2) + ' emas' : fmtRp(v);
   $('#page').innerHTML = page('AKTIVITAS SAYA', 'Transaksi pasar dan aktivitas terakhirmu (50 terbaru)', `
   <div class="panel"><h3>🛒 TRANSAKSI PASAR</h3>
     ${a.transactions.length ? a.transactions.map((t) => `
       <div class="kv"><span class="k">${t.direction === 'beli' ? '🛍️ BELI' : '💰 JUAL'} ${esc(t.commodity_name)} · T${t.tier} ×${t.qty}<br>
-        <small class="muted">${fmt(t.price_each, 2)} ${t.scope === 'global' ? 'emas' : 'USD'}/unit · ${esc(t.scope === 'global' ? 'Pasar Global' : 'Pasar Lokal')}</small></span>
-      <span class="v" style="flex-shrink:0">${t.direction === 'beli' ? '−' : '+'}${fmt(t.total, 2)} ${t.scope === 'global' ? 'emas' : 'USD'}<br><small class="muted" style="white-space:nowrap">${ago(t.created_at)}</small></span></div>`).join('')
+        <small class="muted">${txMoney(t, t.price_each)}/unit · ${esc(t.scope === 'global' ? 'Pasar Global' : 'Pasar Lokal')}</small></span>
+      <span class="v" style="flex-shrink:0">${t.direction === 'beli' ? '−' : '+'}${txMoney(t, t.total)}<br><small class="muted" style="white-space:nowrap">${ago(t.created_at)}</small></span></div>`).join('')
       : emptyState('🛒', 'Belum ada transaksi', 'Jual beli di Pasar atau Pasar Global akan tercatat di sini.')}
   </div>
   <div class="panel"><h3>🔔 AKTIVITAS &amp; PEMBERITAHUAN</h3>
@@ -923,7 +964,7 @@ ROUTES.profile = async (username) => {
     <div class="panel-head"><h3>👤 IDENTITAS</h3><span class="chip">LEVEL ${pr.level}</span></div>
     <div class="profile-avatar-row">
       <span id="profile-avatar">${avatarHtml(pr.avatar, pr.username, 96)}</span>
-      ${pr.username === ME.citizen.username ? `
+      ${pr.user_id === ME.citizen.user_id ? `
       <div>
         <input type="file" id="avatar-file" accept="image/*" hidden>
         <button class="btn-gold btn-sm" id="btn-avatar-change" type="button">📷 Ubah Foto</button>
@@ -958,12 +999,12 @@ ROUTES.profile = async (username) => {
   </div>
   <div class="panel"><h3>💼 CATATAN KERJA</h3>
     <div class="kv"><span class="k">Shift dikerjakan</span><span class="v">${pr.shifts}</span></div>
-    <div class="kv"><span class="k">Total gaji</span><span class="v">${fmtUSD(pr.total_salary)} USD</span></div>
+    <div class="kv"><span class="k">Total gaji</span><span class="v">${fmtRp(pr.total_salary)}</span></div>
     <div class="kv"><span class="k">Perusahaan dikelola</span><span class="v">${pr.companies.length}</span></div>
   </div>
   ${pr.companies.length ? `<div class="panel"><h3>🏭 PERUSAHAAN</h3>${pr.companies.map((c) => `<div class="kv"><span class="k">${esc(c.name)}</span><span class="v">${esc(c.type)}</span></div>`).join('')}</div>` : ''}
   ${pr.articles.length ? `<div class="panel"><h3>📰 ARTIKEL TERBARU</h3>${pr.articles.map((a) => `<div class="kv"><span class="k">${esc(a.title)}</span><span class="v small muted">${fmtDate(a.created_at)}</span></div>`).join('')}</div>` : ''}
-  ${pr.username === ME.citizen.username ? `<button class="btn-ghost" data-goto="#/settings">✏️ Edit Profil</button>` : ''}`);
+  ${pr.user_id === ME.citizen.user_id ? `<button class="btn-ghost" data-goto="#/settings">✏️ Edit Profil</button>` : ''}`);
   const copyBtn = $('#btn-copy-ref');
   if (copyBtn && pr.referral) {
     copyBtn.onclick = async () => {
@@ -979,7 +1020,11 @@ ROUTES.profile = async (username) => {
   }
 
   // ---------- FOTO PROFIL (hanya profil sendiri) ----------
-  if (pr.username === ME.citizen.username) {
+  // Penentu "profil sendiri" = ID warga (user_id), BUKAN username — nama
+  // tampil selalu huruf besar lewat CSS (.profile-hero-name uppercase),
+  // jadi perbandingan nama rawan salah bila nama diketik/dibuka dengan
+  // huruf berbeda; ID tidak pernah salah eja dan tidak berubah saat rename.
+  if (pr.user_id === ME.citizen.user_id) {
     let pendingAvatar = null;
     let pendingAvatarSm = null;
     const fileInput = $('#avatar-file');
@@ -1099,7 +1144,7 @@ ROUTES.admin = async (q) => {
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(p.publicId)}</b></span></div>
     <div class="kv"><span class="k">Email</span><span class="v">${esc(p.email)}</span></div>
     <div class="kv"><span class="k">Level</span><span class="v">${p.level}</span></div>
-    <div class="kv"><span class="k">Emas / USD</span><span class="v">${fmt(p.gold)} emas · ${fmtUSD(p.usd)} USD</span></div>
+    <div class="kv"><span class="k">Emas / Rupiah</span><span class="v">${fmt(p.gold)} emas · ${fmtRp(p.usd)}</span></div>
     <div class="kv"><span class="k">Premium</span><span class="v">${p.isPremium ? 'Aktif sampai ' + fmtDate(p.premium_until) : 'Tidak aktif'}</span></div>
     ${p.is_banned ? `<div class="kv"><span class="k">Alasan ban</span><span class="v">${esc(p.banned_reason || '')}</span></div>` : ''}
     <div class="kv"><span class="k">Bergabung</span><span class="v">${fmtDate(p.created_at)}</span></div>
@@ -1119,8 +1164,8 @@ ROUTES.admin = async (q) => {
     <div class="row">
       <input class="adm-gold" type="number" min="1" placeholder="Jumlah emas" style="flex:1">
       <button class="btn-gold btn-sm" data-act="gold">+ Emas</button>
-      <input class="adm-usd" type="number" min="1" placeholder="Jumlah USD" style="flex:1">
-      <button class="btn-gold btn-sm" data-act="usd">+ USD</button>
+      <input class="adm-usd" type="number" min="1" placeholder="Jumlah (Rp)" style="flex:1">
+      <button class="btn-gold btn-sm" data-act="usd">+ Rupiah</button>
     </div>
     <div class="row">
       <select class="adm-item" style="flex:1"><option>Makanan</option><option>Senjata</option><option>Tiket</option><option>Gandum Mentah</option><option>Besi Mentah</option><option>Minyak Mentah</option><option>Kapas Mentah</option><option>Kayu</option><option>Batu Bara</option><option>Tembaga Mentah</option></select>
@@ -1155,7 +1200,7 @@ ROUTES.admin = async (q) => {
         const act = btn.dataset.act;
         if (act === 'premium') return runAct('/api/admin/premium', { user_id: uid, months: Number(panel.querySelector('.adm-premium').value), kind: kind() });
         if (act === 'gold') return runAct('/api/admin/gold', { user_id: uid, amount: Number(panel.querySelector('.adm-gold').value), kind: kind() });
-        if (act === 'usd') return runAct('/api/admin/usd', { user_id: uid, amount: Number(panel.querySelector('.adm-usd').value), kind: kind() });
+        if (act === 'usd') return runAct('/api/admin/usd', { user_id: uid, amount: rpToUsd(Number(panel.querySelector('.adm-usd').value)), kind: kind() });
         if (act === 'item') return runAct('/api/admin/item', {
           user_id: uid, commodity: panel.querySelector('.adm-item').value,
           tier: Number(panel.querySelector('.adm-tier').value), qty: Number(panel.querySelector('.adm-qty').value), kind: kind(),
@@ -1298,7 +1343,7 @@ async function renderAdminGiftAll() {
   <div class="panel"><h3>🎁 HADIAH UNTUK SEMUA PEMAIN</h3>
     <p class="muted small">Hadiah dikirim ke <b>${recipients.length} pemain</b> yang tidak di-ban (dari ${list.players.length} pemain total). Akun yang di-ban tidak menerima apa-apa. Semua penerima mendapat notifikasi "Hadiah dari admin".</p>
     <label>JENIS HADIAH<select id="ga-kind">
-      <option value="gold">🪙 Emas</option><option value="usd">💵 USD</option>
+      <option value="gold">🪙 Emas</option><option value="usd">💵 Rupiah</option>
       <option value="item">📦 Barang</option><option value="premium">💎 Hari Premium</option>
       <option value="energy">⚡ Isi Energi Penuh</option>
     </select></label>
@@ -1315,7 +1360,7 @@ async function renderAdminGiftAll() {
     const k = kindSel.value;
     $('#ga-item-row').hidden = k !== 'item';
     $('#ga-amount-wrap').style.display = k === 'energy' ? 'none' : '';
-    $('#ga-amount-label').firstChild.textContent = k === 'gold' ? 'JUMLAH EMAS' : k === 'usd' ? 'JUMLAH USD' : k === 'item' ? 'JUMLAH BARANG' : k === 'premium' ? 'HARI PREMIUM' : 'JUMLAH';
+    $('#ga-amount-label').firstChild.textContent = k === 'gold' ? 'JUMLAH EMAS' : k === 'usd' ? 'JUMLAH RUPIAH' : k === 'item' ? 'JUMLAH BARANG' : k === 'premium' ? 'HARI PREMIUM' : 'JUMLAH';
   };
   kindSel.onchange = syncKind;
   syncKind();
@@ -1323,8 +1368,12 @@ async function renderAdminGiftAll() {
     const k = kindSel.value;
     const body = { kind: k, amount: Number($('#ga-amount').value) || 0, message: $('#ga-message').value.trim() };
     if (k === 'item') { body.commodity = $('#ga-commodity').value; body.tier = Number($('#ga-tier').value); }
-    const label = k === 'gold' ? `${body.amount} emas` : k === 'usd' ? `${body.amount} USD` : k === 'item' ? `${body.amount}× ${body.commodity} T${body.tier}` : k === 'premium' ? `Premium ${body.amount} hari` : 'isi energi penuh';
+    const label = k === 'gold' ? `${body.amount} emas` : k === 'usd' ? `${fmtRp(body.amount)}` : k === 'item' ? `${body.amount}× ${body.commodity} T${body.tier}` : k === 'premium' ? `Premium ${body.amount} hari` : 'isi energi penuh';
     if (!confirm(`Kirim hadiah ${label} ke ${recipients.length} pemain?`)) return;
+    // Hadiah Rupiah: yang diketik admin adalah Rupiah — konversi ke USD
+    // (satuan server) sebelum dikirim; presisi penuh, pulih tepat saat
+    // ditampilkan lagi sebagai Rupiah.
+    if (k === 'usd') body.amount = rpToUsd(body.amount);
     try {
       const r = await post('/api/admin/gift-all', body);
       toast(`Hadiah massal terkirim ke ${r.recipients} pemain.`);
@@ -1433,13 +1482,18 @@ const comIcon = (name) => COMMODITY_ICONS[name] || '📦';
 function marketPage(scope) {
   return async () => {
     const data = await api('/api/market?scope=' + scope);
-    const cur = scope === 'global' ? 'emas' : 'USD';
+    // Mata uang pasar: global = emas, lokal = Rupiah (nilai API tetap USD).
+    // money() memformat satu nilai dalam mata uang pasar ini; harga yang
+    // diketik pemain (Rp di pasar lokal) dikonversi ke USD sebelum dikirim.
+    const money = (v) => scope === 'global' ? fmt(v, 2) + ' emas' : fmtRp(v);
+    const curLabel = scope === 'global' ? 'emas' : 'Rp';
+    const priceInputUsd = (input) => scope === 'global' ? Number(input.value) : rpToUsd(Number(input.value));
     $('#page').innerHTML = page(scope === 'global' ? 'PASAR GLOBAL' : 'PASAR',
-      scope === 'global' ? 'Perdagangan antarnegara dalam EMAS · pajak impor 2%' : 'Republik Indonesia — barang diperdagangkan dalam USD', `
+      scope === 'global' ? 'Perdagangan antarnegara dalam EMAS · pajak impor 2%' : 'Republik Indonesia — barang diperdagangkan dalam Rupiah', `
     <div class="stat-grid">
       <div class="stat-cell"><div class="stat-label">📋 Penawaran Terbuka</div><div class="stat-num">${fmt(data.stats.offers)}</div><div class="stat-sub">di 15 komoditas</div></div>
       <div class="stat-cell"><div class="stat-label">📈 Transaksi · 24J</div><div class="stat-num">${fmt(data.stats.tx)}</div><div class="stat-sub">${fmt(data.stats.units)} unit berpindah tangan</div></div>
-      <div class="stat-cell"><div class="stat-label">💰 Omzet · 24J</div><div class="stat-num gold">${fmt(data.stats.turnover)}</div><div class="stat-sub">${cur}</div></div>
+      <div class="stat-cell"><div class="stat-label">💰 Omzet · 24J</div><div class="stat-num gold">${money(data.stats.turnover)}</div><div class="stat-sub">24 jam terakhir</div></div>
       <div class="stat-cell"><div class="stat-label">🏆 Paling Laris</div><div class="stat-num gold" style="font-size:24px">${data.recentTx[0] ? esc(data.recentTx[0].commodity_name) : '—'}</div><div class="stat-sub">transaksi terakhir</div></div>
     </div>
     <div class="tabs">
@@ -1465,7 +1519,7 @@ function marketPage(scope) {
     </div>
     <div class="panel"><h3>🛒 ORDER BELI</h3>
       <p class="muted small">Pembeli memasang harga yang mereka mau. Punya barangnya? Jual langsung ke order mereka — dana pembeli sudah dikunci, jadi kamu pasti dibayar (dikurangi pajak penghasilan sesuai UU yang berlaku ke kas negara).</p>
-      ${data.buyOrders.length ? data.buyOrders.map((o) => `<div class="kv"><span class="k">🧑 ${esc(o.buyer)} · ${esc(o.commodity_name)} T${o.tier} · butuh ${o.qty - o.qty_filled}/${o.qty}<br><small class="muted">${fmt(o.price, 2)} ${cur}/unit</small></span>
+      ${data.buyOrders.length ? data.buyOrders.map((o) => `<div class="kv"><span class="k">🧑 ${esc(o.buyer)} · ${esc(o.commodity_name)} T${o.tier} · butuh ${o.qty - o.qty_filled}/${o.qty}<br><small class="muted">${money(o.price)}/unit</small></span>
         <span class="v"><input type="number" value="${Math.min(o.qty - o.qty_filled, 10)}" min="1" max="${o.qty - o.qty_filled}" style="width:70px" id="qo-${o.id}">
         <button class="btn-gold btn-sm" data-sell-order="${o.id}">JUAL</button></span></div>`).join('')
         : '<p class="muted">Belum ada order beli. Jadilah pembeli pertama!</p>'}
@@ -1475,13 +1529,13 @@ function marketPage(scope) {
       <div class="row">
         <label>TINGKAT<select id="buy-tier"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
         <label>JUMLAH (min 10)<input id="buy-qty" type="number" value="10" min="10"></label>
-        <label>HARGA / UNIT (${cur})<input id="buy-price" type="number" step="0.01" placeholder="cth: 9.00"></label>
+        <label>HARGA / UNIT (${curLabel})<input id="buy-price" type="number" step="0.01" placeholder="cth: ${scope === 'global' ? '9.00' : '164.700'}"></label>
       </div>
       <p class="muted small">Dana sebesar harga × jumlah langsung dikunci dari saldomu (escrow). Bila order dibatalkan, sisa dana kembali utuh.</p>
       <button class="btn-gold" id="btn-buy-order">PASANG ORDER BELI</button>
     </div>
     <div class="panel"><h3>🧾 ORDER BELIKU</h3>
-      ${data.myBuyOrders.length ? data.myBuyOrders.map((o) => `<div class="kv"><span class="k">${esc(o.commodity_name)} T${o.tier} · ${o.qty_filled}/${o.qty} terpenuhi · ${fmt(o.price, 2)} ${cur}</span>
+      ${data.myBuyOrders.length ? data.myBuyOrders.map((o) => `<div class="kv"><span class="k">${esc(o.commodity_name)} T${o.tier} · ${o.qty_filled}/${o.qty} terpenuhi · ${money(o.price)}</span>
         <span class="v"><button class="btn-danger btn-sm" data-cancel-order="${o.id}">Batalkan</button></span></div>`).join('')
         : '<p class="muted">Belum ada order beli aktif.</p>'}
     </div>
@@ -1490,18 +1544,18 @@ function marketPage(scope) {
       <div class="row">
         <label>TINGKAT<select id="sell-tier"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
         <label>JUMLAH (min 10)<input id="sell-qty" type="number" value="10" min="10"></label>
-        <label>HARGA / UNIT (${cur})<input id="sell-price" type="number" step="0.01" placeholder="cth: 10.80"></label>
+        <label>HARGA / UNIT (${curLabel})<input id="sell-price" type="number" step="0.01" placeholder="cth: ${scope === 'global' ? '10.80' : '197.640'}"></label>
       </div>
-      <p class="muted small">Pajak penghasilan ${data.taxRate ?? 2}% dipotong saat barang terjual dan masuk kas negara (lihat halaman Negara). Contoh: jual 10,00 → diterima ${fmt(10 * (1 - (data.taxRate ?? 2) / 100), 2)}.</p>
+      <p class="muted small">Pajak penghasilan ${data.taxRate ?? 2}% dipotong saat barang terjual dan masuk kas negara (lihat halaman Negara). Contoh: jual ${money(10)} → diterima ${money(10 * (1 - (data.taxRate ?? 2) / 100))}.</p>
       <button class="btn-gold" id="btn-sell">PAJANG PENAWARAN</button>
     </div>
     <div class="panel"><h3>🧾 PENAWARANKU</h3>
-      ${data.mine.length ? data.mine.map((o) => `<div class="kv"><span class="k">${esc(o.commodity_name)} T${o.tier} ×${o.qty} · ${fmt(o.price, 2)} ${cur}</span>
+      ${data.mine.length ? data.mine.map((o) => `<div class="kv"><span class="k">${esc(o.commodity_name)} T${o.tier} ×${o.qty} · ${money(o.price)}</span>
         <span class="v"><button class="btn-danger btn-sm" data-cancel="${o.id}">Batalkan</button></span></div>`).join('')
         : '<p class="muted">Belum ada penawaran aktif.</p>'}
     </div>
     <div class="panel"><h3>🕒 TRANSAKSI TERAKHIR</h3>
-      ${data.recentTx.length ? data.recentTx.map((t) => `<div class="kv"><span class="k">${esc(t.commodity_name)} T${t.tier} ×${t.qty}</span><span class="v">${fmt(t.total, 2)} ${cur} · ${ago(t.created_at)}</span></div>`).join('')
+      ${data.recentTx.length ? data.recentTx.map((t) => `<div class="kv"><span class="k">${esc(t.commodity_name)} T${t.tier} ×${t.qty}</span><span class="v">${money(t.total)} · ${ago(t.created_at)}</span></div>`).join('')
         : '<p class="muted">Belum ada transaksi.</p>'}
     </div>`);
     $$('[data-com]').forEach((b) => b.onclick = async () => {
@@ -1517,7 +1571,6 @@ function marketPage(scope) {
       // pakta dagang di Parlementer hanya memotong pajak penghasilan penjual.
       const IMPORT_TAX = 0.02;
       const seenTier = new Set();
-      const unitLabel = scope === 'global' ? 'g' : 'USD';
       $('#offer-detail').innerHTML = `<h3>📋 ${esc(com.name)} — PENAWARAN</h3>
         ${offers.length ? `<p class="muted small">100 penawaran termurah tiap barang dan tingkat</p>` : ''}` + (offers.length ? offers.map((o) => {
         const isBest = !seenTier.has(o.tier); seenTier.add(o.tier);
@@ -1533,8 +1586,8 @@ function marketPage(scope) {
               <div class="offer-seller"><span class="avatar-initial" style="width:20px;height:20px;font-size:11px">${esc((o.seller[0] || '?').toUpperCase())}</span> ${sellerTag}${esc(o.seller)}</div>
             </div>
             <div class="offer-price">
-              <div class="big">${fmt(unit, 2)} <small>${unitLabel}</small></div>
-              <div class="detail">${fmt(o.price, 2)} ${cur}/unit${scope === 'global' ? ` · +pajak impor 2%<span class="tax">+${fmt(o.price * IMPORT_TAX, 2)} ${cur} pajak/unit</span>` : ''}</div>
+              <div class="big">${scope === 'global' ? fmt(unit, 2) + ' <small>g</small>' : fmtRp(unit)}</div>
+              <div class="detail">${money(o.price)}/unit${scope === 'global' ? ` · +pajak impor 2%<span class="tax">+${money(o.price * IMPORT_TAX)} pajak/unit</span>` : ''}</div>
             </div>
           </div>
           <div class="offer-actions">
@@ -1552,7 +1605,7 @@ function marketPage(scope) {
       $$('[data-buy]').forEach((bb) => bb.onclick = async () => {
         const qty = Number($('#q-' + bb.dataset.buy)?.value || 1);
         try { const r = await post('/api/market/buy', { offer_id: Number(bb.dataset.buy), qty });
-          toast(`Membeli ${qty}× ${com.name} seharga ${fmt(r.total, 2)} ${r.currency === 'gold' ? 'emas' : 'USD'}.`);
+          toast(`Membeli ${qty}× ${com.name} seharga ${r.currency === 'gold' ? fmt(r.total, 2) + ' emas' : fmtRp(r.total)}.`);
           await refreshMe(); route(); }
         catch (e) { toast(e.message); }
       });
@@ -1576,9 +1629,9 @@ function marketPage(scope) {
       el.innerHTML = `
         <div class="price-chart">${days.map((d) => {
           const h = Math.max(4, Math.round(((d.avg - min) / span) * 100));
-          return `<div class="bar-col" title="${d.date}: rata-rata ${fmt(d.avg, 2)} ${cur} · ${d.tx} transaksi"><i style="height:${h}%"></i><span>${d.date.slice(5)}</span></div>`;
+          return `<div class="bar-col" title="${d.date}: rata-rata ${money(d.avg)} · ${d.tx} transaksi"><i style="height:${h}%"></i><span>${d.date.slice(5)}</span></div>`;
         }).join('')}</div>
-        <p class="muted small" style="margin-top:8px">Terakhir (${last.date}): rata-rata ${fmt(last.avg, 2)} ${cur} · tertinggi ${fmt(last.max, 2)} · terendah ${fmt(last.min, 2)} · ${fmt(last.volume)} unit · ${last.tx} transaksi.</p>`;
+        <p class="muted small" style="margin-top:8px">Terakhir (${last.date}): rata-rata ${money(last.avg)} · tertinggi ${money(last.max)} · terendah ${money(last.min)} · ${fmt(last.volume)} unit · ${last.tx} transaksi.</p>`;
     }
     const chartDefault = data.recentTx[0]?.commodity_id || data.commodities[0]?.id;
     if (chartDefault) {
@@ -1590,13 +1643,13 @@ function marketPage(scope) {
       const qty = Number($('#qo-' + b.dataset.sellOrder)?.value || 1);
       try {
         const r = await post('/api/market/sell-to-order', { order_id: Number(b.dataset.sellOrder), qty });
-        toast(`Terjual ${qty} unit (diterima ${fmt(r.sellerReceives, 2)} ${r.currency === 'gold' ? 'emas' : 'USD'} setelah pajak).`);
+        toast(`Terjual ${qty} unit (diterima ${r.currency === 'gold' ? fmt(r.sellerReceives, 2) + ' emas' : fmtRp(r.sellerReceives)} setelah pajak).`);
         await refreshMe(); route();
       } catch (e) { toast(e.message); }
     });
     $('#btn-buy-order').onclick = async () => {
       try {
-        await post('/api/market/buy-order', { scope, commodity_id: Number($('#buy-com').value), tier: Number($('#buy-tier').value), qty: Number($('#buy-qty').value), price: Number($('#buy-price').value) });
+        await post('/api/market/buy-order', { scope, commodity_id: Number($('#buy-com').value), tier: Number($('#buy-tier').value), qty: Number($('#buy-qty').value), price: priceInputUsd($('#buy-price')) });
         toast('Order beli dipasang — dana dikunci.');
         await refreshMe(); route();
       } catch (e) { toast(e.message); }
@@ -1606,13 +1659,13 @@ function marketPage(scope) {
       if (!confirm('Batalkan order beli ini? Sisa dana yang dikunci kembali ke saldomu.')) return;
       try {
         const r = await post('/api/market/buy-order/cancel', { order_id: Number(b.dataset.cancelOrder) });
-        toast(`Order dibatalkan, ${fmt(r.refund, 2)} ${r.currency === 'gold' ? 'emas' : 'USD'} kembali.`);
+        toast(`Order dibatalkan, ${r.currency === 'gold' ? fmt(r.refund, 2) + ' emas' : fmtRp(r.refund)} kembali.`);
         route();
       } catch (e) { toast(e.message); }
     });
     $('#btn-sell').onclick = async () => {
       try {
-        await post('/api/market/sell', { scope, commodity_id: Number($('#sell-com').value), tier: Number($('#sell-tier').value), qty: Number($('#sell-qty').value), price: Number($('#sell-price').value) });
+        await post('/api/market/sell', { scope, commodity_id: Number($('#sell-com').value), tier: Number($('#sell-tier').value), qty: Number($('#sell-qty').value), price: priceInputUsd($('#sell-price')) });
         toast('Penawaran dipajang di pasar.');
         await refreshMe(); route();
       } catch (e) { toast(e.message); }
@@ -1640,56 +1693,56 @@ ROUTES.fx = async () => {
     const y = 100 - ((h.price - minP) / (maxP - minP || 1)) * 100;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
-  $('#page').innerHTML = page('VALAS — USD ⇄ EMAS', 'Perdagangkan emas terhadap dolar. Valas tidak dipungut pajak.', `
+  $('#page').innerHTML = page('VALAS — RUPIAH ⇄ EMAS', 'Perdagangkan emas terhadap Rupiah. Valas tidak dipungut pajak.', `
   <div class="stat-grid">
-    <div class="stat-cell"><div class="stat-label">⬇️ Jual Terbaik</div><div class="stat-num gold">${fx.bestSell != null ? fmt(fx.bestSell, 2) : '—'}</div><div class="stat-sub">${fx.sellCount} penawaran menjual emas</div></div>
-    <div class="stat-cell"><div class="stat-label">⬆️ Beli Terbaik</div><div class="stat-num" style="color:var(--teal)">${fx.bestBuy != null ? fmt(fx.bestBuy, 2) : '—'}</div><div class="stat-sub">${fx.buyCount} penawaran membeli emas</div></div>
-    <div class="stat-cell"><div class="stat-label">⚖️ Selisih</div><div class="stat-num">${fx.spread != null ? fmt(fx.spread, 2) : '—'}</div><div class="stat-sub">dari kurs tengah</div></div>
-    <div class="stat-cell"><div class="stat-label">💎 Kurs Cetak</div><div class="stat-num">10.00</div><div class="stat-sub">Patokan: 1 emas = 10 USD</div></div>
+    <div class="stat-cell"><div class="stat-label">⬇️ Jual Terbaik</div><div class="stat-num gold">${fx.bestSell != null ? fmtRp(fx.bestSell) : '—'}</div><div class="stat-sub">${fx.sellCount} penawaran menjual emas</div></div>
+    <div class="stat-cell"><div class="stat-label">⬆️ Beli Terbaik</div><div class="stat-num" style="color:var(--teal)">${fx.bestBuy != null ? fmtRp(fx.bestBuy) : '—'}</div><div class="stat-sub">${fx.buyCount} penawaran membeli emas</div></div>
+    <div class="stat-cell"><div class="stat-label">⚖️ Selisih</div><div class="stat-num">${fx.spread != null ? fmtRp(fx.spread) : '—'}</div><div class="stat-sub">dari kurs tengah</div></div>
+    <div class="stat-cell"><div class="stat-label">💎 Kurs Cetak</div><div class="stat-num">${fmtRp(10)}</div><div class="stat-sub">Patokan: 1 emas = ${fmtRp(10)}</div></div>
   </div>
   <div class="panel"><h3>📈 PENJUALAN EMAS — VWAP</h3>
     ${chart.length ? `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:140px;background:#0a0f1c;border-radius:8px">
       <polyline points="${points}" fill="none" stroke="#d9a441" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>
-      <p class="muted small">Terakhir ${fmt(chart[chart.length - 1].price, 2)} USD/emas · ${chart.length} transaksi tercatat</p>`
+      <p class="muted small">Terakhir ${fmtRp(chart[chart.length - 1].price)} /emas · ${chart.length} transaksi tercatat</p>`
       : '<p class="muted">Belum ada perdagangan emas. Grafik muncul setelah ada transaksi.</p>'}
-    <p class="muted small" style="margin-top:8px">Harga pasar emas adalah 10 USD — jangan beli emas di atas 10,00, karena pemerintah mencetak emas resmi dengan harga itu. Perdagangan pemain bersifat sukarela dan berisiko.</p>
+    <p class="muted small" style="margin-top:8px">Harga pasar emas adalah ${fmtRp(10)} — jangan beli emas di atas ${fmtRp(10)}, karena pemerintah mencetak emas resmi dengan harga itu. Perdagangan pemain bersifat sukarela dan berisiko.</p>
   </div>
-  <div class="panel"><h3>🏛️ CETAK USD</h3>
-    <p class="muted small">Tukar emasmu menjadi USD dengan kurs resmi 1 emas = 10 USD.</p>
+  <div class="panel"><h3>🏛️ CETAK RUPIAH</h3>
+    <p class="muted small">Tukar emasmu menjadi Rupiah dengan kurs resmi 1 emas = ${fmtRp(10)}.</p>
     <div class="row"><input id="mint-gold" type="number" value="1" min="1" placeholder="Jumlah emas"><button class="btn-gold" id="btn-mint">CETAK</button></div>
   </div>
   <div class="panel"><h3>📝 PASANG PENAWARAN EMAS</h3>
     <p class="muted small">Berlaku 72 jam. 1 penawaran terbuka per arah. Dana dikunci sampai penawaran diambil/dibatalkan.</p>
     <div class="row">
-      <label>ARAH<select id="fx-dir"><option value="sell">Jual Emas (terima USD)</option><option value="buy">Beli Emas (bayar USD)</option></select></label>
-      <label>HARGA / EMAS (USD)<input id="fx-price" type="number" step="0.01" placeholder="cth: 20.70"></label>
+      <label>ARAH<select id="fx-dir"><option value="sell">Jual Emas (terima Rupiah)</option><option value="buy">Beli Emas (bayar Rupiah)</option></select></label>
+      <label>HARGA / EMAS (Rp)<input id="fx-price" type="number" step="0.01" placeholder="cth: 378.810"></label>
       <label>JUMLAH EMAS<input id="fx-qty" type="number" step="0.01" placeholder="cth: 10"></label>
     </div>
     <button class="btn-gold" id="btn-fx-offer">PASANG PENAWARAN</button>
   </div>
   <div class="panel"><h3>📋 PENAWARAN JUAL EMAS</h3>
-    ${fx.sells.length ? fx.sells.map((o) => `<div class="kv"><span class="k">${esc(o.citizen_name)} · ${fmt(o.price, 2)} USD/emas · sisa ${fmt(o.qty_gold - o.qty_filled, 2)} emas</span>
+    ${fx.sells.length ? fx.sells.map((o) => `<div class="kv"><span class="k">${esc(o.citizen_name)} · ${fmtRp(o.price)} /emas · sisa ${fmt(o.qty_gold - o.qty_filled, 2)} emas</span>
       <span class="v"><input type="number" step="0.01" value="1" min="0.01" style="width:70px" id="fq-${o.id}"><button class="btn-gold btn-sm" data-take="${o.id}">AMBIL</button></span></div>`).join('')
       : '<p class="muted">Tidak ada penawaran jual.</p>'}
   </div>
   <div class="panel"><h3>📋 PENAWARAN BELI EMAS</h3>
-    ${fx.buys.length ? fx.buys.map((o) => `<div class="kv"><span class="k">${esc(o.citizen_name)} · ${fmt(o.price, 2)} USD/emas · sisa ${fmt(o.qty_gold - o.qty_filled, 2)} emas</span>
+    ${fx.buys.length ? fx.buys.map((o) => `<div class="kv"><span class="k">${esc(o.citizen_name)} · ${fmtRp(o.price)} /emas · sisa ${fmt(o.qty_gold - o.qty_filled, 2)} emas</span>
       <span class="v"><input type="number" step="0.01" value="1" min="0.01" style="width:70px" id="fq-${o.id}"><button class="btn-gold btn-sm" data-take="${o.id}">JUAL KE DIA</button></span></div>`).join('')
       : '<p class="muted">Tidak ada penawaran beli.</p>'}
   </div>
-  ${fx.mine.length ? `<div class="panel"><h3>🧾 PENAWARANKU</h3>${fx.mine.map((o) => `<div class="kv"><span class="k">${o.direction === 'sell' ? 'Jual' : 'Beli'} · ${fmt(o.price, 2)} USD · ${fmt(o.qty_gold - o.qty_filled, 2)}/${fmt(o.qty_gold, 2)} emas</span>
+  ${fx.mine.length ? `<div class="panel"><h3>🧾 PENAWARANKU</h3>${fx.mine.map((o) => `<div class="kv"><span class="k">${o.direction === 'sell' ? 'Jual' : 'Beli'} · ${fmtRp(o.price)} · ${fmt(o.qty_gold - o.qty_filled, 2)}/${fmt(o.qty_gold, 2)} emas</span>
     <span class="v"><button class="btn-danger btn-sm" data-fx-cancel="${o.id}">Batalkan</button></span></div>`).join('')}</div>` : ''}`);
   $('#btn-mint').onclick = async () => {
-    try { const r = await post('/api/fx/mint', { gold: Number($('#mint-gold').value) }); toast(`Dicetak ${fmtUSD(r.usd)} USD.`); await refreshMe(); route(); }
+    try { const r = await post('/api/fx/mint', { gold: Number($('#mint-gold').value) }); toast(`Dicetak ${fmtRp(r.usd)}.`); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   };
   $('#btn-fx-offer').onclick = async () => {
-    try { await post('/api/fx/offer', { direction: $('#fx-dir').value, price: Number($('#fx-price').value), qty_gold: Number($('#fx-qty').value) }); toast('Penawaran valas dipasang (72 jam).'); route(); }
+    try { await post('/api/fx/offer', { direction: $('#fx-dir').value, price: rpToUsd(Number($('#fx-price').value)), qty_gold: Number($('#fx-qty').value) }); toast('Penawaran valas dipasang (72 jam).'); route(); }
     catch (e) { toast(e.message); }
   };
   $$('[data-take]').forEach((b) => b.onclick = async () => {
     try { const r = await post('/api/fx/take', { offer_id: Number(b.dataset.take), qty: Number($('#fq-' + b.dataset.take).value) });
-      toast(`Transaksi valas selesai: ${fmt(r.gold, 2)} emas / ${fmtUSD(r.usd)} USD.`); await refreshMe(); route(); }
+      toast(`Transaksi valas selesai: ${fmt(r.gold, 2)} emas / ${fmtRp(r.usd)}.`); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   });
   $$('[data-fx-cancel]').forEach((b) => b.onclick = async () => {
@@ -1701,12 +1754,13 @@ ROUTES.fx = async () => {
   });
 };
 
-// Label upah lowongan: ADMIN dibayar bahan mentah, perusahaan bayar USD/bagi hasil.
+// Label upah lowongan: ADMIN dibayar bahan mentah, perusahaan bayar Rupiah
+// (nilai server USD) / bagi hasil.
 // Untuk lowongan ADMIN, pakai effectiveQty (jumlah setelah pengali UU upah
 // ADMIN yang berlaku) bila ada — sama dengan yang diterima saat shift.
 const payLabel = (j) => j.salary_type === 'goods'
   ? `${fmt(j.effectiveQty ?? j.pay_qty)}× ${j.resource} / shift`
-  : `${fmt(j.salary)} USD / shift`;
+  : `${fmtRp(j.salary)} / shift`;
 
 // ---------- PEKERJAAN ----------
 ROUTES.jobs = async () => {
@@ -1732,13 +1786,13 @@ ROUTES.jobs = async () => {
         <p class="muted small">${esc(j.company_name || 'Pemerintah')} · ${esc(j.region_name)} · Level ${j.level_min}+ · ${j.workers}/${j.seats} kursi</p>
         <p class="small">${esc(j.description || '')}</p>
         <div class="kv"><span class="k">${j.salary_type === 'goods' ? 'Upah (bahan mentah)' : j.salary_type === 'share' ? 'Bagi hasil' : 'Gaji tetap'}</span><span class="v gold-text">${payLabel(j)}</span></div>
-        ${j.salary_type === 'goods' ? `<p class="muted small">Setara ~${fmt(j.salary, 2)} USD / shift · jual bahannya di pasar untuk uang.</p>` : ''}
+        ${j.salary_type === 'goods' ? `<p class="muted small">Setara ~${fmtRp(j.salary)} / shift · jual bahannya di pasar untuk uang.</p>` : ''}
         <button class="btn-gold btn-sm" data-apply="${j.id}" ${ME.citizen.job_id === j.id ? 'disabled' : ''}>${ME.citizen.job_id === j.id ? '✓ Pekerjaanmu' : 'LAMAR'}</button>
       </div>`).join('') : emptyState('💼', 'Belum ada lowongan', 'Lowongan ADMIN dan perusahaan warga akan muncul di sini.')}
   </div>`);
   $('#btn-shift')?.addEventListener('click', async () => {
     try { const r = await post('/api/jobs/shift');
-      toast(r.goods ? `Shift selesai! ${r.note}` : `Shift selesai! Gaji bersih ${fmtUSD(r.net)} USD (pajak ${fmtUSD(r.tax)}).`);
+      toast(r.goods ? `Shift selesai! ${r.note}` : `Shift selesai! Gaji bersih ${fmtRp(r.net)} (pajak ${fmtRp(r.tax)}).`);
       await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   });
@@ -1773,7 +1827,7 @@ ROUTES.companies = async () => {
     ${data.mine.length ? data.mine.map((c) => `
       <div class="card"><h4>${esc(c.name)}</h4>
       <p class="muted small">${esc(c.type)} · ${esc(c.region_name)} · ${c.employees} karyawan${c.resource ? ' · Produksi: ' + esc(c.resource) : ''}</p>
-      <div class="row"><input placeholder="Judul lowongan baru" id="job-title-${c.id}"><input placeholder="Gaji USD" type="number" id="job-salary-${c.id}" style="max-width:120px">
+      <div class="row"><input placeholder="Judul lowongan baru" id="job-title-${c.id}"><input placeholder="Gaji (Rp)" type="number" id="job-salary-${c.id}" style="max-width:120px">
       <button class="btn-gold btn-sm" data-newjob="${c.id}">BUKA LOWONGAN</button></div></div>`).join('')
       : '<p class="muted">Kamu belum punya perusahaan.</p>'}
   </div>
@@ -1802,7 +1856,7 @@ ROUTES.companies = async () => {
   $$('[data-newjob]').forEach((b) => b.onclick = async () => {
     const id = b.dataset.newjob;
     try {
-      await post(`/api/companies/${id}/job`, { title: $('#job-title-' + id).value.trim(), salary: Number($('#job-salary-' + id).value), salary_type: 'fixed', seats: 4 });
+      await post(`/api/companies/${id}/job`, { title: $('#job-title-' + id).value.trim(), salary: rpToUsd(Number($('#job-salary-' + id).value)), salary_type: 'fixed', seats: 4 });
       toast('Lowongan dibuka.');
       route();
     } catch (e) { toast(e.message); }
@@ -1905,7 +1959,7 @@ ROUTES.country = async () => {
   </div>
   <div class="panel"><h3>💰 KAS NEGARA</h3>
     <div class="kv"><span class="k">Kas negara</span><span class="v gold-text">${fmt(c.treasury)} emas</span></div>
-    <div class="kv"><span class="k">Kas negara (USD)</span><span class="v gold-text">${fmtUSD(c.treasury_usd || 0)} USD</span></div>
+    <div class="kv"><span class="k">Kas negara (Rupiah)</span><span class="v gold-text">${fmtRp(c.treasury_usd || 0)}</span></div>
     <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${c.tax_income}%</span></div>
     <div class="kv"><span class="k">Upah lowongan ADMIN</span><span class="v">${Math.round((c.admin_pay_mult || 1) * 100)}% dari upah dasar</span></div>
     <div class="kv"><span class="k">Biaya perjalanan</span><span class="v">${c.travel_tickets || 1} Tiket</span></div>
@@ -1914,7 +1968,7 @@ ROUTES.country = async () => {
     <p class="muted small">Pajak dikelola parlemen. Gaji menteri 113 emas/hari (dicetak permainan). Pajak pasar ${c.tax_income}% masuk ke kas ini.</p>
     ${d.treasuryTx?.length ? `<h3 style="margin-top:12px">📒 ARUS KAS (20 TERAKHIR)</h3>
       ${d.treasuryTx.map((t) => `<div class="kv"><span class="k">${esc(t.note || t.kind)}<br><small class="muted">${ago(t.created_at)}</small></span>
-      <span class="v">${t.amount >= 0 ? '+' : ''}${fmt(t.amount, 2)} ${t.currency === 'gold' ? 'emas' : 'USD'}</span></div>`).join('')}`
+      <span class="v">${t.amount >= 0 ? '+' : ''}${t.currency === 'gold' ? fmt(t.amount, 2) + ' emas' : fmtRp(t.amount)}</span></div>`).join('')}`
       : '<p class="muted small" style="margin-top:8px">Belum ada pemasukan pajak — kas negara masih 0 sampai ada yang berdagang.</p>'}
   </div>
   <div class="panel"><h3>⚖️ WEWENANG MENTERI</h3>
@@ -1975,9 +2029,9 @@ ROUTES.stats = async () => {
       <div class="kv"><span class="k">${esc(r.name)}</span><span class="v">${fmt(r.population)} warga · skor ${r.city_score}/10</span></div>`).join('')}
   </div>
   <div class="panel"><h3>💱 VALAS</h3>
-    <div class="kv"><span class="k">Kurs cetak</span><span class="v">1 emas = 10 USD</span></div>
-    <div class="kv"><span class="k">Jual terbaik</span><span class="v">${fx.bestSell != null ? fmt(fx.bestSell, 2) : '—'} USD</span></div>
-    <div class="kv"><span class="k">Beli terbaik</span><span class="v">${fx.bestBuy != null ? fmt(fx.bestBuy, 2) : '—'} USD</span></div>
+    <div class="kv"><span class="k">Kurs cetak</span><span class="v">1 emas = ${fmtRp(10)}</span></div>
+    <div class="kv"><span class="k">Jual terbaik</span><span class="v">${fx.bestSell != null ? fmtRp(fx.bestSell) : '—'}</span></div>
+    <div class="kv"><span class="k">Beli terbaik</span><span class="v">${fx.bestBuy != null ? fmtRp(fx.bestBuy) : '—'}</span></div>
     <div class="kv"><span class="k">Transaksi 24 jam</span><span class="v">${fmt(fx.stats.tx)} · ${fmt(fx.stats.volume, 2)} emas</span></div>
   </div>`);
 };
@@ -1992,7 +2046,7 @@ ROUTES.contracts = async () => {
   <div class="panel"><h3>📜 KONTRAK PERDAGANGAN</h3>
     <p class="muted small">Setiap pembelian di pasar tercatat sebagai kontrak dagang. Kontrak baru dibuat otomatis saat ada transaksi.</p>
     ${all.length ? all.map((t) => `<div class="kv"><span class="k">${esc(t.commodity_name)} T${t.tier} ×${t.qty} <span class="chip">${t.scope}</span></span>
-      <span class="v">${fmt(t.total, 2)} ${t.scope === 'Global' ? 'emas' : 'USD'} · ${ago(t.created_at)}</span></div>`).join('')
+      <span class="v">${t.scope === 'Global' ? fmt(t.total, 2) + ' emas' : fmtRp(t.total)} · ${ago(t.created_at)}</span></div>`).join('')
       : emptyState('📜', 'Belum ada kontrak', 'Pasar masih kosong. Jadilah yang pertama berdagang!')}
   </div>`);
 };
@@ -2748,7 +2802,7 @@ ROUTES.book = async () => {
     3) Naik level lewat XP dari shift, perang, misi, dan pasokan.<br>
     4) Gabung partai / perusahaan / negara — lalu kuasai dunia.</p></div>
   <div class="panel"><h3>💰 EKONOMI</h3>
-    <p>Pasar lokal memakai USD, Pasar Global memakai emas. Pajak penghasilan saat menjual sesuai UU yang berlaku (lihat halaman Parlemen). Valas: 1 emas dicetak jadi 10 USD. Mata uang tidak bisa ditukar langsung — harus lewat emas.</p></div>
+    <p>Pasar lokal memakai Rupiah, Pasar Global memakai emas. Pajak penghasilan saat menjual sesuai UU yang berlaku (lihat halaman Parlemen). Valas: 1 emas dicetak jadi ${fmtRp(10)}. Mata uang tidak bisa ditukar langsung — harus lewat emas.</p></div>
   <div class="panel"><h3>🏛️ POLITIK</h3>
     <p>Dirikan partai (Level 10 + 50 emas). Menangkan pemilu parlemen untuk merebut 60 kursi (mayoritas 31). Presiden dipilih warga Level 5+ yang sudah 3 hari menjadi warga.</p></div>
   <div class="panel"><h3>⚔️ PERANG</h3>
