@@ -103,6 +103,7 @@ export async function tx(fn) {
         const r = await client.query(toPg(q), p);
         return { id: r.rows[0]?.id ?? null, changes: r.rowCount };
       },
+      exec: async (q) => { await client.query(q); },
     };
     try {
       await client.query('BEGIN');
@@ -122,6 +123,7 @@ export async function tx(fn) {
       const r = sqliteDb.prepare(q).run(...p);
       return { id: r.lastInsertRowid ? Number(r.lastInsertRowid) : null, changes: r.changes };
     },
+    exec: async (q) => { sqliteDb.exec(q); },
   };
   try {
     const out = await fn(t);
@@ -146,9 +148,9 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT NOT NULL UNIQUE,
   pass_hash TEXT NOT NULL,
   referred_by INTEGER,
-  premium_until INTEGER NOT NULL DEFAULT 0,
+  premium_until BIGINT NOT NULL DEFAULT 0,
   is_admin INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS citizens (
   id ${id},
@@ -165,7 +167,7 @@ CREATE TABLE IF NOT EXISTS citizens (
   bread_today INTEGER NOT NULL DEFAULT 0,
   energy_spent_today INTEGER NOT NULL DEFAULT 0,
   chat_today INTEGER NOT NULL DEFAULT 0,
-  last_chat_at INTEGER NOT NULL DEFAULT 0,
+  last_chat_at BIGINT NOT NULL DEFAULT 0,
   last_claim_date TEXT NOT NULL DEFAULT '',
   region_id INTEGER NOT NULL DEFAULT 1,
   home_region_id INTEGER NOT NULL DEFAULT 1,
@@ -183,7 +185,7 @@ CREATE TABLE IF NOT EXISTS citizens (
   chronicle_done TEXT NOT NULL DEFAULT '[]',
   chronicle_claimed TEXT NOT NULL DEFAULT '[]',
   missions TEXT NOT NULL DEFAULT '{}',
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS regions (
   id ${id},
@@ -223,7 +225,7 @@ CREATE TABLE IF NOT EXISTS market_offers (
   tier INTEGER NOT NULL DEFAULT 1,
   qty INTEGER NOT NULL,
   price REAL NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS market_tx (
   id ${id},
@@ -235,7 +237,7 @@ CREATE TABLE IF NOT EXISTS market_tx (
   qty INTEGER NOT NULL,
   price_each REAL NOT NULL,
   total REAL NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS fx_offers (
   id ${id},
@@ -244,14 +246,14 @@ CREATE TABLE IF NOT EXISTS fx_offers (
   price REAL NOT NULL,
   qty_gold REAL NOT NULL,
   qty_filled REAL NOT NULL DEFAULT 0,
-  expires_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  expires_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS fx_history (
   id ${id},
   price REAL NOT NULL,
   volume REAL NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id ${id},
@@ -267,7 +269,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   seats_taken INTEGER NOT NULL DEFAULT 0,
   region_id INTEGER NOT NULL DEFAULT 1,
   description TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS companies (
   id ${id},
@@ -277,7 +279,7 @@ CREATE TABLE IF NOT EXISTS companies (
   type TEXT NOT NULL,
   region_id INTEGER NOT NULL,
   resource TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS country (
   id ${id},
@@ -304,13 +306,13 @@ CREATE TABLE IF NOT EXISTS parties (
   leader_id INTEGER NOT NULL REFERENCES citizens(id),
   type TEXT NOT NULL DEFAULT 'open',
   seats INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS party_members (
   party_id INTEGER NOT NULL REFERENCES parties(id),
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   role TEXT NOT NULL DEFAULT 'member',
-  joined_at INTEGER NOT NULL,
+  joined_at BIGINT NOT NULL,
   UNIQUE(party_id, citizen_id)
 );
 CREATE TABLE IF NOT EXISTS laws (
@@ -322,8 +324,8 @@ CREATE TABLE IF NOT EXISTS laws (
   yes INTEGER NOT NULL DEFAULT 0,
   abstain INTEGER NOT NULL DEFAULT 0,
   no INTEGER NOT NULL DEFAULT 0,
-  ends_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  ends_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS law_votes (
   law_id INTEGER NOT NULL REFERENCES laws(id),
@@ -335,10 +337,10 @@ CREATE TABLE IF NOT EXISTS elections (
   id ${id},
   type TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'scheduled',
-  opens_at INTEGER NOT NULL,
-  closes_at INTEGER NOT NULL,
+  opens_at BIGINT NOT NULL,
+  closes_at BIGINT NOT NULL,
   winner_id INTEGER,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS election_candidates (
   election_id INTEGER NOT NULL REFERENCES elections(id),
@@ -363,8 +365,8 @@ CREATE TABLE IF NOT EXISTS wars (
   score_d INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',
   winner TEXT NOT NULL DEFAULT '',
-  ends_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  ends_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS war_attacks (
   id ${id},
@@ -373,7 +375,7 @@ CREATE TABLE IF NOT EXISTS war_attacks (
   side TEXT NOT NULL,
   damage INTEGER NOT NULL,
   ammo TEXT NOT NULL DEFAULT 'Senjata',
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS war_support (
   region_id INTEGER NOT NULL REFERENCES regions(id),
@@ -384,7 +386,7 @@ CREATE TABLE IF NOT EXISTS newspapers (
   id ${id},
   owner_id INTEGER NOT NULL REFERENCES citizens(id),
   name TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS articles (
   id ${id},
@@ -396,7 +398,7 @@ CREATE TABLE IF NOT EXISTS articles (
   views INTEGER NOT NULL DEFAULT 0,
   likes INTEGER NOT NULL DEFAULT 0,
   dislikes INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS article_reactions (
   article_id INTEGER NOT NULL REFERENCES articles(id),
@@ -409,7 +411,7 @@ CREATE TABLE IF NOT EXISTS article_comments (
   article_id INTEGER NOT NULL REFERENCES articles(id),
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   content TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chat_messages (
   id ${id},
@@ -417,7 +419,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   content TEXT NOT NULL,
   article_id INTEGER,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chat_reports (
   id ${id},
@@ -426,7 +428,7 @@ CREATE TABLE IF NOT EXISTS chat_reports (
   reason TEXT NOT NULL,
   details TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'open',
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS blocked (
   blocker_id INTEGER NOT NULL REFERENCES citizens(id),
@@ -440,7 +442,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
   is_read INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS dms (
   id ${id},
@@ -448,7 +450,7 @@ CREATE TABLE IF NOT EXISTS dms (
   to_id INTEGER NOT NULL REFERENCES citizens(id),
   content TEXT NOT NULL,
   is_read INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS achievements (
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
@@ -462,8 +464,8 @@ CREATE TABLE IF NOT EXISTS convoys (
   slot INTEGER NOT NULL,
   building TEXT NOT NULL,
   region_id INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  expires_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS organizations (
   id ${id},
@@ -471,12 +473,12 @@ CREATE TABLE IF NOT EXISTS organizations (
   tag TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT 'Kerja Sama',
   leader_id INTEGER NOT NULL REFERENCES citizens(id),
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS org_members (
   org_id INTEGER NOT NULL REFERENCES organizations(id),
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
-  joined_at INTEGER NOT NULL,
+  joined_at BIGINT NOT NULL,
   UNIQUE(org_id, citizen_id)
 );
 CREATE TABLE IF NOT EXISTS support_tickets (
@@ -485,7 +487,7 @@ CREATE TABLE IF NOT EXISTS support_tickets (
   type TEXT NOT NULL,
   topic TEXT NOT NULL,
   details TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS world (
   id INTEGER PRIMARY KEY,
@@ -554,45 +556,114 @@ export async function closeDb() {
 }
 
 export async function initDb() {
-  await exec(schema(isPg ? 'pg' : 'sqlite'));
-  await seed();
+  const dialect = isPg ? 'pg' : 'sqlite';
+  // Seluruh init (skema + migrasi + seed) jalan dalam SATU transaksi dan —
+  // di Postgres sungguhan — di bawah advisory lock. Dua perbaikan dari
+  // insiden 500 di Vercel 27 Nov 2026:
+  //  1. Dua cold start serverless yang bersamaan tidak lagi bisa balapan
+  //     membuat tabel yang sama (yang kalah gagal 23505 pada
+  //     pg_type_typname_nsp_index). Lock dilepas otomatis saat COMMIT.
+  //  2. Run yang gagal di tengah jalan tidak meninggalkan state parsial
+  //     (dulu: skema jadi, seed gagal di tengah — run berikutnya menabrak
+  //     state setengah jadi). Kini gagal = rollback total, coba lagi bersih.
+  await tx(async (t) => {
+    if (isPg && process.env.PG_MEM_TEST !== '1') {
+      // pg-mem tidak mengenal pg_advisory_xact_lock; di sana tidak ada
+      // instance paralel sehingga lock memang tidak diperlukan.
+      await t.sql('SELECT pg_advisory_xact_lock(?::bigint)', [INITDB_LOCK_KEY]);
+    }
+    if (isPg) await cleanupOrphanTypes(t);
+    await t.exec(schema(dialect));
+    if (isPg) await migrateTimestampsToBigint(t);
+    await seed(t);
+  });
 }
 
-async function seed() {
+// Kolom yang menyimpan timestamp milidetik (Date.now()) — di Postgres harus
+// BIGINT: INTEGER (int4) overflow pada nilai ~1,8 triliun (error 22003).
+// Di SQLite BIGINT sama saja dengan INTEGER (64-bit), jadi satu skema untuk
+// kedua dialek. Daftar ini juga dipakai migrasi untuk database yang sudah
+// terlanjur dibuat dengan kolom INTEGER.
+const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
+
+// Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
+const TABLE_NAMES = ['users', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world'];
+
+// Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
+const INITDB_LOCK_KEY = 2026112701;
+
+// Hapus tipe komposit "yatim" peninggalan run pertama yang gagal: CREATE TABLE
+// membuat tipe komposit bernama sama dengan tabelnya; bila tipe itu ada tapi
+// tabelnya tidak, CREATE TABLE IF NOT EXISTS justru MELEWATI pembuatan tabel
+// (dianggap sudah ada) sehingga tabelnya tidak pernah dibuat dan query
+// berikutnya gagal "relation does not exist". Terjadi di Neon setelah run
+// pertama membuat tipe "users" lalu gagal di seed (22003).
+// Hanya jalan di Postgres (SQLite tidak punya pg_type).
+async function cleanupOrphanTypes(t) {
+  const types = await t.sql(`SELECT typname FROM pg_type WHERE typtype = 'c'`);
+  const tables = await t.sql(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`);
+  const tableSet = new Set(tables.map((r) => r.table_name));
+  for (const row of types) {
+    const name = row.typname;
+    if (TABLE_NAMES.includes(name) && !tableSet.has(name)) {
+      // Nama tipe berasal dari daftar tetap di atas (bukan input pengguna).
+      await t.exec(`DROP TYPE "${name}"`);
+    }
+  }
+}
+
+// Migrasikan kolom timestamp yang masih INTEGER ke BIGINT (Postgres).
+// Database yang dibuat sebelum perbaikan ini punya created_at dkk. bertipe
+// INTEGER — seed dan semua tulis Date.now() akan gagal 22003 di sana.
+// Idempotent: hanya kolom yang masih 'integer' yang diubah; setelah migrasi
+// query tidak menemukan apa-apa. Kolom id (identity) tidak disentuh.
+async function migrateTimestampsToBigint(t) {
+  const inList = TS_COLUMNS.map((c) => `'${c}'`).join(',');
+  const rows = await t.sql(
+    `SELECT table_name, column_name FROM information_schema.columns
+     WHERE table_schema = 'public' AND data_type = 'integer'
+     AND column_name IN (${inList})`);
+  for (const r of rows) {
+    // Nama tabel/kolom berasal dari information_schema, dikutip ganda agar aman.
+    await t.exec(`ALTER TABLE "${r.table_name}" ALTER COLUMN "${r.column_name}" TYPE BIGINT`);
+  }
+}
+
+async function seed(t = { one, run }) {
   const now = Date.now();
-  const regionCount = await one('SELECT COUNT(*) AS c FROM regions');
+  const regionCount = await t.one('SELECT COUNT(*) AS c FROM regions');
   if (Number(regionCount.c) === 0) {
     for (const r of REGIONS) {
-      await run(
+      await t.run(
         'INSERT INTO regions (name, type, city_score, capacity, health, education, military, industry, electricity, resource_bonus) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id',
         [r.name, r.type, r.score, 100, 7, 7, 7, 7, 10, r.bonus],
       );
     }
   }
-  const comCount = await one('SELECT COUNT(*) AS c FROM commodities');
+  const comCount = await t.one('SELECT COUNT(*) AS c FROM commodities');
   if (Number(comCount.c) === 0) {
     for (const c of COMMODITIES) {
-      await run('INSERT INTO commodities (name, category, ref_usd, ref_gold) VALUES (?,?,?,?) RETURNING id',
+      await t.run('INSERT INTO commodities (name, category, ref_usd, ref_gold) VALUES (?,?,?,?) RETURNING id',
         [c.name, c.category, c.usd, c.gold]);
     }
   }
-  const countryCount = await one('SELECT COUNT(*) AS c FROM country');
+  const countryCount = await t.one('SELECT COUNT(*) AS c FROM country');
   if (Number(countryCount.c) === 0) {
-    await run(`INSERT INTO country (name, ideology, capital, founded, treasury, tax_income, tax_production, tax_import, tax_export)
+    await t.run(`INSERT INTO country (name, ideology, capital, founded, treasury, tax_income, tax_production, tax_import, tax_export)
       VALUES ('Republik Indonesia','Konservatisme','Jakarta','2026-09-23',0,2,1,2,2) RETURNING id`);
   }
-  const jobCount = await one('SELECT COUNT(*) AS c FROM jobs WHERE is_admin = 1');
+  const jobCount = await t.one('SELECT COUNT(*) AS c FROM jobs WHERE is_admin = 1');
   if (Number(jobCount.c) === 0) {
     for (const j of ADMIN_JOBS) {
-      const reg = await one('SELECT id FROM regions WHERE name = ?', [j.region]);
-      await run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, level_min, tier, seats, seats_taken, region_id, description, created_at)
+      const reg = await t.one('SELECT id FROM regions WHERE name = ?', [j.region]);
+      await t.run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, level_min, tier, seats, seats_taken, region_id, description, created_at)
         VALUES (NULL,1,?,?,?,?,?,4,0,?,?,?) RETURNING id`,
         [j.title, j.salary, 'fixed', 1, 1, reg.id, j.desc, now]);
     }
   }
-  const world = await one('SELECT * FROM world WHERE id = 1');
+  const world = await t.one('SELECT * FROM world WHERE id = 1');
   if (!world) {
-    await run('INSERT INTO world (id, day, last_tick_date) VALUES (1,1,?) RETURNING id',
+    await t.run('INSERT INTO world (id, day, last_tick_date) VALUES (1,1,?) RETURNING id',
       [new Date().toISOString().slice(0, 10)]);
   }
 }
