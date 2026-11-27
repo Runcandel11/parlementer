@@ -289,6 +289,9 @@ CREATE TABLE IF NOT EXISTS citizens (
   attr_str INTEGER NOT NULL DEFAULT 0,
   attr_edu INTEGER NOT NULL DEFAULT 0,
   attr_eco INTEGER NOT NULL DEFAULT 0,
+  train_str_at BIGINT NOT NULL DEFAULT 0,
+  train_edu_at BIGINT NOT NULL DEFAULT 0,
+  train_eco_at BIGINT NOT NULL DEFAULT 0,
   fatigue INTEGER NOT NULL DEFAULT 0,
   bread_today INTEGER NOT NULL DEFAULT 0,
   energy_spent_today INTEGER NOT NULL DEFAULT 0,
@@ -914,6 +917,7 @@ export async function initDb() {
     await migrateTahap4Columns(t);
     await migrateTahap5Columns(t);
     await migrateOnlineColumns(t);
+    await migrateTrainCooldownColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -984,7 +988,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1152,6 +1156,25 @@ async function migrateOnlineColumns(t) {
   // jalan SEBELUM migrasi, dan database lama (Neon v6) belum punya kolom
   // ini — indeks di schema() akan menggagalkan initDb dengan 42703.
   await t.exec('CREATE INDEX IF NOT EXISTS idx_citizens_last_seen ON citizens(last_seen_at)');
+}
+
+// Migrasikan kolom jeda latihan (cooldown) untuk database yang sudah ada
+// (Neon live + SQLite lama): citizens.train_str_at / train_edu_at /
+// train_eco_at (jam terakhir warga melatih atribut itu, epoch ms; 0 =
+// belum pernah). Idempotent: kolom yang sudah ada tidak disentuh. Pola
+// sama seperti migrateOnlineColumns.
+async function migrateTrainCooldownColumns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('citizens', 'train_str_at', 'BIGINT NOT NULL DEFAULT 0');
+  await addCol('citizens', 'train_edu_at', 'BIGINT NOT NULL DEFAULT 0');
+  await addCol('citizens', 'train_eco_at', 'BIGINT NOT NULL DEFAULT 0');
 }
 
 // Migrasikan tabel support_tickets lama (tanpa kolom status) ke status

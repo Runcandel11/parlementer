@@ -11,7 +11,7 @@ import { dbRateLimit } from './rate-limit.js';
 import { getCountryRow, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive } from './api-civic.js';
 import {
   WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT,
-  xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, foodEnergy,
+  xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
   energyCapFor, DAILY_MISSIONS, CHRONICLE,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
@@ -400,6 +400,16 @@ export function registerCore(app) {
       if (budgetTrain) cost = Math.max(1, Math.round(cost * 0.9));
       trainCosts[key] = cost;
     }
+    // Jeda latihan per atribut (2 menit × level): tombol LATIH di
+    // dashboard memakai ini supaya tidak perlu request tambahan. Level
+    // yang dipakai = level saat ini — sama dengan level baru setelah
+    // latih terakhir, karena atribut hanya naik lewat latihan.
+    const trainCooldowns = {};
+    for (const [key, col, trainCol] of [['strength', 'attr_str', 'train_str_at'], ['strategy', 'attr_edu', 'train_edu_at'], ['charisma', 'attr_eco', 'train_eco_at']]) {
+      const cdMs = trainCooldownMs(c[col]);
+      const remainingMs = Math.max(0, (c[trainCol] || 0) + cdMs - Date.now());
+      trainCooldowns[key] = { remainingMs, cooldownMs: cdMs, availableAt: remainingMs > 0 ? (c[trainCol] || 0) + cdMs : null };
+    }
     const refUses = await one('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?', [c.user_id]);
     const refPaid = await one("SELECT COUNT(*) AS n FROM referral_pending WHERE referrer_id = ? AND status = 'paid'", [c.user_id]);
     const referral = {
@@ -414,7 +424,7 @@ export function registerCore(app) {
         avatar: c.avatar || null,
         is_admin: !!c.is_admin, is_banned: !!c.is_banned, banned_reason: c.banned_reason || '',
       },
-      citizen: { ...c, isPremium, energyCap, trainCosts },
+      citizen: { ...c, isPremium, energyCap, trainCosts, trainCooldowns },
       referral,
       region, party, job,
       unread: Number(unread.n) + Number(unreadAnn.n), unreadDm: Number(unreadDm.n),
@@ -448,10 +458,22 @@ export function registerCore(app) {
     const { attr } = req.body || {};
     if (!['str', 'edu', 'eco'].includes(attr)) return res.status(400).json({ error: 'Atribut tidak dikenal.' });
     const col = attr === 'str' ? 'attr_str' : attr === 'edu' ? 'attr_edu' : 'attr_eco';
+    const trainCol = attr === 'str' ? 'train_str_at' : attr === 'edu' ? 'train_edu_at' : 'train_eco_at';
+    const attrLabel = attr === 'str' ? 'Kekuatan' : attr === 'edu' ? 'Pendidikan' : 'Ekonomi';
     // Atomik: kunci baris warga + UPDATE bersyarat (gold >= biaya) + cek
     // changes — biaya tidak pernah terpotong dua kali dari saldo yang sama.
+    const now = Date.now();
     const done = await tx(async (t) => {
       const row = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      // Jeda latihan (2 menit × level atribut saat ini = level baru
+      // setelah latih terakhir): atribut ini tidak bisa dilatih lagi
+      // sampai jedanya habis. Atribut lain tidak ikut terkunci. Kunci
+      // baris (FOR UPDATE) membuat dua request paralel berurutan — yang
+      // kedua membaca train_*_at yang baru ditulis yang pertama, lalu
+      // ditolak 400.
+      const cdMs = trainCooldownMs(row[col]);
+      const remainingMs = (row[trainCol] || 0) + cdMs - now;
+      if (remainingMs > 0) throw Object.assign(new Error(`Latihan ${attrLabel} masih jeda. Coba lagi dalam ${formatCooldownMs(remainingMs)}.`), { status: 400 });
       // Bonus konvoi (Tahap 3, BUG-7): Sekolah Keliling aktif -> latihan
       // 10% lebih murah (minimal 1 emas). Biaya yang ditampilkan di
       // dashboard memakai angka yang sama (lihat /api/me: trainCosts).
@@ -462,13 +484,15 @@ export function registerCore(app) {
       let cost = buildings.has('education') ? trainCostDiscounted(baseCost) : baseCost;
       const country = await getCountryRow(t);
       if (budgetActive(country) === 'train') cost = Math.max(1, Math.round(cost * 0.9));
-      const upd = await t.run(`UPDATE citizens SET gold = gold - ?, ${col} = ${col} + 1 WHERE id = ? AND gold >= ?`, [cost, req.citizen.id, cost]);
+      const upd = await t.run(`UPDATE citizens SET gold = gold - ?, ${col} = ${col} + 1, ${trainCol} = ? WHERE id = ? AND gold >= ?`, [cost, now, req.citizen.id, cost]);
       if (!upd.changes) throw Object.assign(new Error(`Butuh ${cost} emas untuk latihan ini.`), { status: 400 });
       return { row, cost };
     });
     await addXp(done.row, 1);
     await chronicleDone(done.row, 'train');
-    res.json({ ok: true, cost: done.cost, level: done.row[col] + 1 });
+    const newLevel = done.row[col] + 1;
+    const cooldownMs = trainCooldownMs(newLevel);
+    res.json({ ok: true, cost: done.cost, level: newLevel, cooldownMs, availableAt: now + cooldownMs });
   }));
 
   app.post('/api/eat', authRequired, citizenRequired, r(async (req, res) => {

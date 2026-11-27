@@ -172,7 +172,7 @@ const tPar = Date.now() - t0;
 r = await one('SELECT COUNT(*) AS n FROM regions');
 check('initDb 10× paralel: seed tetap 17 (tidak terduplikasi)', Number(r.n) === 17, `n=${r.n}, ${tPar}ms`);
 const ver = await one("SELECT value FROM db_meta WHERE key = 'schema_version'");
-check('Penanda versi skema tersimpan (= 7)', ver?.value === '7', `value=${ver?.value}`);
+check('Penanda versi skema tersimpan (= 8)', ver?.value === '8', `value=${ver?.value}`);
 const t1 = Date.now();
 await initDb();
 const tFast = Date.now() - t1;

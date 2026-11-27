@@ -32,6 +32,20 @@ export function shiftSalary(baseSalary, economyAttr, fatigue, taxRate = INCOME_T
 // Latihan: biaya = level atribut saat ini + 1 emas.
 export function trainCost(level) { return level + 1; }
 
+// Latihan: jeda (cooldown) per atribut — makin tinggi level, makin lama.
+// Jeda = 2 menit × level atribut BARU (setelah naik 1): LV 1 → 2 mnt,
+// LV 5 → 10 mnt, LV 10 → 20 mnt. Satu konstanta supaya gampang diubah.
+// Jeda dihitung PER ATRIBUT: melatih Kekuatan tidak mengunci Pendidikan /
+// Ekonomi. Ditegakkan di server (POST /api/train), UI hanya menampilkan.
+export const TRAIN_COOLDOWN_MIN_PER_LEVEL = 2;
+export function trainCooldownMs(newLevel) { return TRAIN_COOLDOWN_MIN_PER_LEVEL * 60 * 1000 * Math.max(0, newLevel); }
+// Format sisa jeda untuk pesan error + UI: "7 mnt" / "45 dtk".
+export function formatCooldownMs(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s >= 60) return `${Math.ceil(s / 60)} mnt`;
+  return `${s} dtk`;
+}
+
 // Makan: Makanan T1..T5 memberi 10/20/30/40/50 energi. Batas harian 10 unit.
 export function foodEnergy(tier) { return tier * 10; }
 

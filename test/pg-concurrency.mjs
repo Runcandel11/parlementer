@@ -8,6 +8,8 @@
 //   (6) dua penjual berebut 1 order beli — tepat 1 berhasil,
 //   (7) dua usulan pakta paralel pasangan+jenis sama — tepat 1 berhasil,
 //   (8) dua vote anggaran paralel oleh MP yang sama — tepat 1 terhitung.
+//   (9) dua latih paralel atribut yang sama — tepat 1 berhasil (jeda
+//       latihan 2 menit × level: yang kedua membaca train_*_at baru).
 // Di akhir: tidak ada saldo/energi/stok negatif di mana pun.
 // Perlu Postgres 16 lokal + role/db tes (lihat test/pg-verify.mjs).
 // Jalankan: npm run test:conc   (atau: node test/pg-concurrency.mjs)
@@ -270,7 +272,23 @@ async function main() {
     const budgetRow = await pool.query('SELECT yes FROM budgets WHERE id = $1', [budgetRace]);
     check('Suara YA anggaran tepat 1', Number(budgetRow.rows[0].yes) === 1, `yes=${budgetRow.rows[0].yes}`);
 
-    console.log('\n[9] Invarian akhir: tidak ada saldo/stok negatif');
+    console.log('\n[9] Race: dua latih paralel atribut yang sama (jeda latihan)');
+    const T = await register('latih-race@conc.local', 'pelatih_race');
+    const tId = await citizenIdOf(T);
+    const [tr1, tr2] = await Promise.all([
+      T.post('/api/train', { attr: 'str' }),
+      T.post('/api/train', { attr: 'str' }),
+    ]);
+    const trWins = [tr1, tr2].filter((x) => x.status === 200).length;
+    const trLosses = [tr1, tr2].filter((x) => x.status === 400).length;
+    check('Tepat 1 latih berhasil, 1 ditolak 400 (jeda)', trWins === 1 && trLosses === 1, `status=${tr1.status}/${tr2.status}`);
+    check('Yang kalah menyebut jeda', /jeda/i.test((tr1.status === 400 ? tr1 : tr2).data.error || ''), (tr1.status === 400 ? tr1 : tr2).data.error || '');
+    const tRow = await pool.query('SELECT attr_str, gold FROM citizens WHERE id = $1', [tId]);
+    check('Atribut naik tepat 1 level, emas terpotong tepat 1× biaya (1 emas)', Number(tRow.rows[0].attr_str) === 1 && Number(tRow.rows[0].gold) === 49, `attr_str=${tRow.rows[0].attr_str} gold=${tRow.rows[0].gold}`);
+    const tCd = await pool.query('SELECT train_str_at FROM citizens WHERE id = $1', [tId]);
+    check('train_str_at tercatat (> 0)', Number(tCd.rows[0].train_str_at) > 0, `train_str_at=${tCd.rows[0].train_str_at}`);
+
+    console.log('\n[10] Invarian akhir: tidak ada saldo/stok negatif');
     const neg = await pool.query(
       `SELECT (SELECT COUNT(*) FROM citizens WHERE gold < 0 OR usd < 0 OR energy < 0) AS c1,
               (SELECT COUNT(*) FROM inventory WHERE qty < 0) AS c2,

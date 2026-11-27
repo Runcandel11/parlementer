@@ -316,10 +316,21 @@ async function main() {
   // Naik ke Level 3 lewat jalur normal: klaim (+2 XP) + 13 latih (str×5,
   // edu×5, eco×3 = 13 XP, biaya total 36 emas). Pendaftar mulai 50 emas,
   // setelah klaim 55, setelah latih 19, setelah bonus referral cair 69.
+  // Jeda latihan: reset langsung di DB (pola yang sama seperti forceTick /
+  // mundurkan tanggal di bawah) supaya helper levelTo3 bisa latih
+  // beruntun tanpa menunggu jeda 2 menit × level.
+  async function resetTrainCooldown(client) {
+    const me = await client.get('/api/me');
+    const dbR = new DatabaseSync(DB_PATH);
+    dbR.prepare('UPDATE citizens SET train_str_at = 0, train_edu_at = 0, train_eco_at = 0 WHERE id = ?').run(me.data.citizen.id);
+    dbR.close();
+  }
+
   async function levelTo3(client) {
     let r = await client.post('/api/claim');
     if (r.status !== 200) return r;
     for (const a of ['str', 'str', 'str', 'str', 'str', 'edu', 'edu', 'edu', 'edu', 'edu', 'eco', 'eco', 'eco']) {
+      await resetTrainCooldown(client);
       r = await client.post('/api/train', { attr: a });
       if (r.status !== 200) return r;
     }
@@ -770,6 +781,7 @@ async function main() {
   const afterFood = r.data.items.find((x) => x.name === 'Makanan');
   check('Gudang Industri: produksi Makanan 8 → 9 (+10%)', afterFood && afterFood.qty === beforeFoodQty + 9, `sebelum=${beforeFoodQty} sesudah=${afterFood?.qty}`);
   const goldBeforeTrain = (await A.get('/api/me')).data.citizen.gold;
+  await resetTrainCooldown(A);
   r = await A.post('/api/train', { attr: 'str' });
   check('Sekolah Keliling: latih str hanya potong 1 emas (bukan 2)', r.status === 200 && r.data.cost === 1 && (await A.get('/api/me')).data.citizen.gold === goldBeforeTrain - 1, `status=${r.status} cost=${r.data.cost} ${r.data.error || ''}`);
   // Pos Militer: perang di Jakarta (wilayah A) + serangan pembela.
@@ -1413,6 +1425,30 @@ async function main() {
   check('Bubarkan koran yang sudah tidak ada ditolak (404)', r.status === 404, `status=${r.status}`);
   r = await A.get('/api/press/newspapers/mine');
   check('Koran hasil double-submit tetap ada 1 (bukan 0/2)', (r.data.newspapers || []).some((n) => n.id === paper3), `n=${(r.data.newspapers || []).length}`);
+
+  console.log('\n[25] Jeda latihan (cooldown 2 menit × level atribut baru)');
+  // Pakai A (tanpa daftar baru — pendaftaran di akhir suite kena
+  // rate-limit 429): A belum pernah melatih Pendidikan/Ekonomi, jadi
+  // keduanya tanpa jeda. Seksi ini terakhir, jadi perubahan emas/XP A
+  // tidak memengaruhi asersi lain.
+  r = await A.get('/api/me');
+  const cdA0 = r.data.citizen.trainCooldowns || {};
+  check('/api/me: trainCooldowns Pendidikan & Ekonomi 0 sebelum dilatih', cdA0.strategy?.remainingMs === 0 && cdA0.charisma?.remainingMs === 0, JSON.stringify(cdA0));
+  r = await A.post('/api/train', { attr: 'edu' });
+  check('A latih Pendidikan → LV 1 (biaya 1 emas, jeda 2 mnt)', r.status === 200 && r.data.cost === 1 && r.data.level === 1 && r.data.cooldownMs === 120000, `status=${r.status} cooldownMs=${r.data.cooldownMs} ${r.data.error || ''}`);
+  r = await A.post('/api/train', { attr: 'edu' });
+  check('Latih Pendidikan 2× beruntun ditolak 400 (masih jeda)', r.status === 400 && /jeda/i.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  check('Pesan 400 menyebut sisa waktu (mnt/dtk)', /mnt|dtk/.test(r.data.error || ''), r.data.error || '');
+  r = await A.get('/api/me');
+  const cdA = r.data.citizen.trainCooldowns || {};
+  check('/api/me: trainCooldowns.strategy sisa > 0 dan ≤ 2 mnt', cdA.strategy?.remainingMs > 0 && cdA.strategy.remainingMs <= 120000, JSON.stringify(cdA.strategy));
+  check('/api/me: trainCooldowns.charisma masih 0 (belum dilatih)', cdA.charisma?.remainingMs === 0, JSON.stringify(cdA));
+  r = await A.post('/api/train', { attr: 'eco' });
+  check('Atribut lain (Ekonomi) tetap bisa dilatih saat Pendidikan jeda', r.status === 200 && r.data.level === 1 && r.data.cooldownMs === 120000, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/train', { attr: 'eco' });
+  check('Latih Ekonomi 2× beruntun juga ditolak 400', r.status === 400 && /jeda/i.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  r = await A.get('/api/me');
+  check('/api/me: strategy & charisma sama-sama jeda', r.data.citizen.trainCooldowns?.strategy?.remainingMs > 0 && r.data.citizen.trainCooldowns?.charisma?.remainingMs > 0, JSON.stringify(r.data.citizen.trainCooldowns));
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

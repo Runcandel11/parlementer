@@ -443,6 +443,14 @@ const fmtRemaining = (ms) => {
   return Math.floor(m / 60) + 'j ' + (m % 60) + ' mnt';
 };
 
+// Sisa jeda latihan, gaya "7 mnt" / "45 dtk" (bulat ke atas supaya tombol
+// tidak bilang "0 dtk" selagi masih jeda).
+const fmtCooldown = (ms) => {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s >= 60) return Math.ceil(s / 60) + ' mnt';
+  return s + ' dtk';
+};
+
 // ---------- POPOVER PENJELASAN (rombak UI) ----------
 // Kartu penjelasan tengah layar (energi / kelelahan) — menutup lewat tombol
 // ✕, klik backdrop, atau Escape. Isinya angka game yang sebenarnya
@@ -697,9 +705,14 @@ ROUTES.dashboard = async () => {
   </div>
   <div class="panel">
     <h3>💪 LATIHAN</h3>
-    ${[['str', 'strength', 'Kekuatan', c.attr_str, 'Kerusakan perang'], ['edu', 'strategy', 'Pendidikan', c.attr_edu, 'Pelatihan lebih cepat'], ['eco', 'charisma', 'Ekonomi', c.attr_eco, 'Hasil produksi lebih banyak']].map(([k, serverKey, label, lv, desc]) => `
-      <div class="kv"><span class="k">${label} · LV ${lv}<br><small class="muted">${desc}</small></span>
-      <span class="v"><button class="btn-gold btn-sm" data-train="${k}">LATIH · ${c.trainCosts?.[serverKey] ?? lv + 1} emas</button></span></div>`).join('')}
+    ${[['str', 'strength', 'Kekuatan', c.attr_str, 'Kerusakan perang'], ['edu', 'strategy', 'Pendidikan', c.attr_edu, 'Pelatihan lebih cepat'], ['eco', 'charisma', 'Ekonomi', c.attr_eco, 'Hasil produksi lebih banyak']].map(([k, serverKey, label, lv, desc]) => {
+      // Jeda latihan (2 menit × level): tombol nonaktif + hitung mundur
+      // selagi atribut ini jeda; atribut lain tetap bisa dilatih.
+      const cd = c.trainCooldowns?.[serverKey];
+      const cooling = cd && cd.remainingMs > 0;
+      return `<div class="kv"><span class="k">${label} · LV ${lv}<br><small class="muted">${desc}</small></span>
+      <span class="v"><button class="btn-gold btn-sm" data-train="${k}" ${cooling ? 'disabled' : ''}>${cooling ? `Latih lagi dalam ${fmtCooldown(cd.remainingMs)}` : `LATIH · ${c.trainCosts?.[serverKey] ?? lv + 1} emas`}</button></span></div>`;
+    }).join('')}
   </div>
   <div class="panel" id="dash-missions">
     <h3>🎯 MISI HARIAN <span class="muted small">· masing-masing +10 emas</span></h3>

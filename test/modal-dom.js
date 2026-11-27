@@ -584,6 +584,21 @@ async function main() {
     check('Dashboard progresif: panel misi terisi setelah API kembali', !document.querySelector('#dash-missions')?.textContent.includes('Memuat') && document.querySelector('#dash-missions').textContent.includes('Habiskan 500 energi'));
     window.api = fastApi;
     check('Dashboard: tombol AMBIL PASOKAN lama sudah tidak ada (diganti peti HUD)', !document.querySelector('#btn-claim'));
+    // Jeda latihan: tombol atribut yang jeda nonaktif + hitung mundur,
+    // atribut lain tetap bisa dilatih. ME di-mock dengan trainCooldowns.
+    window.eval(`ME.citizen.trainCooldowns = { strength: { remainingMs: 420000, cooldownMs: 120000, availableAt: Date.now() + 420000 }, strategy: { remainingMs: 0, cooldownMs: 120000, availableAt: null }, charisma: { remainingMs: 0, cooldownMs: 120000, availableAt: null } }`);
+    window.location.hash = '#/dashboard';
+    window.eval('route()');
+    await sleep(300);
+    const btnStr = document.querySelector('[data-train="str"]');
+    const btnEdu = document.querySelector('[data-train="edu"]');
+    const btnEco = document.querySelector('[data-train="eco"]');
+    check('Jeda latihan: tombol Kekuatan nonaktif + "Latih lagi dalam 7 mnt"', btnStr?.disabled === true && btnStr.textContent.includes('Latih lagi dalam 7 mnt'), btnStr?.textContent);
+    check('Jeda latihan: tombol Pendidikan & Ekonomi tetap aktif (LATIH)', btnEdu?.disabled === false && btnEdu.textContent.includes('LATIH') && btnEco?.disabled === false && btnEco.textContent.includes('LATIH'), `${btnEdu?.textContent} / ${btnEco?.textContent}`);
+    window.eval('ME.citizen.trainCooldowns = { strength: { remainingMs: 0, cooldownMs: 120000, availableAt: null }, strategy: { remainingMs: 0, cooldownMs: 120000, availableAt: null }, charisma: { remainingMs: 0, cooldownMs: 120000, availableAt: null } }');
+    window.eval('route()');
+    await sleep(300);
+    check('Jeda latihan: tombol Kekuatan aktif lagi saat jeda 0', document.querySelector('[data-train="str"]')?.disabled === false && document.querySelector('[data-train="str"]').textContent.includes('LATIH'));
     // Kartu KRONIKMU baru.
     const kronik = document.querySelector('#kronik-card');
     check('KRONIKMU: kartu tampil (judul + progres 0/20)', !!kronik && kronik.textContent.includes('KRONIKMU') && kronik.textContent.includes('0/20'));
