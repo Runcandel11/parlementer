@@ -22,8 +22,9 @@
     "test:pg": "node test/pg-test.js",
     "test:conc": "node test/pg-concurrency.mjs",
     "test:pg-verify": "node test/pg-verify.mjs",
-    "test:all": "npm run test:pg && npm test && npm run test:modal",
+    "test:all": "npm run test:pg && npm test && npm run test:modal && npm run test:chat-dom",
     "test:modal": "node test/modal-dom.js",
+    "test:chat-dom": "node test/chat-dom.js",
     "test:ssl": "node test/ssl-warning.mjs"
   },
   "type": "module",

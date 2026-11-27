@@ -739,13 +739,15 @@ export function registerCore(app) {
   // Simpan sebagai data URL di kolom users.avatar — tanpa layanan baru
   // (Vercel serverless tidak punya filesystem permanen). Browser sudah
   // me-resize/crop gambar jadi persegi 256×256 sebelum mengirim.
-  // Batas: data URL gambar (JPEG/PNG/WebP) yang valid, ≤ 100 KB.
-  // Hanya untuk akun sendiri — tidak ada parameter target, selalu req.userId.
+  // Batas: data URL gambar (JPEG/PNG/WebP) yang valid, ≤ 500 KB
+  // (dinaikkan dari 100 KB, permintaan ADMIN/Khalid 2026-11-27 — pemain
+  // sudah dijanjikan "naik ke 500 KB"). Hanya untuk akun sendiri — tidak
+  // ada parameter target, selalu req.userId.
   // Tahap 3 (§6.3): browser juga mengirim avatar_sm — versi 48×48 (≤ 25 KB)
   // yang dipakai di daftar chat/DM supaya satu polling chat tidak lagi
-  // mengunduh ~136 KB × 100 pesan. avatar_sm NULL untuk foto lama (belum
+  // mengunduh ~683 KB × 100 pesan. avatar_sm NULL untuk foto lama (belum
   // diunggah ulang) — chat memakai fallback inisial di sana.
-  const AVATAR_MAX_BYTES = 100 * 1024;
+  const AVATAR_MAX_BYTES = 500 * 1024;
   const AVATAR_SM_MAX_BYTES = 25 * 1024;
   function parseAvatarDataUrl(dataUrl, maxBytes = AVATAR_MAX_BYTES) {
     if (typeof dataUrl !== 'string') return null;
@@ -764,7 +766,7 @@ export function registerCore(app) {
   app.post('/api/profile/avatar', authRequired, r(async (req, res) => {
     const parsed = parseAvatarDataUrl(req.body?.avatar);
     if (!parsed) {
-      return res.status(400).json({ error: 'Foto harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 100 KB.' });
+      return res.status(400).json({ error: 'Foto harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 500 KB.' });
     }
     // avatar_sm opsional: bila dikirim harus valid dan ≤ 25 KB. Foto lama
     // yang tidak mengirimkannya tetap tersimpan (avatar_sm NULL).

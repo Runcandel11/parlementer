@@ -752,17 +752,32 @@ export function registerCivic(app) {
     // §6.3: avatar yang dikirim adalah avatar_sm (48×48, ≤ 25 KB), bukan
     // avatar penuh — satu polling chat 100 pesan tidak lagi mengunduh
     // ~13 MB. Field respons tetap 'avatar'; frontend tidak berubah.
-    const rows = await sql(
-      `SELECT m.*, u.username, u.avatar_sm AS avatar, u.premium_until, p.tag AS party_tag,
+    // Perbaikan 4 (laporan Khalid): muat awal (since=0) HARUS mengembalikan
+    // 100 pesan TERBARU. Sebelumnya ORDER BY created_at ASC LIMIT 100
+    // mengembalikan 100 pesan TERTUA ruangan — pemain selalu melihat chat
+    // lama, lalu polling menumpuk batch lama berikutnya (chatSince naik
+    // perlahan dari pesan tertua), jadi chat terasa "stuck" di pesan lama.
+    // Polling (since>0) tetap mengambil pesan yang benar-benar baru.
+    const cols = `SELECT m.*, u.username, u.avatar_sm AS avatar, u.premium_until, p.tag AS party_tag,
         (SELECT COUNT(*) FROM article_comments WHERE article_id = m.article_id) AS article_comments,
         (SELECT title FROM articles WHERE id = m.article_id) AS article_title,
         (SELECT likes FROM articles WHERE id = m.article_id) AS article_likes
        FROM chat_messages m JOIN citizens c ON c.id = m.citizen_id JOIN users u ON u.id = c.user_id
-       LEFT JOIN parties p ON p.id = c.party_id
-       WHERE m.room = ? AND m.created_at > ?
-       AND m.citizen_id NOT IN (SELECT blocked_id FROM blocked WHERE blocker_id = ?)
-       ORDER BY m.created_at ASC LIMIT 100`,
-      [room, since, req.citizen.id]);
+       LEFT JOIN parties p ON p.id = c.party_id`;
+    const blocked = `AND m.citizen_id NOT IN (SELECT blocked_id FROM blocked WHERE blocker_id = ?)`;
+    let rows;
+    if (since > 0) {
+      rows = await sql(
+        `${cols} WHERE m.room = ? AND m.created_at > ? ${blocked}
+         ORDER BY m.created_at ASC LIMIT 100`,
+        [room, since, req.citizen.id]);
+    } else {
+      rows = await sql(
+        `${cols} WHERE m.room = ? ${blocked}
+         ORDER BY m.created_at DESC LIMIT 100`,
+        [room, req.citizen.id]);
+      rows.reverse(); // tampil tetap kronologis (lama → baru)
+    }
     res.json({ room, title: roomTitle(room), messages: rows.map((m) => ({ ...m, isPremium: m.premium_until > Date.now() })) });
   }));
 

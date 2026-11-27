@@ -255,6 +255,27 @@ async function main() {
   check('Blokir di SQL: 100 pesan B tidak menenggelamkan pesan A (A tetap terlihat)', r.data.messages.length === 1 && r.data.messages[0].username === 'warga_satu', `n=${r.data.messages.length}`);
   r = await A.post('/api/chat/unblock', { citizen_id: meB.data.citizen.id });
   check('A membuka blokir B', r.status === 200);
+  // Perbaikan 4 (laporan Khalid): muat awal HARUS mengembalikan 100 pesan
+  // TERBARU, bukan 100 tertua. Isi room 'negara' (belum dipakai) dengan 120
+  // pesan, lalu muat awal harus berisi pesan #21..#120 (terbaru), dan
+  // polling dengan since=pesan terakhir tidak mengembalikan duplikat.
+  const dbNew = new DatabaseSync(DB_PATH);
+  const chatBase2 = Date.now() - 60000;
+  const insMsg = dbNew.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)');
+  for (let i = 1; i <= 120; i++) insMsg.run(meA.data.citizen.id, 'negara', 'pesan #' + i, chatBase2 + i * 1000);
+  dbNew.close();
+  r = await A.get('/api/chat/negara');
+  check('Muat awal chat = 100 pesan TERBARU (bukan tertua)', r.data.messages.length === 100 && r.data.messages[0].content === 'pesan #21' && r.data.messages[99].content === 'pesan #120', `n=${r.data.messages.length} pertama=${r.data.messages[0]?.content} terakhir=${r.data.messages[99]?.content}`);
+  check('Muat awal terurut kronologis (lama → baru)', r.data.messages.every((m, i, arr) => i === 0 || m.created_at >= arr[i - 1].created_at));
+  const lastSeen = r.data.messages[99].created_at;
+  r = await A.get('/api/chat/negara?since=' + lastSeen);
+  check('Polling dengan since=terakhir tidak mengembalikan duplikat (0 pesan)', r.data.messages.length === 0, `n=${r.data.messages.length}`);
+  const dbNew2 = new DatabaseSync(DB_PATH);
+  dbNew2.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)')
+    .run(meA.data.citizen.id, 'negara', 'pesan #121', lastSeen + 1000);
+  dbNew2.close();
+  r = await A.get('/api/chat/negara?since=' + lastSeen);
+  check('Polling mengembalikan hanya pesan yang benar-benar baru (#121)', r.data.messages.length === 1 && r.data.messages[0].content === 'pesan #121', `n=${r.data.messages.length}`);
 
   console.log('\n[11] Aturan dunia: partai, perang, pers, toko');
   r = await A.post('/api/parties', { name: 'Partai Tes', tag: 'TES', ideology: 'Progresif', type: 'open' });
@@ -578,11 +599,21 @@ async function main() {
   r = await ADM.get('/api/admin/players');
   const aPlayer = r.data.players.find((p) => p.username === 'warga_satu');
   check('Daftar pemain admin menampilkan avatar', !!aPlayer && aPlayer.avatar === TINY_JPEG);
-  const bigBuf = Buffer.alloc(101 * 1024, 0);
+  // Batas foto profil 500 KB (dinaikkan dari 100 KB, permintaan ADMIN):
+  // 200 KB diterima, di atas 500 KB ditolak.
+  const midBuf = Buffer.alloc(200 * 1024, 0);
+  midBuf[0] = 0xFF; midBuf[1] = 0xD8; midBuf[2] = 0xFF;
+  r = await A.post('/api/profile/avatar', { avatar: 'data:image/jpeg;base64,' + midBuf.toString('base64') });
+  check('Avatar 200 KB diterima (di bawah batas 500 KB)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  const bigBuf = Buffer.alloc(501 * 1024, 0);
   bigBuf[0] = 0xFF; bigBuf[1] = 0xD8; bigBuf[2] = 0xFF;
   const bigJpeg = 'data:image/jpeg;base64,' + bigBuf.toString('base64');
   r = await A.post('/api/profile/avatar', { avatar: bigJpeg });
-  check('Avatar > 100 KB ditolak (400)', r.status === 400, r.data.error || '');
+  check('Avatar > 500 KB ditolak (400)', r.status === 400, r.data.error || '');
+  // Kembalikan avatar A ke TINY_JPEG — tes 200 KB di atas mengubah avatar
+  // A, dan asersi berikutnya mengharapkan avatar A = TINY_JPEG.
+  r = await A.post('/api/profile/avatar', { avatar: TINY_JPEG, avatar_sm: TINY_JPEG_SM });
+  check('Avatar A dikembalikan ke JPEG kecil', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
   r = await A.post('/api/profile/avatar', { avatar: 'data:text/plain;base64,SGVsbG8=' });
   check('Bukan gambar ditolak (400)', r.status === 400);
   r = await A.post('/api/profile/avatar', { avatar: 'bukan-data-url' });
@@ -1449,6 +1480,18 @@ async function main() {
   check('Latih Ekonomi 2× beruntun juga ditolak 400', r.status === 400 && /jeda/i.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
   r = await A.get('/api/me');
   check('/api/me: strategy & charisma sama-sama jeda', r.data.citizen.trainCooldowns?.strategy?.remainingMs > 0 && r.data.citizen.trainCooldowns?.charisma?.remainingMs > 0, JSON.stringify(r.data.citizen.trainCooldowns));
+
+  console.log('\n[26] Link Discord + ukuran tampilan avatar (Perbaikan 3 & 5)');
+  const jsRes = await fetch(BASE + '/js/app.js');
+  const jsText = await jsRes.text();
+  check('Halaman utama 200 & app.js tersaji', jsRes.status === 200 && jsText.length > 10000, `status=${jsRes.status} len=${jsText.length}`);
+  check('app.js memuat link Discord resmi', jsText.includes('https://discord.gg/JX7DWX3pF'));
+  check('Link Discord dibuka di tab baru (target _blank)', jsText.includes('target="_blank"'));
+  check('Avatar chat/DM tampil 48px (dulu 36px)', jsText.includes('avatarHtml(m.avatar, m.username, 48)') && jsText.includes('avatarHtml(m.from_avatar, m.from_name, 48)'));
+  check('Foto hero profil tampil 144px (dulu 96px)', jsText.includes('avatarHtml(pr.avatar, pr.username, 144)'));
+  const cssRes = await fetch(BASE + '/css/style.css');
+  const cssText = await cssRes.text();
+  check('CSS: wadah avatar chat 48px + gaya status/pesan-baru ada', cssText.includes('.msg-avatar { flex: none; width: 48px; height: 48px;') && cssText.includes('.chat-status') && cssText.includes('.chat-new-pill'));
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

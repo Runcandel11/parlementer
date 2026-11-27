@@ -46,7 +46,7 @@ const avatarHtml = (avatar, username, size = 40) => avatar
 // Baca file gambar → resize/crop persegi 256×256 lewat canvas → data URL JPEG,
 // plus thumbnail 48×48 untuk daftar chat/DM (Tahap 3, §6.3).
 // Mengembalikan { avatar, avatarSm } atau null bila file bukan gambar atau
-// hasil akhirnya tetap > 100 KB (thumbnail > 25 KB).
+// hasil akhirnya tetap > 500 KB (thumbnail > 25 KB).
 async function processAvatarFile(file) {
   if (!file || !file.type.startsWith('image/')) return null;
   const url = URL.createObjectURL(file);
@@ -67,8 +67,8 @@ async function processAvatarFile(file) {
     let avatar = null;
     for (const q of [0.85, 0.6, 0.4]) {
       const dataUrl = canvas.toDataURL('image/jpeg', q);
-      // Data URL base64 ≈ 4/3 ukuran biner; 100 KB biner ≈ 136.500 karakter.
-      if (dataUrl.length <= 136500) { avatar = dataUrl; break; }
+      // Data URL base64 ≈ 4/3 ukuran biner; 500 KB biner ≈ 682.667 karakter.
+      if (dataUrl.length <= 682667) { avatar = dataUrl; break; }
     }
     if (!avatar) return null;
     // Thumbnail 48×48 dari canvas yang sama (25 KB biner ≈ 34.100 karakter).
@@ -261,6 +261,10 @@ async function logout() {
   location.reload();
 }
 
+// Link Discord resmi game — dipakai di menu drawer (KOMUNITAS) dan panel
+// komunitas dashboard. Selalu target _blank (tab baru), bukan di dalam game.
+const DISCORD_URL = 'https://discord.gg/JX7DWX3pF';
+
 // ---------- SHELL ----------
 const NAV = [
   { group: 'BERANDA', items: [
@@ -280,6 +284,7 @@ const NAV = [
   { group: 'KOMUNITAS', items: [
     ['press', 'Pers', '📰'], ['newspaper', 'Dirikan Koran', '✏️'],
     ['messages', 'Pesan', '✉️'], ['chat', 'Obrolan', '💬'],
+    ['discord', 'Discord', '🎮', DISCORD_URL],
   ]},
   { group: 'POLITIK', items: [
     ['parties', 'Partai', '🚩'], ['parliament', 'Parlemen', '🏛'],
@@ -300,7 +305,10 @@ function buildNav() {
     <div class="nav-grid"><button class="nav-item" data-route="admin" type="button"><span class="ico">🛡️</span>Panel Admin</button></div>` : '';
   $('#drawer-nav').innerHTML = NAV.map((g) => `
     <div class="nav-group">${g.group}</div>
-    <div class="nav-grid">${g.items.map(([slug, label, ico]) => `
+    <div class="nav-grid">${g.items.map(([slug, label, ico, href]) => href ? `
+      <a class="nav-item" href="${href}" target="_blank" rel="noopener noreferrer">
+        <span class="ico">${ico}</span>${label}
+      </a>` : `
       <button class="nav-item" data-route="${slug}" type="button">
         <span class="ico">${ico}</span>${label}
       </button>`).join('')}</div>`).join('') + adminGroup + `
@@ -503,6 +511,7 @@ const ROUTES = {};
 const pubId = (id) => 'PL-' + String(id).padStart(6, '0');
 function route() {
   clearInterval(chatTimer); chatTimer = null; chatRoom = null; chatSince = 0;
+  clearChatRetry(); chatNewCount = 0;
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
   const [slug, arg] = hash.split('/');
   // Akun banned: tampilkan pesan banned, bukan dashboard/game.
@@ -721,7 +730,11 @@ ROUTES.dashboard = async () => {
   ${kronikHidden ? '' : `<div class="panel" id="kronik-card">
     <div class="panel-head"><h3>📖 KRONIKMU</h3></div>
     <p class="muted">Memuat…</p>
-  </div>`}`);
+  </div>`}
+  <div class="panel"><h3>🤝 KOMUNITAS</h3>
+    <p class="muted">Ngobrol dengan pemain lain, tanya jawab, dan kabar update game — gabung server Discord Parlementer.</p>
+    <a class="btn-gold" href="${DISCORD_URL}" target="_blank" rel="noopener noreferrer">🎮 Gabung Discord Parlementer</a>
+  </div>`);
   // Handler kerangka (data ME, langsung aktif): latihan + popover.
   $$('[data-train]').forEach((b) => b.onclick = async () => {
     try { await post('/api/train', { attr: b.dataset.train }); toast('Latihan selesai! Atribut naik 1 level.'); await refreshMe(); route(); }
@@ -976,14 +989,14 @@ ROUTES.profile = async (username) => {
   <div class="panel">
     <div class="panel-head"><h3>👤 IDENTITAS</h3><span class="chip">LEVEL ${pr.level}</span></div>
     <div class="profile-avatar-row">
-      <span id="profile-avatar">${avatarHtml(pr.avatar, pr.username, 96)}</span>
+      <span id="profile-avatar">${avatarHtml(pr.avatar, pr.username, 144)}</span>
       ${pr.user_id === ME.citizen.user_id ? `
       <div>
         <input type="file" id="avatar-file" accept="image/*" hidden>
         <button class="btn-gold btn-sm" id="btn-avatar-change" type="button">📷 Ubah Foto</button>
         ${pr.avatar ? `<button class="btn-ghost btn-sm" id="btn-avatar-delete" type="button">🗑 Hapus Foto</button>` : ''}
         <div id="avatar-preview" style="margin-top:8px"></div>
-        <p class="muted small">Foto di-crop persegi &amp; diperkecil jadi 256×256 (maks 100 KB).</p>
+        <p class="muted small">Foto di-crop persegi &amp; diperkecil jadi 256×256 (maks 500 KB).</p>
       </div>` : ''}
     </div>
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(pr.publicId)}</b></span></div>
@@ -1047,14 +1060,14 @@ ROUTES.profile = async (username) => {
       if (!f) return;
       const processed = await processAvatarFile(f);
       if (!processed) {
-        toast('Gambar tidak valid atau terlalu besar (maks 100 KB setelah di-resize).');
+        toast('Gambar tidak valid atau terlalu besar (maks 500 KB setelah di-resize).');
         fileInput.value = '';
         return;
       }
       pendingAvatar = processed.avatar;
       pendingAvatarSm = processed.avatarSm;
       $('#avatar-preview').innerHTML = `
-        <img src="${esc(pendingAvatar)}" class="avatar-img" style="width:96px;height:96px" alt="Pratinjau foto profil">
+        <img src="${esc(pendingAvatar)}" class="avatar-img" style="width:144px;height:144px" alt="Pratinjau foto profil">
         <div class="row" style="margin-top:8px">
           <button class="btn-gold btn-sm" id="btn-avatar-save" type="button">Simpan Foto</button>
           <button class="btn-ghost btn-sm" id="btn-avatar-cancel" type="button">Batal</button>
@@ -1152,7 +1165,7 @@ ROUTES.admin = async (q) => {
   </div>
   ${list.players.map((p) => `
   <div class="panel" data-player="${p.id}">
-    <div class="panel-head"><h3>${avatarHtml(p.avatar, p.username, 36)} 👤 ${esc(p.username)} ${p.isPremium ? '◆' : ''}</h3>
+    <div class="panel-head"><h3>${avatarHtml(p.avatar, p.username, 48)} 👤 ${esc(p.username)} ${p.isPremium ? '◆' : ''}</h3>
       <span class="chip">${p.is_banned ? '⛔ BANNED' : p.is_admin ? '🛡️ ADMIN' : 'WARGA'}</span></div>
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(p.publicId)}</b></span></div>
     <div class="kv"><span class="k">Email</span><span class="v">${esc(p.email)}</span></div>
@@ -2518,19 +2531,67 @@ ROUTES.newspaper = async () => {
 
 // ---------- CHAT ----------
 const CHAT_TABS = [['global', 'GLOBAL'], ['indonesia', 'INDONESIA'], ['negara', 'NEGARA']];
+// Status auto-scroll chat (Perbaikan 1 — laporan Orang_solo): auto-scroll
+// ke bawah HANYA bila pengguna sudah di dekat bawah (atau saat muat awal).
+// Bila sedang membaca pesan lama ke atas, posisi dipertahankan dan tombol
+// "pesan baru" muncul — tidak lagi dipaksa lompat ke bawah tiap polling.
+const CHAT_NEAR_BOTTOM_PX = 80;
+let chatNewCount = 0; // pesan baru yang masuk selagi pengguna membaca ke atas
+let chatRetryMs = 0; // backoff retry saat load gagal (0 = belum pernah gagal)
+let chatRetryTimer = null; // timer retry tertunda (satu saja yang boleh hidup)
+let chatLoading = false; // pengaman: jangan tumpuk fetch (polling + retry)
+function chatNearBottom() {
+  const el = $('#chat-list');
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= CHAT_NEAR_BOTTOM_PX;
+}
+function hideChatNewPill() {
+  const pill = $('#chat-new-pill');
+  if (pill) pill.hidden = true;
+  chatNewCount = 0;
+}
+function showChatNewPill() {
+  const pill = $('#chat-new-pill');
+  if (!pill) return;
+  pill.hidden = false;
+  pill.textContent = `↓ ${chatNewCount} pesan baru`;
+}
+function hideChatStatus() {
+  const st = $('#chat-status');
+  if (st) st.hidden = true;
+}
+function showChatStatus(msg) {
+  const st = $('#chat-status');
+  if (!st) return;
+  st.hidden = false;
+  st.innerHTML = `⚠️ ${esc(msg)} <button class="btn-text gold" type="button" id="chat-retry">Coba lagi</button>`;
+  const btn = $('#chat-retry');
+  if (btn) btn.onclick = () => { chatRetryMs = 0; hideChatStatus(); renderChatRoom(chatRoom); };
+}
+function clearChatRetry() {
+  if (chatRetryTimer) { clearTimeout(chatRetryTimer); chatRetryTimer = null; }
+  chatRetryMs = 0;
+}
 async function renderChatRoom(room) {
-  const data = await api('/api/chat/' + room + (chatSince ? '?since=' + chatSince : ''));
+  if (chatLoading) return;
   const list = $('#chat-list');
   if (!list) return;
-  if (!chatSince) list.innerHTML = '';
-  if (!data.messages.length && !chatSince) {
-    list.innerHTML = `<div class="empty"><div class="big-ico">💬</div><h3>Belum ada pesan</h3><p class="muted">Jadilah yang pertama menulis di ruangan ini.</p></div>`;
-  }
-  for (const m of data.messages) {
-    const div = document.createElement('div');
-    div.className = 'msg';
-    div.innerHTML = `
-      <div class="msg-avatar">${avatarHtml(m.avatar, m.username, 36)}</div>
+  chatLoading = true;
+  const isFirstLoad = !chatSince;
+  // Ukur posisi SEBELUM pesan baru ditambahkan (scrollHeight membesar
+  // setelah append, jadi pengukuran sesudahnya selalu "di bawah").
+  const wasNearBottom = isFirstLoad || chatNearBottom();
+  try {
+    const data = await api('/api/chat/' + room + (chatSince ? '?since=' + chatSince : ''));
+    if (!chatSince) list.innerHTML = '';
+    if (!data.messages.length && !chatSince) {
+      list.innerHTML = `<div class="empty"><div class="big-ico">💬</div><h3>Belum ada pesan</h3><p class="muted">Jadilah yang pertama menulis di ruangan ini.</p></div>`;
+    }
+    for (const m of data.messages) {
+      const div = document.createElement('div');
+      div.className = 'msg';
+      div.innerHTML = `
+      <div class="msg-avatar">${avatarHtml(m.avatar, m.username, 48)}</div>
       <div class="msg-body">
         <div class="msg-head">
           <span class="msg-name ${m.isPremium ? 'premium-name' : ''}">${esc(m.username)}${m.isPremium ? ' ◆' : ''}</span>
@@ -2547,16 +2608,42 @@ async function renderChatRoom(room) {
           <button data-block="${m.citizen_id}" type="button">🚫 Blokir</button>
         </div>
       </div>`;
-    list.appendChild(div);
-    chatSince = Math.max(chatSince, m.created_at);
+      list.appendChild(div);
+      chatSince = Math.max(chatSince, m.created_at);
+    }
+    $$('[data-report]').forEach((b) => b.onclick = () => openReport(Number(b.dataset.report)));
+    $$('[data-block]').forEach((b) => b.onclick = async () => {
+      try { await post('/api/chat/block', { citizen_id: Number(b.dataset.block) }); toast('Warga diblokir. Pesannya tidak akan terlihat lagi.'); route(); }
+      catch (e) { toast(e.message); }
+    });
+    // Scroll: muat awal / sudah di bawah → lompat ke bawah; sedang baca ke
+    // atas → tahan posisi dan tampilkan penanda pesan baru.
+    if (wasNearBottom) {
+      list.scrollTop = list.scrollHeight;
+      hideChatNewPill();
+    } else if (data.messages.length) {
+      chatNewCount += data.messages.length;
+      showChatNewPill();
+    }
+    // Load berhasil: sembunyikan status error dan reset backoff.
+    hideChatStatus();
+    clearChatRetry();
+  } catch (e) {
+    // Gagal load (server dingin / jaringan putus): JANGAN diam-diam
+    // menampilkan data basi — tampilkan status error yang jelas dan
+    // jadwalkan retry dengan backoff (2 dtk → 4 → 8 → maks 15 dtk).
+    // Polling 5 detik tetap berjalan sebagai pengaman kedua.
+    showChatStatus('Gagal memuat chat: ' + (e.message || 'koneksi bermasalah') + ' Mencoba lagi…');
+    if (!chatRetryTimer) {
+      chatRetryMs = chatRetryMs ? Math.min(chatRetryMs * 2, 15000) : 2000;
+      chatRetryTimer = setTimeout(() => {
+        chatRetryTimer = null;
+        if (chatRoom === room) renderChatRoom(room);
+      }, chatRetryMs);
+    }
+  } finally {
+    chatLoading = false;
   }
-  $$('[data-report]').forEach((b) => b.onclick = () => openReport(Number(b.dataset.report)));
-  $$('[data-block]').forEach((b) => b.onclick = async () => {
-    try { await post('/api/chat/block', { citizen_id: Number(b.dataset.block) }); toast('Warga diblokir. Pesannya tidak akan terlihat lagi.'); route(); }
-    catch (e) { toast(e.message); }
-  });
-  const listEl = $('#chat-list');
-  if (listEl) listEl.scrollTop = listEl.scrollHeight;
 }
 
 ROUTES.chat = async (sub) => {
@@ -2590,7 +2677,9 @@ ROUTES.chat = async (sub) => {
   </div>
   <h2 class="chat-title">${title}${room.startsWith('war_') ? '<span class="chat-live">● LANGSUNG</span>' : ''}</h2>
   <p class="page-sub">${esc(subLabel)}</p>
+  <div id="chat-status" class="chat-status" hidden></div>
   <div id="chat-list" style="max-height:55vh;overflow-y:auto"></div>
+  <button id="chat-new-pill" class="chat-new-pill" type="button" hidden>↓ pesan baru</button>
   <div class="chat-input">
     <input id="chat-text" aria-label="Tulis pesan chat" placeholder="${esc(subLabel)}" maxlength="500" autocomplete="off">
     <button class="btn-gold" id="btn-send">KIRIM</button>
@@ -2605,6 +2694,12 @@ ROUTES.chat = async (sub) => {
   };
   $('#btn-send').onclick = send;
   $('#chat-text').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+  // Tombol "pesan baru": lompat ke bawah dan sembunyikan penanda.
+  const pill = $('#chat-new-pill');
+  if (pill) pill.onclick = () => { const l = $('#chat-list'); if (l) l.scrollTop = l.scrollHeight; hideChatNewPill(); };
+  // Pengguna scroll manual ke bawah → penanda tidak lagi diperlukan.
+  const listEl = $('#chat-list');
+  if (listEl) listEl.addEventListener('scroll', () => { if (chatNearBottom()) hideChatNewPill(); });
   chatSince = 0;
   chatRoom = room;
   await renderChatRoom(room);
@@ -2621,7 +2716,7 @@ ROUTES.messages = async (otherId) => {
     $('#page').innerHTML = page('PESAN — ' + esc(other?.other_name || '').toUpperCase(), '', `
     <div id="dm-list" style="max-height:55vh;overflow-y:auto">
       ${d.messages.length ? d.messages.map((m) => `
-        <div class="msg"><div class="msg-avatar">${avatarHtml(m.from_avatar, m.from_name, 36)}</div>
+        <div class="msg"><div class="msg-avatar">${avatarHtml(m.from_avatar, m.from_name, 48)}</div>
         <div class="msg-body"><div class="msg-head"><span class="msg-name">${esc(m.from_name)}</span><span class="msg-time">${fmtTime(m.created_at)}</span></div>
         <div class="msg-bubble">${esc(m.content)}</div></div></div>`).join('')
         : '<p class="muted">Belum ada pesan. Mulai percakapan!</p>'}
