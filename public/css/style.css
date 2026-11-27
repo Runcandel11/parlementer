@@ -581,8 +581,10 @@ button.food-card:disabled { cursor: default; }
 
 /* ---------- UI batch 2 ala Parlamentum: peta mini, leaderboard, kartu wilayah ---------- */
 /* PETA LANGSUNG: ubin 17 wilayah — bingkai emas = wilayahku, titik teal =
-   bernegara, titik abu = wilayah merdeka. Bukan peta geografis (itu batch
-   terpisah); ubin ini jujur terhadap data: nama + negara + posisi pemain. */
+   bernegara, titik abu = wilayah merdeka. Wilayah tanpa negara tampil
+   sebagai KACA ABU-ABU dengan tanda "?" (aturan pemilik 27 Nov 2026).
+   Bukan peta geografis (itu batch terpisah); ubin ini jujur terhadap
+   data: nama + negara + posisi pemain. */
 .map-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 @media (min-width: 560px) { .map-tiles { grid-template-columns: repeat(6, 1fr); } }
 .map-tile { background: #0a0f1c; border: 1px solid var(--line); border-radius: 8px; padding: 8px 4px; text-align: center; font: inherit; color: var(--text); cursor: pointer; min-width: 0; }
@@ -617,3 +619,116 @@ button.food-card:disabled { cursor: default; }
 .inv-card { background: #0a0f1c; border: 1px solid var(--line); border-radius: 10px; padding: 10px 4px; text-align: center; min-width: 0; }
 .inv-card .nm { font-family: 'Oswald', sans-serif; font-size: 14px; letter-spacing: .03em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .inv-card .qty { color: var(--gold-bright); font-weight: 700; font-size: 15px; }
+
+/* ========== LANDING PAGE + UI KACA (27 Nov 2026, referensi 10 + 11) ==========
+   Kaca (glassmorphism): panel tembus pandang + backdrop blur di atas
+   gradasi lembut body — warna tidak kaku. Override di akhir file supaya
+   aturan dasar di atas tetap utuh; spesifisitas sama, posisi lebih akhir
+   yang menang. Semua angka tetap dari data nyata DB (tidak ada yang
+   berubah di sisi data). */
+:root {
+  --glass-bg: linear-gradient(160deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
+  --glass-border: rgba(255,255,255,.12);
+  --glass-free: linear-gradient(160deg, rgba(165,175,190,.20), rgba(165,175,190,.05));
+  --glass-free-border: rgba(165,175,190,.38);
+}
+body {
+  background:
+    radial-gradient(1000px 520px at 85% -10%, rgba(45,212,191,.10), transparent 60%),
+    radial-gradient(900px 520px at 8% 108%, rgba(217,164,65,.09), transparent 60%),
+    radial-gradient(700px 420px at 50% 40%, rgba(34,52,92,.35), transparent 70%),
+    var(--bg);
+}
+/* Permukaan kaca: panel, kartu, modal, HUD, drawer, penawaran, sel stat. */
+.panel, .card, .modal-card, .auth-card, .offer-card, .popover-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 10px 30px rgba(0,0,0,.35);
+}
+.stat-cell, .inv-card, .food-card, .map-tile {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.hud {
+  background: rgba(13, 21, 38, .72);
+  border-bottom: 1px solid var(--glass-border);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.drawer {
+  background: rgba(10, 15, 28, .86);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.energy-bar { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
+/* Ikon atas: diperkecil + dirapikan seperti referensi 11. */
+.hud-icon { width: 32px; height: 32px; font-size: 15px; border-radius: 8px; }
+.crate-btn { width: 34px; height: 34px; font-size: 16px; }
+.hud-avatar { width: 38px; height: 38px; }
+.hud-shield { width: 46px; height: 52px; }
+.hud-shield-big { font-size: 20px; }
+.hud-actions { gap: 4px; }
+.hud-side { gap: 4px; }
+
+/* Ubin PETA LANGSUNG: wilayah tanpa negara = kaca abu-abu + tanda "?". */
+.map-tile { position: relative; overflow: hidden; }
+.map-tile.free {
+  background: var(--glass-free);
+  border-color: var(--glass-free-border);
+}
+.map-tile.free .mt-name { color: #c9d2de; }
+.map-tile .mt-q {
+  position: absolute; top: 0; right: 6px;
+  font-family: 'Oswald', sans-serif; font-size: 22px; font-weight: 700;
+  color: rgba(255,255,255,.5); line-height: 1; pointer-events: none;
+}
+
+/* ---------- landing page (sebelum login) ---------- */
+.auth-view.landing { display: block; padding: 0; }
+.landing-hero {
+  position: relative; min-height: 100vh; display: flex; align-items: center;
+  overflow: hidden;
+  background: radial-gradient(1000px 500px at 70% 0%, #2a1a1a 0%, var(--bg) 55%), var(--bg);
+}
+.landing-map { position: absolute; inset: 0; opacity: .8; }
+.landing-map svg { width: 100%; height: 100%; display: block; }
+.landing-hero::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(7,11,20,.55) 0%, rgba(7,11,20,.25) 40%, rgba(7,11,20,.88) 100%);
+}
+.landing-content { position: relative; z-index: 1; max-width: 640px; padding: 48px 20px 40px; margin: 0 auto; }
+.landing-badge {
+  display: inline-block; border: 1px solid rgba(45,212,191,.5); color: #5eead4;
+  border-radius: 999px; padding: 6px 14px; font-family: 'Oswald', sans-serif;
+  font-size: 13px; letter-spacing: .14em; text-transform: uppercase;
+}
+.landing-kicker { color: var(--muted); font-family: 'Oswald', sans-serif; font-size: 14px; letter-spacing: .18em; text-transform: uppercase; margin-top: 18px; }
+.landing-title {
+  font-family: 'Oswald', sans-serif; font-size: clamp(44px, 11vw, 84px);
+  font-weight: 700; line-height: .95; letter-spacing: .01em; text-transform: uppercase;
+  color: #fff; margin-top: 10px;
+}
+.landing-title .gold { color: var(--gold-bright); }
+.landing-sub { color: #c6cfdd; font-size: 17px; line-height: 1.6; margin: 18px 0 26px; max-width: 560px; }
+.landing-cta { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
+.landing-cta .btn-gold.big { box-shadow: 0 10px 30px rgba(217,164,65,.35); }
+.landing-perks { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 28px; color: var(--text); font-family: 'Oswald', sans-serif; letter-spacing: .08em; font-size: 14px; text-transform: uppercase; }
+.landing-version { margin-top: 26px; color: var(--muted2); font-size: 12px; letter-spacing: .1em; }
+#auth-card-wrap { width: 100%; display: flex; justify-content: center; }
+#auth-back { margin: -8px 0 8px -4px; }
+.drawer-version { color: var(--muted2); font-size: 12px; letter-spacing: .08em; text-align: center; padding: 14px 0 4px; }
+
+@media (max-width: 560px) {
+  .hud-icon { width: 32px; height: 32px; font-size: 15px; }
+  .crate-btn { width: 32px; height: 32px; font-size: 15px; }
+  .hud-avatar { width: 36px; height: 36px; }
+  .hud-shield { width: 40px; height: 46px; }
+  .hud-shield-big { font-size: 16px; }
+  .landing-title { font-size: clamp(40px, 12vw, 56px); }
+  .landing-sub { font-size: 15px; }
+}

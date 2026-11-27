@@ -10,7 +10,7 @@ import {
 import { dbRateLimit } from './rate-limit.js';
 import { getMyCountry, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary } from './api-civic.js';
 import {
-  WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
+  VERSION, WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
   xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
   energyCapFor, DAILY_MISSIONS, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
@@ -338,6 +338,7 @@ export function registerCore(app) {
     const citizen = await loadCitizen(req.userId);
     if (!citizen) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
     res.json({
+      version: VERSION,
       user: {
         id: citizen.user_id, publicId: publicId(citizen.user_id), email: citizen.email, username: citizen.username,
         avatar: citizen.avatar || null,
@@ -438,6 +439,7 @@ export function registerCore(app) {
       goldEarned: Number(refPaid.n) * 200,
     };
     res.json({
+      version: VERSION,
       user: {
         id: c.user_id, publicId: publicId(c.user_id), email: c.email, username: c.username,
         avatar: c.avatar || null,
@@ -1585,7 +1587,7 @@ export function registerCore(app) {
     const population = await one('SELECT COUNT(*) AS n FROM citizens');
     const regions = await one('SELECT COUNT(*) AS n FROM regions');
     const countries = await one('SELECT COUNT(*) AS n FROM country');
-    worldCache = { day: world?.day || 1, population: Number(population.n), regions: Number(regions.n), countries: Number(countries.n), onlineCount: await countOnline() };
+    worldCache = { version: VERSION, day: world?.day || 1, population: Number(population.n), regions: Number(regions.n), countries: Number(countries.n), onlineCount: await countOnline() };
     worldCacheAt = now;
     res.json(worldCache);
   }));

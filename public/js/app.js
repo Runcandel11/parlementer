@@ -289,39 +289,72 @@ async function boot() {
   showAuth();
 }
 
+// Versi game (dari konstanta VERSION di src/game.js, dikirim /api/world +
+// /api/me): tampil kecil di footer landing + drawer. Tanpa versi dari
+// server, tampil "Parlementer" saja — jangan karang angka versi.
+function setVersion(v) {
+  if (!v) return;
+  const label = 'Parlementer v' + v;
+  const lv = $('#landing-version');
+  if (lv) lv.textContent = label;
+  const dv = $('#drawer-version');
+  if (dv) dv.textContent = label;
+}
+
+// Landing page: tampil untuk pengunjung belum login; form login/daftar
+// muncul setelah ketuk CTA (atau langsung bila ?ref= ada).
+function showLanding() {
+  $('#landing-hero').hidden = false;
+  $('#auth-card-wrap').hidden = true;
+  $('#auth-view').classList.add('landing');
+}
+function showAuthForm(which) {
+  $('#landing-hero').hidden = true;
+  $('#auth-card-wrap').hidden = false;
+  $('#auth-view').classList.remove('landing');
+  switchAuthTab(which);
+}
+
 function showAuth() {
   hideLoading();
   $('#app').hidden = true;
   $('#auth-view').hidden = false;
   $('#tab-login').onclick = () => switchAuthTab('login');
   $('#tab-register').onclick = () => switchAuthTab('register');
+  $('#landing-register').onclick = () => showAuthForm('register');
+  $('#landing-login').onclick = () => showAuthForm('login');
+  $('#auth-back').onclick = showLanding;
+  // Versi game untuk footer landing (endpoint publik, tanpa login).
+  api('/api/world').then((w) => setVersion(w.version)).catch(() => {});
   // Link referral ?ref=CODE: isi otomatis field kode dan buka tab DAFTAR.
   const refParam = new URLSearchParams(location.search).get('ref');
   if (refParam) {
     const refInput = $('#form-register input[name="ref"]');
     if (refInput) refInput.value = refParam.trim().toUpperCase().slice(0, 8);
-    switchAuthTab('register');
+    showAuthForm('register');
+  } else {
+    showLanding();
   }
   $('#form-login').onsubmit = async (e) => {
     e.preventDefault();
-    const f = e.target;
+    const fd = new FormData(e.target);
     const err = $('#login-error');
     err.hidden = true;
     try {
-      await post('/api/auth/login', { email: f.email.value.trim(), password: f.password.value });
+      await post('/api/auth/login', { email: String(fd.get('email') || '').trim(), password: String(fd.get('password') || '') });
       showApp();
     } catch (ex) { err.textContent = ex.message; err.hidden = false; }
   };
   $('#form-register').onsubmit = async (e) => {
     e.preventDefault();
-    const f = e.target;
+    const fd = new FormData(e.target);
     const err = $('#register-error');
     err.hidden = true;
     try {
       await post('/api/auth/register', {
-        email: f.email.value.trim(), password: f.password.value,
-        username: f.username.value.trim(), ref: f.ref.value.trim() || undefined,
-        admin_code: f.admin_code.value.trim() || undefined,
+        email: String(fd.get('email') || '').trim(), password: String(fd.get('password') || ''),
+        username: String(fd.get('username') || '').trim(), ref: String(fd.get('ref') || '').trim() || undefined,
+        admin_code: String(fd.get('admin_code') || '').trim() || undefined,
       });
       toast('Selamat datang! Dunia ini masih terpecah — dirikan negaramu sendiri.');
       showApp();
@@ -478,6 +511,8 @@ async function refreshMe() {
 
 function renderHUD() {
   if (!ME) return;
+  // Versi game di footer drawer (dari /api/me → konstanta VERSION).
+  setVersion(ME.version);
   const c = ME.citizen;
   $('#hud-name').textContent = c.username + (c.isPremium ? ' ◆' : '');
   $('#hud-region').textContent = (ME.region?.name || '') + ' · ' + (ME.region?.country_name || ME.country?.name || 'Wilayah Merdeka');
@@ -1041,8 +1076,13 @@ ROUTES.dashboard = async () => {
   const fillMap = api('/api/regions').then((d) => {
     const el = $('#dash-map-tiles');
     if (!el) return;
+    // Aturan peta (pemilik, 27 Nov 2026): wilayah yang BELUM jadi bagian
+    // negara mana pun tampil sebagai KACA ABU-ABU dengan tanda "?" — bukan
+    // warna negara (merah). Berlaku di ubin PETA LANGSUNG ini; peta besar
+    // menyusul di batch lain.
     el.innerHTML = d.regions.map((r) => `
-      <button class="map-tile ${r.id === d.mine ? 'mine' : ''}" type="button" data-goto="#/regions/${r.id}" title="${esc(r.name)} — ${r.population} warga">
+      <button class="map-tile ${r.id === d.mine ? 'mine' : ''} ${r.country_name ? '' : 'free'}" type="button" data-goto="#/regions/${r.id}" title="${esc(r.name)} — ${r.population} warga">
+        ${r.country_name ? '' : '<span class="mt-q" aria-hidden="true">?</span>'}
         <span class="mt-name">${esc(r.name)}</span>
         <span class="mt-sub"><span class="mt-dot ${r.country_name ? '' : 'free'}"></span>${r.id === d.mine ? '<span class="you">📍 KAMU</span>' : esc(r.country_name || 'Merdeka')}</span>
       </button>`).join('');
