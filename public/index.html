@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Parlementer — Simulasi Geopolitik Online</title>
+<meta name="description" content="Parlementer: hidup sebagai warga, bekerja, berdagang, berpolitik, berperang, dan menulis berita. 100% online, tanpa bot.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<!-- ============ HALAMAN LOGIN (tampil pertama kali) ============ -->
+<div id="auth-view" class="auth-view" hidden>
+  <div class="auth-card">
+    <div class="auth-logo">◆</div>
+    <h1 class="auth-title">PARLEMENTER</h1>
+    <p class="auth-sub">Simulasi geopolitik online — hidup sebagai warga, bangun namamu.</p>
+    <div class="auth-tabs">
+      <button id="tab-login" class="auth-tab active" type="button">MASUK</button>
+      <button id="tab-register" class="auth-tab" type="button">DAFTAR</button>
+    </div>
+    <form id="form-login" class="auth-form">
+      <label>EMAIL<input type="email" name="email" placeholder="nama@email.com" required autocomplete="email"></label>
+      <label>KATA SANDI<input type="password" name="password" placeholder="Kata sandimu" required autocomplete="current-password"></label>
+      <div id="login-error" class="auth-error" hidden></div>
+      <button class="btn-gold big" type="submit">MASUK</button>
+    </form>
+    <form id="form-register" class="auth-form" hidden>
+      <label>EMAIL<input type="email" name="email" placeholder="nama@email.com" required autocomplete="email"></label>
+      <label>KATA SANDI<input type="password" name="password" placeholder="Minimal 6 karakter" required minlength="6" autocomplete="new-password"></label>
+      <label>NAMA WARGA<input type="text" name="username" placeholder="cth: ohlahturam (3–24 karakter)" required pattern="[A-Za-z0-9_]{3,24}" autocomplete="username"></label>
+      <label>KODE REFERAL (OPSIONAL)<input type="text" name="ref" placeholder="Nama warga yang mengajakmu"></label>
+      <div id="register-error" class="auth-error" hidden></div>
+      <button class="btn-gold big" type="submit">DAFTAR &amp; JADI WARGA</button>
+      <p class="auth-note">Satu email = satu akun. Satu akun = satu warga. Paket awal: 50 emas, 500 USD, 3 Makanan/Senjata/Tiket T1.</p>
+    </form>
+    <p class="auth-foot">100% online · Tanpa bot · Dunia diisi pemain asli</p>
+  </div>
+</div>
+
+<!-- ============ APLIKASI GAME ============ -->
+<div id="app" hidden>
+  <header class="hud">
+    <button id="btn-menu" class="hud-icon" type="button" aria-label="Menu">☰</button>
+    <div class="hud-shield" id="hud-shield">
+      <span class="hud-shield-xp" id="hud-xp">0</span>
+      <span class="hud-shield-lv" id="hud-lv">1</span>
+    </div>
+    <div class="hud-identity">
+      <div class="hud-name" id="hud-name">—</div>
+      <div class="hud-region" id="hud-region">—</div>
+    </div>
+    <div class="hud-wallet">
+      <div class="hud-usd"><span id="hud-usd">500</span> <small>USD</small></div>
+      <div class="hud-gold">◈ <span id="hud-gold">50</span></div>
+    </div>
+    <div class="hud-actions">
+      <button class="hud-icon" id="btn-chat" type="button" aria-label="Obrolan">💬<span class="badge" id="badge-chat" hidden>0</span></button>
+      <button class="hud-icon" id="btn-notif" type="button" aria-label="Notifikasi">🔔<span class="badge" id="badge-notif" hidden>0</span></button>
+      <button class="hud-icon" id="btn-settings" type="button" aria-label="Pengaturan">⚙️</button>
+    </div>
+  </header>
+
+  <nav id="drawer" class="drawer" aria-label="Menu utama">
+    <button id="drawer-close" class="drawer-close" type="button">✕</button>
+    <div id="drawer-nav"></div>
+  </nav>
+  <div id="drawer-overlay" class="drawer-overlay"></div>
+
+  <main id="page" class="page"></main>
+
+  <div class="energy-bar" id="energy-bar">
+    <button class="energy-chat" id="energy-chat" type="button">💬<span class="badge" id="badge-chat2" hidden>0</span></button>
+    <span class="energy-sep"></span>
+    <span class="energy-icon">⚡</span>
+    <span class="energy-segs" id="energy-segs"></span>
+    <span class="energy-num" id="energy-num">100/100</span>
+  </div>
+</div>
+
+<!-- ============ MODAL LAPORKAN KONTEN ============ -->
+<div id="report-modal" class="modal" hidden>
+  <div class="modal-card">
+    <h3>LAPORKAN KONTEN</h3>
+    <p class="modal-sub">Laporanmu ditinjau moderator. Jangan gunakan untuk hal sepele.</p>
+    <div class="report-reasons" id="report-reasons">
+      <button type="button" data-reason="Pelecehan">Pelecehan</button>
+      <button type="button" data-reason="Ujaran kebencian">Ujaran kebencian</button>
+      <button type="button" data-reason="Spam">Spam</button>
+      <button type="button" data-reason="Lainnya">Lainnya</button>
+    </div>
+    <label>RINCIAN (OPSIONAL)
+      <textarea id="report-details" rows="3" placeholder="Apa yang terjadi? Tambahkan konteks untuk moderator..."></textarea>
+    </label>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="report-cancel" type="button">BATAL</button>
+      <button class="btn-gold" id="report-submit" type="button">KIRIM LAPORAN</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1"
+  },
+  "description": "Parlementer \u2014 simulasi geopolitik online multiplayer (standalone, siap deploy ke hosting gratis)",
+  "devDependencies": {
+    "pg-mem": "^2.8.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "server.js",
+  "name": "parlementer",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "test": "node test/e2e.js",
+    "test:pg": "node test/pg-test.js",
+    "test:all": "npm run test:pg && npm test"
+  },
+  "type": "module",
+  "version": "1.0.0"
+}

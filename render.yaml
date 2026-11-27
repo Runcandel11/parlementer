@@ -1,0 +1,21 @@
+# Render Blueprint — Parlementer (free tier)
+# Cara pakai: hubungkan repo ini ke Render, lalu "New Blueprint Instance".
+# Database Postgres dibuat TERPISAH di Neon/Supabase (gratis) — lihat README.
+# Setelah database dibuat, isi DATABASE_URL di dashboard Render (Environment).
+services:
+  - type: web
+    name: parlementer
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # isi manual dari Neon/Supabase (wajib — Render free tidak punya disk persisten)
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PORT
+        value: 10000
+    healthCheckPath: /api/world
