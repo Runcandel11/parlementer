@@ -1396,7 +1396,7 @@ ROUTES.profile = async (username) => {
     <div class="kv"><span class="k">Daerah asal</span><span class="v">${esc(pr.region_name)}</span></div>
     <div class="kv"><span class="k">Partai</span><span class="v">${pr.party ? esc(pr.party.name) + ' [' + esc(pr.party.tag) + ']' : '—'}</span></div>
     <div class="kv"><span class="k">Bergabung</span><span class="v">${fmtDate(pr.created_at)}</span></div>
-    <div class="kv"><span class="k">Terakhir main</span><span class="v">${pr.last_seen_at ? ago(pr.last_seen_at) : 'Belum pernah'}</span></div>
+    <div class="kv"><span class="k">Status</span><span class="v">${pr.online ? '<span class="online-badge">● Online</span>' : esc(pr.last_seen_label || (pr.last_seen_at ? 'Terakhir online ' + ago(pr.last_seen_at) : 'Belum pernah terlihat online'))}</span></div>
     <div class="kv"><span class="k">Skor Kredit</span><span class="v"><b style="color:${pr.credit?.color || '#3fb950'}">${pr.credit_score ?? 100}/100 · ${esc(pr.credit?.label || 'Baik')}</b></span></div>
     <div class="kv"><span class="k">Reputasi Dagang</span><span class="v"><b>${esc(pr.trade_reputation || 'Pedagang Baru')}</b> · ${fmt(pr.trades_completed || 0)} transaksi selesai</span></div>
     <div class="kv"><span class="k">Kekuatan Militer</span><span class="v">⚔️ ${pr.military_power ?? 0}</span></div>
@@ -2938,7 +2938,7 @@ ROUTES.stats = async () => {
   const emptyRows = '<p class="muted">Belum ada data.</p>';
   const levelRows = (rows) => rows.length ? rows.map((x, i) => `
     <div class="leader-row"><span class="leader-rank">${i + 1}</span>
-      <div class="leader-main"><div class="leader-name" data-goto="#/profile/${encodeURIComponent(x.username)}" style="cursor:pointer" title="Lihat profil ${esc(x.username)}">${esc(x.username)}</div><div class="leader-sub">${esc(x.region_name)}${x.country_name ? ' · ' + esc(x.country_name) : ' · Belum Bernegara'}</div>
+      <div class="leader-main"><div class="leader-name" data-goto="#/profile/${encodeURIComponent(x.username)}" style="cursor:pointer" title="Lihat profil ${esc(x.username)}">${esc(x.username)}</div><div class="leader-sub">${esc(x.region_name)}${x.country_name ? ' · ' + esc(x.country_name) : ' · Belum Bernegara'}${x.online ? ' · <span class="online-badge">● Online</span>' : (x.last_seen_at ? ' · Terakhir online ' + ago(x.last_seen_at) : '')}</div>
       <div class="bar leader-bar"><i style="width:${Math.round((Number(x.level) / (Number(rows[0]?.level) || 1)) * 100)}%"></i></div></div>
       <span class="leader-val">LV ${x.level} <small>${fmt(x.xp)} XP</small></span></div>`).join('') : emptyRows;
   const regionRows = (rows) => rows.length ? rows.map((x, i) => `

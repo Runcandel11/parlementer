@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { ONLINE_WINDOW_MS, isOnline, formatLastSeenId, onlineStatus } from '../src/game.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -1339,6 +1340,44 @@ async function main() {
   }
   check('/api/world memuat onlineCount (respons segar)', w.onlineCount === 1 && w.population === expectedPop, `online=${w.onlineCount} populasi=${w.population}`);
   dbO.close();
+
+  console.log('  [22r] Status online per warga (v4.3.0, saran LIO)');
+  // Unit: formatter relatif Indonesia + ambang 5 menit (langsung dari src/game.js).
+  const nowU = Date.now();
+  check('formatLastSeenId: <10 detik = "baru saja"', formatLastSeenId(nowU - 5000, nowU) === 'baru saja');
+  check('formatLastSeenId: 45 detik lalu', formatLastSeenId(nowU - 45000, nowU) === '45 detik lalu');
+  check('formatLastSeenId: 3 menit lalu', formatLastSeenId(nowU - 3 * 60 * 1000, nowU) === '3 menit lalu');
+  check('formatLastSeenId: 2 jam 15 menit lalu', formatLastSeenId(nowU - (2 * 3600 + 15 * 60) * 1000, nowU) === '2 jam 15 menit lalu');
+  check('formatLastSeenId: 2 jam lalu (menit 0)', formatLastSeenId(nowU - 2 * 3600 * 1000, nowU) === '2 jam lalu');
+  check('formatLastSeenId: 3 hari lalu', formatLastSeenId(nowU - 3 * 86400 * 1000, nowU) === '3 hari lalu');
+  check('formatLastSeenId: tanpa last_seen = null', formatLastSeenId(0, nowU) === null && formatLastSeenId(null, nowU) === null);
+  check('isOnline: aktif 2 menit lalu = online', isOnline(nowU - 2 * 60 * 1000, nowU) === true);
+  check('isOnline: tepat di ambang 5 menit masih online', isOnline(nowU - ONLINE_WINDOW_MS + 1000, nowU) === true);
+  check('isOnline: 6 menit lalu = offline', isOnline(nowU - 6 * 60 * 1000, nowU) === false);
+  check('isOnline: tanpa last_seen = offline', isOnline(0, nowU) === false);
+  check('onlineStatus: online → label "Online"', onlineStatus(nowU - 60000, nowU).online === true && onlineStatus(nowU - 60000, nowU).last_seen_label === 'Online');
+  check('onlineStatus: offline 2 jam → label lengkap', onlineStatus(nowU - 2 * 3600 * 1000, nowU).online === false && onlineStatus(nowU - 2 * 3600 * 1000, nowU).last_seen_label === 'Terakhir online 2 jam lalu');
+  check('onlineStatus: tanpa last_seen → label sopan', onlineStatus(0, nowU).online === false && onlineStatus(0, nowU).last_seen_label === 'Belum pernah terlihat online');
+  // API: /api/profile membawa online + last_seen_label (idA dari blok [22k] di atas).
+  const dbP = new DatabaseSync(DB_PATH);
+  dbP.prepare('UPDATE citizens SET last_seen_at = ? WHERE id = ?').run(Date.now() - 2 * 60 * 1000, idA.cid);
+  r = await A.get('/api/profile/warga_satu');
+  check('Profil: aktif 2 menit lalu → online + label "Online"', r.data.profile.online === true && r.data.profile.last_seen_label === 'Online', `online=${r.data.profile.online} label=${r.data.profile.last_seen_label}`);
+  dbP.prepare('UPDATE citizens SET last_seen_at = ? WHERE id = ?').run(Date.now() - 2 * 3600 * 1000, idA.cid);
+  r = await A.get('/api/profile/warga_satu');
+  check('Profil: terakhir aktif 2 jam lalu → offline + label "Terakhir online 2 jam lalu"', r.data.profile.online === false && r.data.profile.last_seen_label === 'Terakhir online 2 jam lalu', `label=${r.data.profile.last_seen_label}`);
+  dbP.prepare('UPDATE citizens SET last_seen_at = 0 WHERE id = ?').run(idA.cid);
+  r = await A.get('/api/profile/warga_satu');
+  check('Profil: tanpa last_seen → offline, tidak crash, label sopan', r.status === 200 && r.data.profile.online === false && r.data.profile.last_seen_label === 'Belum pernah terlihat online', `label=${r.data.profile.last_seen_label}`);
+  // API: /api/stats — Level Tertinggi + LIHAT SEMUA membawa status online.
+  r = await A.get('/api/stats');
+  check('Statistik Level Tertinggi: tiap baris membawa online + label', Array.isArray(r.data.topLevel) && r.data.topLevel.every((x) => typeof x.online === 'boolean' && typeof x.last_seen_label === 'string'));
+  r = await A.get('/api/stats?full=level');
+  const fullA = (r.data.fullList || []).find((x) => x.username === 'warga_satu');
+  check('Statistik LIHAT SEMUA: baris warga_satu membawa online + label', !!fullA && fullA.online === false && fullA.last_seen_label === 'Belum pernah terlihat online', `online=${fullA?.online} label=${fullA?.last_seen_label}`);
+  // Pulihkan last_seen A supaya tes berikutnya tidak melihat warga basi.
+  dbP.prepare('UPDATE citizens SET last_seen_at = ? WHERE id = ?').run(Date.now(), idA.cid);
+  dbP.close();
 
   console.log('  [22l] Perusahaan v2.4.0 — bonus shift, edit, foto');
   const dbCo = new DatabaseSync(DB_PATH);

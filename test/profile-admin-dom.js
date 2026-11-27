@@ -1,8 +1,10 @@
 // Parlementer — tes DOM profil publik + ADMIN + shift fleksibel + chat + bio.
 // Membuktikan (di jsdom + server sungguhan):
 //   (1) PROFIL: klik nama pemain di chat langsung membuka profil publiknya,
-//       menampilkan Terakhir main + level + jumlah shift + "Belum Bernegara",
-//       tanpa bocor data privat; tombol Chat di profil membuka DM;
+//       menampilkan Status (lencana "● Online" bila aktif / "Terakhir online
+//       ..." bila offline, v4.3.0 saran LIO) + level + jumlah shift +
+//       "Belum Bernegara", tanpa bocor data privat; tombol Chat di profil
+//       membuka DM;
 //   (2) ADMIN: lowongan ADMIN ada di semua 17 wilayah tanpa batas kursi
 //       (tampil "Tanpa batas kursi" di halaman Pekerjaan);
 //   (3) SHIFT FLEKSIBEL: tombol "Kerjakan Satu Giliran" ada di DASHBOARD
@@ -170,7 +172,29 @@ async function main() {
     nameEl?.click();
     await sleep(1500);
     check('Klik nama di chat: membuka profil warga_b', pageText(dom).includes('warga_b') && dom.window.location.hash.includes('#/profile/warga_b'), `hash=${dom.window.location.hash}`);
-    check('Profil publik: baris "Terakhir main" tampil', pageText(dom).includes('Terakhir main'));
+    check('Profil publik: baris "Status" tampil', pageText(dom).includes('Status'));
+    check('Profil publik: lencana Online tampil (warga_b baru memanggil /api/me)', !!dom.window.document.querySelector('.online-badge') && pageText(dom).includes('Online'));
+    // (1b) STATUS ONLINE (v4.3.0, saran LIO): offline 2 jam lalu → label
+    // relatif; tanpa last_seen → teks sopan, tanpa crash.
+    const dbP = new DatabaseSync(DB_PATH);
+    dbP.prepare('UPDATE citizens SET last_seen_at = ? WHERE id = ?').run(Date.now() - 2 * 3600 * 1000, meB.citizen.id);
+    dbP.close();
+    dom.window.location.hash = '#/chat';
+    await sleep(1500);
+    dom.window.location.hash = '#/profile/warga_b';
+    await sleep(1500);
+    check('Profil publik: offline 2 jam lalu → "Terakhir online 2 jam lalu"', pageText(dom).includes('Terakhir online 2 jam lalu'));
+    const dbP2 = new DatabaseSync(DB_PATH);
+    dbP2.prepare('UPDATE citizens SET last_seen_at = 0 WHERE id = ?').run(meB.citizen.id);
+    dbP2.close();
+    dom.window.location.hash = '#/chat';
+    await sleep(1500);
+    dom.window.location.hash = '#/profile/warga_b';
+    await sleep(1500);
+    check('Profil publik: tanpa last_seen → "Belum pernah terlihat online"', pageText(dom).includes('Belum pernah terlihat online'));
+    const dbP3 = new DatabaseSync(DB_PATH);
+    dbP3.prepare('UPDATE citizens SET last_seen_at = ? WHERE id = ?').run(Date.now(), meB.citizen.id);
+    dbP3.close();
     check('Profil publik: level + shift tampil', pageText(dom).includes('LEVEL') && pageText(dom).includes('Shift dikerjakan'));
     check('Profil publik: wilayah "Belum Bernegara"', pageText(dom).includes('Belum Bernegara'));
     check('Profil publik: tidak ada kata "Merdeka"', !/merdeka/i.test(pageText(dom)));

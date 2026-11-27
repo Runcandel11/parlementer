@@ -20,6 +20,7 @@ import {
   PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
   MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, tradeReputation, worldEventFor,
   DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
+  ONLINE_WINDOW_MS, onlineStatus,
 } from './game.js';
 
 export function registerCore(app) {
@@ -367,7 +368,8 @@ export function registerCore(app) {
   // jendela 5 menit memberi toleransi beberapa poll yang terlewat).
   // Heartbeat ditulis paling cepat 1×/menit/pemain (murah di Postgres).
   // Akun banned tidak dihitung — heartbeat dilewati + filter is_banned.
-  const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+  // Ambang ONLINE_WINDOW_MS (src/game.js) dipakai juga profil/daftar
+  // warga lewat onlineStatus() — satu definisi untuk seluruh game.
   const ONLINE_HEARTBEAT_MS = 60 * 1000;
   async function countOnline() {
     const row = await one(
@@ -869,6 +871,11 @@ export function registerCore(app) {
       total_damage: u.total_damage, attacks: u.attacks, frontline_attacks: u.frontline_attacks,
       attr_str: u.attr_str, attr_edu: u.attr_edu, attr_eco: u.attr_eco,
       created_at: u.created_at, last_seen_at: u.last_seen_at,
+      // Status online per warga (v4.3.0, saran LIO): flag + label siap
+      // tampil ("Online" / "Terakhir online 2 jam lalu" /
+      // "Belum pernah terlihat online"), dihitung dari last_seen_at yang
+      // sama dengan heartbeat /api/me — tanpa sistem paralel.
+      ...onlineStatus(u.last_seen_at),
       // Skor kredit bersifat PUBLIK (v3.0.0): semua pemain bisa melihat
       // skor pemain lain — tidak seperti emas/USD/energi yang disembunyikan.
       // Profil TIDAK lewat loadCitizen, jadi pemulihan dihitung di sini
@@ -2099,9 +2106,12 @@ export function registerCore(app) {
     const freeRegions = await one('SELECT COUNT(*) AS n FROM regions WHERE country_id IS NULL');
     // "PEMIMPIN TIAP DAFTAR" mengikuti KEWARGANEGARAAN (home_region_id):
     // Level Tertinggi menampilkan wilayah asal + negara asal pemain.
-    const topLevel = await sql(`SELECT u.username, c.level, c.xp, r.name AS region_name, co.name AS country_name
+    const topLevel = (await sql(`SELECT u.username, c.level, c.xp, c.last_seen_at, r.name AS region_name, co.name AS country_name
       FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.home_region_id
-      LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 3`);
+      LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 3`))
+      // Status online per warga (v4.3.0, saran LIO): tiap baris membawa
+      // flag online + label siap tampil, seperti /api/profile.
+      .map((x) => ({ ...x, ...onlineStatus(x.last_seen_at) }));
     const topRegions = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, co.name AS country_name
       FROM regions r LEFT JOIN citizens c ON c.home_region_id = r.id LEFT JOIN country co ON co.id = r.country_id
       GROUP BY r.id, r.name, r.type, co.name ORDER BY citizens DESC, r.name ASC LIMIT 3`);
@@ -2125,9 +2135,10 @@ export function registerCore(app) {
     const full = req.query.full;
     let fullList = null;
     if (full === 'level') {
-      fullList = await sql(`SELECT u.username, c.level, c.xp, r.name AS region_name, co.name AS country_name
+      fullList = (await sql(`SELECT u.username, c.level, c.xp, c.last_seen_at, r.name AS region_name, co.name AS country_name
         FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.home_region_id
-        LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 50`);
+        LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 50`))
+        .map((x) => ({ ...x, ...onlineStatus(x.last_seen_at) }));
     } else if (full === 'regions') {
       fullList = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, co.name AS country_name
         FROM regions r LEFT JOIN citizens c ON c.home_region_id = r.id LEFT JOIN country co ON co.id = r.country_id

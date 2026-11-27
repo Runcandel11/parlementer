@@ -55,13 +55,63 @@
 // baru dites end-to-end; stress test lokal 50 VU (490 req/dtk, p95 7 ms,
 // 0 error) + uji pemulihan SIGKILL (snapshot identik, tick tepat 1 hari).
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '4.2.0';
+// Update sedang v4.3.0 = status online per warga (saran LIO, 28 Nov 2026):
+// profil + daftar Level Tertinggi menampilkan "● Online" bila warga aktif
+// dalam 5 menit terakhir, atau "Terakhir online X jam Y menit lalu" bila
+// offline; ambang 5 menit jadi satu konstanta ONLINE_WINDOW_MS di bawah,
+// dipakai juga countOnline() di api-core.js (dulu literal tersendiri).
+export const VERSION = '4.3.0';
 
 // --- Satuan waktu dasar (Tahap 7) ---
 // Satu sumber kebenaran untuk "sehari" dalam milidetik — semua konstanta
 // durasi di bawah memakai ini, bukan lagi literal 24*60*60*1000 yang
 // tersebar di banyak file.
 export const DAY_MS = 24 * 60 * 60 * 1000;
+
+// --- Status online per warga (v4.3.0, saran LIO) ---
+// Warga dianggap ONLINE bila last_seen_at (disentuh heartbeat /api/me,
+// paling cepat 1×/menit) masih dalam jendela ini. Satu-satunya ambang di
+// seluruh game — countOnline(), /api/profile, dan /api/stats memakai
+// konstanta yang sama, jangan ada literal 5 menit kedua di tempat lain.
+export const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+
+// true bila warga aktif dalam ONLINE_WINDOW_MS terakhir. last_seen_at 0 /
+// null = belum pernah tercatat → offline.
+export function isOnline(lastSeenAt, now = Date.now()) {
+  const seen = Number(lastSeenAt || 0);
+  return seen > 0 && now - seen < ONLINE_WINDOW_MS;
+}
+
+// Format relatif Bahasa Indonesia untuk "terakhir aktif": "baru saja"
+// (<10 detik), "45 detik lalu", "3 menit lalu", "2 jam 15 menit lalu",
+// "2 jam lalu", "3 hari lalu". null bila belum pernah tercatat (0/null).
+export function formatLastSeenId(lastSeenAt, now = Date.now()) {
+  const seen = Number(lastSeenAt || 0);
+  if (seen <= 0) return null;
+  const s = Math.max(0, Math.floor((now - seen) / 1000));
+  if (s < 10) return 'baru saja';
+  if (s < 60) return s + ' detik lalu';
+  if (s < 3600) return Math.floor(s / 60) + ' menit lalu';
+  if (s < 86400) {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return m > 0 ? h + ' jam ' + m + ' menit lalu' : h + ' jam lalu';
+  }
+  return Math.floor(s / 86400) + ' hari lalu';
+}
+
+// Status lengkap satu warga untuk API + UI: flag online + label siap
+// tampil ("Online" / "Terakhir online 2 jam lalu" /
+// "Belum pernah terlihat online"). last_seen_at mentah tetap dikirim
+// terpisah oleh endpoint (untuk hitung mundur/ketelitian di klien).
+export function onlineStatus(lastSeenAt, now = Date.now()) {
+  const online = isOnline(lastSeenAt, now);
+  const rel = formatLastSeenId(lastSeenAt, now);
+  return {
+    online,
+    last_seen_label: online ? 'Online' : (rel ? 'Terakhir online ' + rel : 'Belum pernah terlihat online'),
+  };
+}
 
 // --- Sistem kredit skor (v3.0.0, saran LIO tiket #7) ---
 // Semua warga mulai 100. Laporan chat yang terbukti benar menurunkan skor

@@ -612,6 +612,11 @@ button.food-card:disabled { cursor: default; }
 .leader-sub { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .leader-val { font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700; color: #fff; white-space: nowrap; flex: none; }
 .leader-val small { font-size: 13px; color: var(--muted); font-weight: 500; }
+
+/* Lencana status online per warga (v4.3.0, saran LIO): hijau, ringkas,
+   aman di baris sempit HP (nowrap; di .leader-sub ikut terpotong elipsis
+   bila kepanjangan, bukan merusak layout). */
+.online-badge { color: #3fb950; font-weight: 700; white-space: nowrap; }
 .leader-bar { height: 6px; margin-top: 4px; }
 
 /* Kartu wilayah: skor kota besar + bar infrastruktur. */
