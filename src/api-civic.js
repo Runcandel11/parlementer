@@ -489,16 +489,30 @@ export function registerCivic(app) {
     // Kursi dihitung PER NEGARA (party_seats) — angka yang ditampilkan
     // adalah kursi partai di parlemen NEGARA pemanggil (0 bila pemanggil
     // di wilayah merdeka / partainya tak punya kursi di negaranya).
+    // PENTING (bug live 27 Nov 2026): JANGAN SELECT p.* di sini. Kolom
+    // lama parties.seats ikut terambil, sehingga alias subquery `seats`
+    // berduplikasi — ORDER BY seats jadi ambigu dan Postgres menolak
+    // query ("ORDER BY \"seats\" is ambiguous", 500) begitu ada ≥1 partai.
+    // SQLite diam-diam memilih salah satunya, jadi tes e2e tidak menangkap
+    // ini. Kolom diambil eksplisit (tanpa parties.seats) agar `seats` di
+    // respons SELALU kursi per negara pemanggil.
     const myCountry = await getMyCountry({ one }, req.citizen);
+    const countryId = myCountry?.id || -1;
     const rows = await sql(
-      `SELECT p.*, u.username AS leader_name,
+      `SELECT p.id, p.name, p.tag, p.ideology, p.leader_id, p.type, p.created_at,
+        u.username AS leader_name,
         (SELECT COUNT(*) FROM party_members WHERE party_id = p.id) AS members,
         COALESCE((SELECT seats FROM party_seats WHERE party_id = p.id AND country_id = ?), 0) AS seats
        FROM parties p JOIN citizens c ON c.id = p.leader_id JOIN users u ON u.id = c.user_id
        ORDER BY seats DESC, members DESC`,
-      [myCountry?.id || -1]);
+      [countryId]);
     const mine = req.citizen.party_id
-      ? await one('SELECT p.*, u.username AS leader_name FROM parties p JOIN citizens c ON c.id = p.leader_id JOIN users u ON u.id = c.user_id WHERE p.id = ?', [req.citizen.party_id])
+      ? await one(
+        `SELECT p.id, p.name, p.tag, p.ideology, p.leader_id, p.type, p.created_at,
+          u.username AS leader_name,
+          COALESCE((SELECT seats FROM party_seats WHERE party_id = p.id AND country_id = ?), 0) AS seats
+         FROM parties p JOIN citizens c ON c.id = p.leader_id JOIN users u ON u.id = c.user_id WHERE p.id = ?`,
+        [countryId, req.citizen.party_id])
       : null;
     const pending = mine ? await sql(
       `SELECT pm.*, u.username FROM party_members pm JOIN citizens c ON c.id = pm.citizen_id JOIN users u ON u.id = c.user_id

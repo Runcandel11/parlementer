@@ -302,6 +302,87 @@ async function main() {
   const ver10 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
   check('Versi skema setelah migrasi = 10', ver10.rows[0]?.value === '10', `value=${ver10.rows[0]?.value}`);
 
+  console.log('\n[11] Regresi bug Partai — GET /api/parties di Postgres (ORDER BY ambigu)');
+  // Bug live 27 Nov 2026: begitu ada ≥1 partai, GET /api/parties 500 di
+  // Postgres ("ORDER BY \"seats\" is ambiguous": p.* membawa parties.seats
+  // + alias subquery `seats`). SQLite tidak menangkap ini — hanya Postgres
+  // sungguhan yang menolak. Tes ini memanggil endpoint HTTP sungguhan
+  // (server di-spawn seperti pg-concurrency).
+  const P_PORT = 3466;
+  const P_BASE = `http://127.0.0.1:${P_PORT}`;
+  class PClient {
+    constructor() { this.cookie = ''; }
+    async req(method, p, body) {
+      const res = await fetch(P_BASE + p, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...(this.cookie ? { Cookie: this.cookie } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const setCookie = res.headers.get('set-cookie');
+      if (setCookie) this.cookie = setCookie.split(';')[0];
+      let data = null;
+      try { data = await res.json(); } catch { data = {}; }
+      return { status: res.status, data };
+    }
+    get(p) { return this.req('GET', p); }
+    post(p, b) { return this.req('POST', p, b || {}); }
+  }
+  const pServer = spawn('node', ['server.js'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { ...process.env, PORT: String(P_PORT), DATABASE_URL, JWT_SECRET: 'pg-verify-parties-secret', ADMIN_BOOTSTRAP_CODE: 'pg-verify-bootstrap' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let pServerLog = '';
+  pServer.stdout.on('data', (d) => { pServerLog += d; });
+  pServer.stderr.on('data', (d) => { pServerLog += d; });
+  const pStop = () => { try { pServer.kill('SIGTERM'); } catch {} };
+  process.on('exit', pStop);
+  let pUp = false;
+  for (let i = 0; i < 40 && !pUp; i++) {
+    await sleep(500);
+    try { const rr = await fetch(P_BASE + '/api/world'); pUp = rr.ok; } catch {}
+  }
+  check('Server tes menyala (Postgres)', pUp);
+  if (pUp) {
+    const P1 = new PClient();
+    let rr = await P1.post('/api/auth/register', { email: 'ketua@pgverify.local', password: 'rahasia123', username: 'ketua_pgverify' });
+    check('P1 mendaftar', rr.status === 200, `status=${rr.status}`);
+    const p1me = await P1.get('/api/me');
+    await pool.query('UPDATE citizens SET level = 10, gold = 100 WHERE id = $1', [p1me.data.citizen.id]);
+    rr = await P1.post('/api/parties', { name: 'Partai Verifikasi', tag: 'VERI', ideology: 'Progresif', type: 'open' });
+    check('P1 mendirikan partai', rr.status === 200 && !!rr.data.partyId, `status=${rr.status}`);
+    const partyId = rr.data.partyId;
+    rr = await P1.get('/api/parties');
+    check('GET /api/parties sebagai ketua (wilayah merdeka): 200, 1 partai, seats 0, mine benar',
+      rr.status === 200 && rr.data.parties?.length === 1 && rr.data.parties[0].seats === 0 && rr.data.mine?.tag === 'VERI' && rr.data.mine?.seats === 0 && rr.data.parties[0].members === 1,
+      `status=${rr.status} seats=${rr.data.parties?.[0]?.seats} mine=${rr.data.mine?.tag}`);
+    const P2 = new PClient();
+    rr = await P2.post('/api/auth/register', { email: 'warga@pgverify.local', password: 'rahasia123', username: 'warga_pgverify' });
+    check('P2 mendaftar', rr.status === 200, `status=${rr.status}`);
+    rr = await P2.get('/api/parties');
+    check('GET /api/parties sebagai warga tanpa partai (wilayah merdeka): 200, mine null',
+      rr.status === 200 && rr.data.parties?.length === 1 && rr.data.mine === null,
+      `status=${rr.status} mine=${JSON.stringify(rr.data.mine)}`);
+    // Kursi per negara: fabrikasi negara + kursi, pindah P2 ke wilayahnya.
+    await pool.query("INSERT INTO country (id, name, ideology, system, capital, founded, treasury, treasury_usd, tax_income, tax_production, tax_import, tax_export) VALUES (9001, 'Negara Tes', 'Konservatisme', 'presidensial', 'Jakarta', '2026-11-27', 0, 0, 2, 1, 2, 2)");
+    await pool.query("UPDATE regions SET country = 'Negara Tes', country_id = 9001 WHERE id = 5");
+    await pool.query('INSERT INTO party_seats (party_id, country_id, seats) VALUES ($1, 9001, 7)', [partyId]);
+    const p2me = await P2.get('/api/me');
+    await pool.query('UPDATE citizens SET region_id = 5 WHERE id = $1', [p2me.data.citizen.id]);
+    rr = await P2.get('/api/parties');
+    check('GET /api/parties sebagai warga Negara Tes: kursi partai = 7 (per negara)',
+      rr.status === 200 && rr.data.parties?.[0]?.seats === 7,
+      `status=${rr.status} seats=${rr.data.parties?.[0]?.seats}`);
+    rr = await P1.get('/api/parties');
+    check('GET /api/parties sebagai warga merdeka: kursi partai tetap 0',
+      rr.status === 200 && rr.data.parties?.[0]?.seats === 0,
+      `status=${rr.status} seats=${rr.data.parties?.[0]?.seats}`);
+    pStop();
+  } else {
+    console.log(pServerLog);
+    pStop();
+  }
+
   await pool.end();
   console.log(`\n[pg-verify] SELESAI: ${passed} lolos, ${failed} gagal`);
   process.exit(failed ? 1 : 0);

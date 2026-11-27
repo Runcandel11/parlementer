@@ -1318,6 +1318,27 @@ async function main() {
   const seats2 = db28.prepare('SELECT seats FROM party_seats WHERE party_id = ? AND country_id = ?').get(party2Id, nusantaraId);
   check('Partai Nusantara dapat 40 kursi (2/3 suara)', seats1?.seats === 40, `kursi=${seats1?.seats}`);
   check('Partai Muda dapat 20 kursi (1/3 suara)', seats2?.seats === 20, `kursi=${seats2?.seats}`);
+  // Regresi bug live 27 Nov 2026: GET /api/parties 500 di Postgres begitu
+  // ada partai (ORDER BY "seats" ambigu: p.* sudah membawa parties.seats
+  // + alias subquery `seats`). SQLite diam-diam memilih salah satunya,
+  // jadi hanya tertangkap di Postgres — lihat pg-verify [11].
+  r = await C.get('/api/parties');
+  const pNusaC = (r.data.parties || []).find((p) => p.tag === 'NUSA');
+  const pMudaC = (r.data.parties || []).find((p) => p.tag === 'MUDA');
+  check('GET /api/parties sebagai warga Nusantara (C): 200, NUSA 40 kursi, MUDA 20 kursi, mine MUDA 20',
+    r.status === 200 && pNusaC?.seats === 40 && pMudaC?.seats === 20 && r.data.mine?.tag === 'MUDA' && r.data.mine?.seats === 20,
+    `status=${r.status} NUSA=${pNusaC?.seats} MUDA=${pMudaC?.seats} mine=${r.data.mine?.tag}/${r.data.mine?.seats}`);
+  r = await A.get('/api/parties');
+  const pNusaA = (r.data.parties || []).find((p) => p.tag === 'NUSA');
+  check('GET /api/parties sebagai ketua NUSA (A, di Nusantara): mine NUSA 40 kursi',
+    r.status === 200 && pNusaA?.seats === 40 && r.data.mine?.tag === 'NUSA' && r.data.mine?.seats === 40,
+    `status=${r.status} mine=${r.data.mine?.tag}/${r.data.mine?.seats}`);
+  r = await H.get('/api/parties');
+  const pNusaH = (r.data.parties || []).find((p) => p.tag === 'NUSA');
+  const pMudaH = (r.data.parties || []).find((p) => p.tag === 'MUDA');
+  check('GET /api/parties sebagai warga wilayah merdeka tanpa partai (H): 200, semua partai 0 kursi, mine null',
+    r.status === 200 && pNusaH?.seats === 0 && pMudaH?.seats === 0 && r.data.mine === null,
+    `status=${r.status} NUSA=${pNusaH?.seats} MUDA=${pMudaH?.seats} mine=${JSON.stringify(r.data.mine)}`);
 
   console.log('  [28d] Ideologi (klaim +7 Sosialisme) + sistem + pajak diktator');
   db28.prepare("UPDATE citizens SET last_claim_date = '' WHERE id = ?").run(eId);
