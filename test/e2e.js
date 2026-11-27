@@ -112,17 +112,17 @@ async function main() {
 
   console.log('\n[3] Klaim pasokan harian');
   r = await A.post('/api/claim');
-  check('Klaim berhasil: +5 emas, +50 USD, +2 XP', r.status === 200 && r.data.reward.gold === 5 && r.data.reward.usd === 50 && r.data.reward.xp === 2);
+  check('Klaim berhasil: +5 emas, +50 USD, +40 XP', r.status === 200 && r.data.reward.gold === 5 && r.data.reward.usd === 50 && r.data.reward.xp === 40);
   r = await A.post('/api/claim');
   check('Klaim kedua di hari yang sama ditolak', r.status === 400);
   r = await A.get('/api/me');
-  check('Saldo setelah klaim: 55 emas, 550 USD, XP 2', r.data.citizen.gold === 55 && r.data.citizen.usd === 550 && r.data.citizen.xp === 2);
+  check('Saldo setelah klaim: 55 emas, 550 USD, XP 40', r.data.citizen.gold === 55 && r.data.citizen.usd === 550 && r.data.citizen.xp === 40);
 
   console.log('\n[4] Latihan atribut');
   r = await A.post('/api/train', { attr: 'str' });
   check('Latih Kekuatan berhasil (biaya 1 emas)', r.status === 200 && r.data.cost === 1 && r.data.level === 1);
   r = await A.get('/api/me');
-  check('Emas 54, Kekuatan 1, XP 3', r.data.citizen.gold === 54 && r.data.citizen.attr_str === 1 && r.data.citizen.xp === 3);
+  check('Emas 54, Kekuatan 1, XP 60', r.data.citizen.gold === 54 && r.data.citizen.attr_str === 1 && r.data.citizen.xp === 60);
 
   console.log('\n[5] Pekerjaan ADMIN (dibayar bahan mentah) & shift');
   r = await A.get('/api/jobs');
@@ -167,7 +167,7 @@ async function main() {
   console.log('\n[6] Pasar — mulai kosong (tanpa bot)');
   r = await A.get('/api/market?scope=local');
   check('Pasar lokal: 0 penawaran', r.data.stats.offers === 0, `offers=${r.data.stats.offers}`);
-  check('15 komoditas terdaftar', r.data.commodities.length === 15);
+  check('16 komoditas terdaftar (15 + Minuman Energi v3.1.0)', r.data.commodities.length === 16);
   r = await A.get('/api/market?scope=global');
   check('Pasar Global: 0 penawaran', r.data.stats.offers === 0);
   const makanan = r.data.commodities.find((c) => c.name === 'Makanan');
@@ -471,7 +471,9 @@ async function main() {
   }
   check('Tick berjalan: hari dunia 1 → 2', day === 2, `day=${day}`);
   r = await A.get('/api/me');
-  check('Energi pulih ke 100 setelah tick', r.data.citizen.energy === 100, `energi=${r.data.citizen.energy}`);
+  // Pulih penuh ke CAP level (100 di Level 1; 105 bila A naik ke Level 2
+  // karena shift di jam ganda 00:00–01:00 WIB memberi XP ×2 — v3.1.0).
+  check('Energi pulih penuh (ke cap level) setelah tick', r.data.citizen.energy === r.data.citizen.energyCap, `energi=${r.data.citizen.energy} cap=${r.data.citizen.energyCap}`);
   check('Populasi tetap 2 (A + B)', r.data.population === 2);
 
   console.log('\n[13] Frontend & logout');
@@ -491,8 +493,10 @@ async function main() {
   const ADM = new Client();
   const NOADM = new Client();
 
-  // Naik ke Level 3 lewat jalur normal: klaim (+2 XP) + 13 latih (str×5,
-  // edu×5, eco×3 = 13 XP, biaya total 36 emas). Pendaftar mulai 50 emas,
+  // Naik ke Level 3 lewat jalur normal: klaim (+40 XP) + 13 latih (str×5,
+  // edu×5, eco×3 = 260 XP, biaya total 36 emas) = 300 XP = Level 3
+  // (100 + 200). Skala XP v3.1.0 (×20 dari 2/1 XP): kecepatan naik level
+  // tidak berubah — Level 3 tetap butuh klaim + 13 latih.
   // setelah klaim 55, setelah latih 19, setelah bonus referral cair 119.
   // Jeda latihan: reset langsung di DB (pola yang sama seperti forceTick /
   // mundurkan tanggal di bawah) supaya helper levelTo3 bisa latih
@@ -1990,7 +1994,7 @@ async function main() {
   check('app.js memuat link Discord resmi', jsText.includes('https://discord.gg/JX7DWX3pF'));
   check('Link Discord dibuka di tab baru (target _blank)', jsText.includes('target="_blank"'));
   check('Avatar chat/DM tampil 48px (dulu 36px)', jsText.includes('avatarHtml(m.avatar, m.username, 48)') && jsText.includes('avatarHtml(m.from_avatar, m.from_name, 48)'));
-  check('Foto hero profil tampil 144px (dulu 96px)', jsText.includes('avatarHtml(pr.avatar, pr.username, 144)'));
+  check('Foto hero profil memakai .profile-photo aspek asli (maks 220px, dulu 144px)', jsText.includes('profilePhotoHtml(pr.avatar, pr.username)') && jsText.includes('class="profile-photo"'));
   const cssRes = await fetch(BASE + '/css/style.css');
   const cssText = await cssRes.text();
   check('CSS: wadah avatar chat 48px + gaya status/pesan-baru ada', cssText.includes('.msg-avatar { flex: none; width: 48px; height: 48px;') && cssText.includes('.chat-status') && cssText.includes('.chat-new-pill'));
@@ -2113,6 +2117,8 @@ async function main() {
   const got50 = r.data.goods ? Number(String(r.data.goods).split('×')[0]) : -1;
   check(`Shift 50 energi: dibayar ~50% (${expect50}× ${jobL.resource})`, r.status === 200 && got50 >= expect50 - 1 && got50 <= expect50 + 1, `goods=${r.data.goods} energyUsed=${r.data.energyUsed}`);
   check('Respons shift 50 energi: energyUsed 50, energyPct 50', r.data.energyUsed === 50 && r.data.energyPct === 50, `energyUsed=${r.data.energyUsed} energyPct=${r.data.energyPct}`);
+  check('Respons shift 50 energi: xpGained 10 (proporsional)', r.data.xpGained === 10 || r.data.xpGained === 20, `xpGained=${r.data.xpGained} doubleXp=${r.data.doubleXp}`);
+  const dbl50 = r.data.doubleXp === true;
   const dbL2 = new DatabaseSync(DB_PATH);
   dbL2.prepare('UPDATE citizens SET energy = 1 WHERE id = ?').run(meL.citizen.id);
   dbL2.close();
@@ -2120,13 +2126,19 @@ async function main() {
   const got1 = r.data.goods ? Number(String(r.data.goods).split('×')[0]) : -1;
   check('Shift 1 energi: dibayar ~1% (maks 1 unit, bukan penuh)', r.status === 200 && got1 <= 1, `goods=${r.data.goods}`);
   check('Respons shift 1 energi: energyUsed 1, energyPct 1', r.data.energyUsed === 1 && r.data.energyPct === 1, `energyUsed=${r.data.energyUsed}`);
+  check('Respons shift 1 energi: xpGained 1 (minimal 1, tetap nambah)', r.data.xpGained === 1 || r.data.xpGained === 2, `xpGained=${r.data.xpGained} doubleXp=${r.data.doubleXp}`);
+  const dbl1 = r.data.doubleXp === true;
   const dbL3 = new DatabaseSync(DB_PATH);
   dbL3.prepare('UPDATE citizens SET energy = 0 WHERE id = ?').run(meL.citizen.id);
   dbL3.close();
   r = await L.post('/api/jobs/shift');
   check('Shift dengan energi 0 ditolak (400)', r.status === 400, `status=${r.status}`);
   const meL2 = (await L.get('/api/me')).data.citizen;
-  check('Shift sebagian: XP tetap 0 (XP hanya untuk shift penuh)', meL2.xp === 0, `xp=${meL2.xp}`);
+  // XP shift PROPORSIONAL (tiket #22, v3.1.0): 50 energi -> 10 XP, 1 energi
+  // -> 1 XP (minimal 1, tetap nambah). Total 11 XP — atau ×2 per shift bila
+  // tes jalan di jam ganda 00:00–01:00 WIB (flag doubleXp per respons).
+  const expectXp = (dbl50 ? 20 : 10) + (dbl1 ? 2 : 1);
+  check(`Shift sebagian: XP proporsional total ${expectXp} XP`, meL2.xp === expectXp, `xp=${meL2.xp} dbl50=${dbl50} dbl1=${dbl1}`);
   check('Shift sebagian: counter shift tetap naik (2 giliran)', meL2.shifts === 2, `shifts=${meL2.shifts}`);
   const dbL4 = new DatabaseSync(DB_PATH);
   const chronL = dbL4.prepare('SELECT chronicle_done FROM citizens WHERE id = ?').get(meL.citizen.id).chronicle_done;
@@ -2328,7 +2340,152 @@ async function main() {
     JSON.stringify((r.data.history || []).map((h) => `${h.delta}→${h.score_after}`)));
   r = await ADM.get('/api/admin/players?q=kredit_a');
   check('Daftar pemain admin menampilkan skor kredit 50', (r.data.players || [])[0]?.credit_score === 50, `skor=${(r.data.players || [])[0]?.credit_score}`);
-  dbK.close();
+  console.log('\n[22n] Fitur tiket v3.1.0 — ubah penawaran, XP proporsional/ratusan, jam ganda, konvoi bahan, minuman energi, blokir');
+  const dbN = new DatabaseSync(DB_PATH);
+  const T1 = new Client(); const T2 = new Client(); const T3 = new Client(); const T4 = new Client(); const T5 = new Client();
+  T1.extraHeaders = { 'X-Forwarded-For': '127.0.0.21' };
+  T2.extraHeaders = { 'X-Forwarded-For': '127.0.0.22' };
+  T3.extraHeaders = { 'X-Forwarded-For': '127.0.0.23' };
+  T4.extraHeaders = { 'X-Forwarded-For': '127.0.0.24' };
+  T5.extraHeaders = { 'X-Forwarded-For': '127.0.0.25' };
+  r = await T1.post('/api/auth/register', { email: 'tiket1@test.local', password: 'rahasia123', username: 'tiket_satu' });
+  check('Tiket: T1 mendaftar', r.status === 200 && r.data.ok);
+  r = await T2.post('/api/auth/register', { email: 'tiket2@test.local', password: 'rahasia123', username: 'tiket_dua' });
+  check('Tiket: T2 mendaftar', r.status === 200 && r.data.ok);
+  r = await T3.post('/api/auth/register', { email: 'tiket3@test.local', password: 'rahasia123', username: 'tiket_tiga' });
+  check('Tiket: T3 mendaftar', r.status === 200 && r.data.ok);
+  r = await T4.post('/api/auth/register', { email: 'tiket4@test.local', password: 'rahasia123', username: 'tiket_empat' });
+  check('Tiket: T4 mendaftar', r.status === 200 && r.data.ok);
+  r = await T5.post('/api/auth/register', { email: 'tiket5@test.local', password: 'rahasia123', username: 'tiket_lima' });
+  check('Tiket: T5 mendaftar', r.status === 200 && r.data.ok);
+  const meT1 = (await T1.get('/api/me')).data;
+  const meT2 = (await T2.get('/api/me')).data;
+  const meT3 = (await T3.get('/api/me')).data;
+  const meT4 = (await T4.get('/api/me')).data;
+  const comIdN = (name) => dbN.prepare('SELECT id FROM commodities WHERE name = ?').get(name)?.id;
+  const besiN = comIdN('Besi Mentah');
+  const gandumN = comIdN('Gandum Mentah');
+  const invQtyN = (citizenId, commodityId) => dbN.prepare('SELECT qty FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1').get(citizenId, commodityId)?.qty || 0;
+
+  // --- (a) #23 Ubah penawaran pasar.
+  dbN.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?)').run(meT1.citizen.id, besiN, 20);
+  r = await T1.post('/api/market/sell', { scope: 'local', commodity_id: besiN, tier: 1, qty: 10, price: 9 });
+  check('T1 pasang penawaran jual 10× Besi @9', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await T1.get('/api/market?scope=local');
+  const offerN = (r.data.mine || []).find((o) => o.commodity_id === besiN);
+  check('Penawaran T1 tampil di Penawaranku', !!offerN, JSON.stringify((r.data.mine || []).map((o) => o.id)));
+  r = await T1.patch('/api/market/offers/' + offerN.id, { qty: 15 });
+  check('Ubah penawaran: jumlah 10 → 15 (tambah 5 dari inventaris)', r.status === 200 && r.data.offer.qty === 15, `status=${r.status} qty=${r.data.offer?.qty} ${r.data.error || ''}`);
+  check('Inventaris Besi berkurang 20 → 5', invQtyN(meT1.citizen.id, besiN) === 5, `besi=${invQtyN(meT1.citizen.id, besiN)}`);
+  r = await T1.patch('/api/market/offers/' + offerN.id, { qty: 8 });
+  check('Ubah penawaran di bawah min 10 ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await T1.patch('/api/market/offers/' + offerN.id, { qty: 12 });
+  check('Ubah penawaran: jumlah 15 → 12 (3 kembali ke inventaris)', r.status === 200 && r.data.offer.qty === 12, `qty=${r.data.offer?.qty}`);
+  check('Inventaris Besi kembali 5 → 8', invQtyN(meT1.citizen.id, besiN) === 8, `besi=${invQtyN(meT1.citizen.id, besiN)}`);
+  r = await T1.patch('/api/market/offers/' + offerN.id, { price: 10 });
+  check('Ubah harga penawaran 9 → 10', r.status === 200 && eq(r.data.offer.price, 10), `price=${r.data.offer?.price}`);
+  r = await T2.patch('/api/market/offers/' + offerN.id, { qty: 11 });
+  check('Ubah penawaran orang lain ditolak (404)', r.status === 404, `status=${r.status}`);
+  r = await T1.patch('/api/market/offers/999999', { qty: 11 });
+  check('Ubah penawaran yang tidak ada ditolak (404)', r.status === 404, `status=${r.status}`);
+  r = await T2.post('/api/market/buy-order', { scope: 'local', commodity_id: besiN, tier: 1, qty: 10, price: 9 });
+  check('T2 pasang order beli 10× Besi @9 (tanpa escrow v2.3.0)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await T2.get('/api/market?scope=local');
+  const orderN = (r.data.myBuyOrders || []).find((o) => o.commodity_id === besiN);
+  check('Order beli T2 tampil di Order Beliku', !!orderN);
+  r = await T2.patch('/api/market/buy-orders/' + orderN.id, { qty: 20, price: 10 });
+  check('Ubah order beli: 10 → 20 @10', r.status === 200 && r.data.order.qty === 20 && eq(r.data.order.price, 10), `qty=${r.data.order?.qty} price=${r.data.order?.price}`);
+  r = await T2.patch('/api/market/buy-orders/' + orderN.id, { qty: 5 });
+  check('Ubah order beli di bawah min 10 ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await T1.patch('/api/market/buy-orders/' + orderN.id, { qty: 12 });
+  check('Ubah order beli orang lain ditolak (404)', r.status === 404, `status=${r.status}`);
+
+  // --- (b) #22 Threshold XP ratusan + XP shift proporsional.
+  check('Threshold baru: Level 1 butuh 100 XP (dulu 5)', meT3.citizen.level === 1 && meT3.citizen.xp === 0 && meT3.xpNext === 100, `level=${meT3.citizen.level} xp=${meT3.citizen.xp} xpNext=${meT3.xpNext}`);
+  r = await T3.post('/api/claim');
+  check('T3 klaim: +40 XP', r.status === 200 && r.data.reward.xp === 40);
+  r = await T3.post('/api/train', { attr: 'str' });
+  check('T3 latih: +20 XP', r.status === 200);
+  r = await T3.get('/api/me');
+  check('60 XP masih Level 1 di skala ratusan (skala lama: sudah Level 4+)', r.data.citizen.level === 1 && r.data.citizen.xp === 60 && r.data.xpNext === 100, `level=${r.data.citizen.level} xp=${r.data.citizen.xp}`);
+  const jobsT3 = (await T3.get('/api/jobs')).data.jobs;
+  const jobT3 = jobsT3.find((x) => x.is_admin === 1 && x.region_id === meT3.citizen.region_id);
+  check('Ada lowongan ADMIN di wilayah T3', !!jobT3);
+  r = await T3.post('/api/jobs/apply', { job_id: jobT3.id });
+  check('T3 melamar ADMIN', r.status === 200 && r.data.ok);
+  dbN.prepare('UPDATE citizens SET energy = 50 WHERE id = ?').run(meT3.citizen.id);
+  const wibHour = (new Date().getUTCHours() + 7) % 24;
+  const expectDouble = wibHour === 0;
+  r = await T3.post('/api/jobs/shift');
+  check(`Shift 50 energi: xpGained ${expectDouble ? 20 : 10} (proporsional, ${expectDouble ? 'jam ganda ×2' : 'di luar jam ganda'})`, r.status === 200 && r.data.xpGained === (expectDouble ? 20 : 10), `xpGained=${r.data.xpGained} doubleXp=${r.data.doubleXp} jamWIB=${wibHour}`);
+  check('Flag doubleXp shift cocok dengan jam WIB sekarang', r.data.doubleXp === expectDouble, `doubleXp=${r.data.doubleXp} jamWIB=${wibHour}`);
+  r = await T3.get('/api/me');
+  check('XP T3 total 60 + shift = 70 (atau 80 di jam ganda)', r.data.citizen.xp === (expectDouble ? 80 : 70), `xp=${r.data.citizen.xp}`);
+
+  // --- (c) #20 Konvoi dibayar bahan, bukan emas.
+  r = await T4.get('/api/convoy');
+  const healthB = (r.data.buildings || []).find((b) => b.type === 'health');
+  check('Resep RS Lapangan: 20 Gandum + 30 Besi (ditampilkan di API)', !!healthB && healthB.cost.length === 2
+    && healthB.cost.some((c) => c.name === 'Gandum Mentah' && c.qty === 20)
+    && healthB.cost.some((c) => c.name === 'Besi Mentah' && c.qty === 30),
+    JSON.stringify(healthB?.cost));
+  check('Resep menampilkan jumlah yang dimiliki (0/20, 0/30)', !!healthB && healthB.cost.every((c) => c.owned === 0));
+  r = await T4.post('/api/convoy/build', { building: 'health' });
+  check('Bangun konvoi tanpa bahan ditolak 400 + pesan jelas', r.status === 400 && /Bahan tidak cukup/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  dbN.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?)').run(meT4.citizen.id, gandumN, 20);
+  dbN.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?)').run(meT4.citizen.id, besiN, 30);
+  r = await T4.post('/api/convoy/build', { building: 'health' });
+  check('Bangun RS Lapangan dengan bahan cukup berhasil', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await T4.get('/api/me');
+  check('Emas T4 tetap 50 (konvoi tidak lagi pakai emas)', r.data.citizen.gold === 50, `emas=${r.data.citizen.gold}`);
+  check('Bahan terpotong habis: Gandum 0, Besi 0', invQtyN(meT4.citizen.id, gandumN) === 0 && invQtyN(meT4.citizen.id, besiN) === 0,
+    `gandum=${invQtyN(meT4.citizen.id, gandumN)} besi=${invQtyN(meT4.citizen.id, besiN)}`);
+  r = await T4.get('/api/convoy');
+  check('Konvoi RS Lapangan terdaftar di /api/convoy', (r.data.convoys || []).some((c) => c.building === 'health'));
+  r = await T4.post('/api/convoy/build', { building: 'health' });
+  check('Bangun jenis yang sama 2× ditolak (400)', r.status === 400, `status=${r.status}`);
+
+  // --- (d) #17 Minuman Energi: beli 0,10 emas, minum +1, cap energi.
+  r = await T4.post('/api/shop/energy-drink', { qty: 0 });
+  check('Beli 0 kaleng ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await T4.post('/api/shop/energy-drink', { qty: 101 });
+  check('Beli 101 kaleng ditolak (400, maks 100)', r.status === 400, `status=${r.status}`);
+  r = await T4.post('/api/shop/energy-drink', { qty: 10 });
+  check('Beli 10 kaleng: bayar 1 emas (10 × 0,10)', r.status === 200 && r.data.qty === 10 && eq(r.data.cost, 1), `cost=${r.data.cost} ${r.data.error || ''}`);
+  r = await T4.get('/api/me');
+  check('Emas T4 50 → 49 setelah beli minuman', r.data.citizen.gold === 49, `emas=${r.data.citizen.gold}`);
+  r = await T4.get('/api/inventory');
+  const drinkItem = (r.data.items || []).find((i) => i.name === 'Minuman Energi');
+  check('Inventaris lengkap: 10× Minuman Energi tercatat', !!drinkItem && drinkItem.qty === 10, `qty=${drinkItem?.qty}`);
+  check('Inventaris lengkap: barang awal (Makanan, Senjata, Tiket) tetap ada', ['Makanan', 'Senjata', 'Tiket'].every((n) => (r.data.items || []).some((i) => i.name === n)));
+  // Cap energi T4 = 110 (100 + 10 RS Lapangan yang baru dibangun) — bukan
+  // 100. Set energy_updated_at = sekarang supaya regen malas tidak
+  // menambah energi sebelum request minum.
+  dbN.prepare('UPDATE citizens SET energy = 109, energy_updated_at = ? WHERE id = ?').run(Date.now(), meT4.citizen.id);
+  r = await T4.post('/api/inventory/drink', { qty: 5 });
+  check('Minum 5 kaleng di energi 109: hanya +1 (cap 110), sisa 9 kaleng', r.status === 200 && r.data.gained === 1 && r.data.energy === 110 && r.data.remaining === 9,
+    `gained=${r.data.gained} energy=${r.data.energy} remaining=${r.data.remaining}`);
+  r = await T4.post('/api/inventory/drink', { qty: 1 });
+  check('Minum saat energi penuh ditolak (400)', r.status === 400, `status=${r.status}`);
+  dbN.prepare('UPDATE citizens SET energy = 50, energy_updated_at = ? WHERE id = ?').run(Date.now(), (await T5.get('/api/me')).data.citizen.id);
+  r = await T5.post('/api/inventory/drink', { qty: 1 });
+  check('Minum tanpa kaleng ditolak (400)', r.status === 400 && /Tidak ada Minuman Energi/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+
+  // --- (e) #14 Daftar blokir + buka blokir.
+  r = await T1.post('/api/chat/block', { citizen_id: meT2.citizen.id });
+  check('T1 memblokir T2', r.status === 200 && r.data.ok);
+  r = await T1.post('/api/chat/block', { citizen_id: meT2.citizen.id });
+  check('Blokir 2× tetap 200 (idempotent)', r.status === 200);
+  r = await T1.post('/api/chat/block', { citizen_id: meT1.citizen.id });
+  check('Blokir diri sendiri ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await T1.get('/api/chat/blocked');
+  check('Daftar blokir T1 berisi T2 (nama + id)', (r.data.blocked || []).some((b) => b.citizen_id === meT2.citizen.id && b.username === 'tiket_dua'),
+    JSON.stringify(r.data.blocked));
+  r = await T1.post('/api/chat/unblock', { citizen_id: meT2.citizen.id });
+  check('T1 membuka blokir T2', r.status === 200 && r.data.ok);
+  r = await T1.get('/api/chat/blocked');
+  check('Daftar blokir kosong setelah buka blokir', (r.data.blocked || []).length === 0, `n=${(r.data.blocked || []).length}`);
+  dbN.close();
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

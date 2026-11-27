@@ -58,7 +58,7 @@ async function main() {
   const regions = await pool.query('SELECT COUNT(*) AS n FROM regions');
   check('Seed wilayah: 17', Number(regions.rows[0].n) === 17, `n=${regions.rows[0].n}`);
   const coms = await pool.query('SELECT COUNT(*) AS n FROM commodities');
-  check('Seed komoditas: 15', Number(coms.rows[0].n) === 15);
+  check('Seed komoditas: 16 (15 + Minuman Energi v3.1.0)', Number(coms.rows[0].n) === 16);
   const jobs = await pool.query('SELECT COUNT(*) AS n FROM jobs WHERE is_admin = 1');
   check('Seed lowongan ADMIN: 18 (satu per wilayah, Kepri 2)', Number(jobs.rows[0].n) === 18, `n=${jobs.rows[0].n}`);
   const jobRegions = await pool.query('SELECT COUNT(DISTINCT region_id) AS n FROM jobs WHERE is_admin = 1');
@@ -235,7 +235,7 @@ async function main() {
   // steady state hanya baca penanda (tanpa lock/DDL); migrasi penuh hanya
   // bila penanda dihapus / versi lama.
   const ver = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Penanda versi skema = 13', ver.rows[0]?.value === '13', `value=${ver.rows[0]?.value}`);
+  check('Penanda versi skema = 14', ver.rows[0]?.value === '14', `value=${ver.rows[0]?.value}`);
   const t9a = Date.now();
   await Promise.all([initDb(), initDb(), initDb(), initDb(), initDb()]);
   const t9b = Date.now() - t9a;
@@ -302,7 +302,7 @@ async function main() {
   const archive = await pool.query("SELECT kind, currency, amount FROM treasury_tx WHERE kind = 'pembubaran' ORDER BY created_at");
   check('Migrasi: kas RI diarsip sebagai treasury_tx pembubaran (−100 emas, −50 USD)', archive.rows.length === 2 && archive.rows.some((r) => r.currency === 'gold' && Number(r.amount) === -100) && archive.rows.some((r) => r.currency === 'usd' && Number(r.amount) === -50), JSON.stringify(archive.rows));
   const ver10 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 13', ver10.rows[0]?.value === '13', `value=${ver10.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 14', ver10.rows[0]?.value === '14', `value=${ver10.rows[0]?.value}`);
 
   console.log('\n[11] Regresi bug Partai — GET /api/parties di Postgres (ORDER BY ambigu)');
   // Bug live 27 Nov 2026: begitu ada ≥1 partai, GET /api/parties 500 di
@@ -400,7 +400,7 @@ async function main() {
   const tCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('travel_to_region_id', 'travel_arrives_at', 'home_changed_at')");
   check('Migrasi: kolom perjalanan ditambah kembali', Number(tCols2.rows[0].n) === 3, `n=${tCols2.rows[0].n}`);
   const ver11 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 13', ver11.rows[0]?.value === '13', `value=${ver11.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 14', ver11.rows[0]?.value === '14', `value=${ver11.rows[0]?.value}`);
 
   console.log('\n[12b] Perusahaan v2.4.0 — migrasi v12 (foto + bonus shift)');
   const coCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'companies' AND column_name IN ('photo', 'photo_sm', 'bonus_credit', 'bonus_given', 'bonus_warned_at')");
@@ -413,7 +413,7 @@ async function main() {
   const coCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'companies' AND column_name IN ('photo', 'photo_sm', 'bonus_credit', 'bonus_given', 'bonus_warned_at')");
   check('Migrasi: kolom perusahaan ditambah kembali', Number(coCols2.rows[0].n) === 5, `n=${coCols2.rows[0].n}`);
   const ver12 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 13', ver12.rows[0]?.value === '13', `value=${ver12.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 14', ver12.rows[0]?.value === '14', `value=${ver12.rows[0]?.value}`);
 
   console.log('\n[12c] Kredit skor v3.0.0 — migrasi v13 (kolom skor + verdict + riwayat)');
   const crCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('credit_score', 'credit_updated_at')");
@@ -429,7 +429,27 @@ async function main() {
   const crCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('credit_score', 'credit_updated_at')");
   check('Migrasi: kolom kredit skor ditambah kembali', Number(crCols2.rows[0].n) === 2, `n=${crCols2.rows[0].n}`);
   const ver13 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 13', ver13.rows[0]?.value === '13', `value=${ver13.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 14', ver13.rows[0]?.value === '14', `value=${ver13.rows[0]?.value}`);
+
+  console.log('\n[12d] Fitur tiket v3.1.0 — migrasi v14 (Minuman Energi + skala XP ×20)');
+  const drinkRow = await pool.query("SELECT ref_usd, ref_gold, category FROM commodities WHERE name = 'Minuman Energi'");
+  check('Komoditas Minuman Energi ada di seed (Perbekalan, 1,83 USD / 0,10 emas)', drinkRow.rowCount === 1
+    && drinkRow.rows[0].category === 'Perbekalan' && Number(drinkRow.rows[0].ref_gold) === 0.1 && Number(drinkRow.rows[0].ref_usd) === 1.83,
+    JSON.stringify(drinkRow.rows[0]));
+  // Migrasi skala XP: warga lama dengan XP skala lama (mis. 7 XP) harus
+  // dikali 20 (→ 140) supaya tidak kehilangan progres saat threshold naik
+  // dari level×5 menjadi level×100. Warga dengan XP 0 tidak berubah.
+  await pool.query("INSERT INTO users (id, email, username, pass_hash, created_at) VALUES (999003, 'xp@test.local', 'warga_xp', 'x', 0)");
+  await pool.query("INSERT INTO citizens (id, user_id, region_id, home_region_id, xp, created_at) VALUES (999003, 999003, 1, 1, 7, 0)");
+  await pool.query("INSERT INTO users (id, email, username, pass_hash, created_at) VALUES (999004, 'xp0@test.local', 'warga_xp0', 'x', 0)");
+  await pool.query("INSERT INTO citizens (id, user_id, region_id, home_region_id, xp, created_at) VALUES (999004, 999004, 1, 1, 0, 0)");
+  await resetVersion();
+  await initDb();
+  const xpRows = await pool.query('SELECT id, xp FROM citizens WHERE id IN (999003, 999004) ORDER BY id');
+  check('Migrasi: XP lama 7 → 140 (×20, progres tidak hilang)', xpRows.rows[0]?.xp === 140, `xp=${xpRows.rows[0]?.xp}`);
+  check('Migrasi: XP 0 tetap 0', xpRows.rows[1]?.xp === 0, `xp=${xpRows.rows[1]?.xp}`);
+  const ver14 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
+  check('Versi skema setelah migrasi = 14', ver14.rows[0]?.value === '14', `value=${ver14.rows[0]?.value}`);
   // Aturan durasi (unit, tanpa server): Kepri → Jakarta ±830 km = 10 mnt;
   // Jakarta → Bandung ±116 km = 3 mnt; terjauh dipangkas ke 30 mnt.
   const { travelMinutesFor } = await import('../src/game.js');

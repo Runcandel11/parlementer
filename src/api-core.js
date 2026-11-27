@@ -12,10 +12,11 @@ import { dbRateLimit } from './rate-limit.js';
 import { getMyCountry, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary } from './api-civic.js';
 import {
   VERSION, WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
-  xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
+  xpForLevel, isDoubleXpHour, xpGainForShiftEnergy, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
   energyCapFor, DAILY_MISSIONS, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS, REGION_COORDS,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, FACTORY_INPUT, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
+  ENERGY_DRINK_NAME, ENERGY_DRINK_PRICE_GOLD, ENERGY_DRINK_ENERGY,
   PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
 } from './game.js';
 
@@ -483,9 +484,9 @@ export function registerCore(app) {
       if (!upd.changes) throw Object.assign(new Error('Pasokan hari ini sudah diambil. Kembali besok.'), { status: 400 });
       return { row, bonus };
     });
-    await addXp(locked.row, 2);
+    await addXp(locked.row, 40);
     await chronicleDone(locked.row, 'claim');
-    res.json({ ok: true, reward: { gold: 5 + locked.bonus, usd: 50, xp: 2 }, budgetBonus: locked.bonus > 0 });
+    res.json({ ok: true, reward: { gold: 5 + locked.bonus, usd: 50, xp: 40 }, budgetBonus: locked.bonus > 0 });
   }));
 
   app.post('/api/train', authRequired, citizenRequired, r(async (req, res) => {
@@ -522,7 +523,7 @@ export function registerCore(app) {
       if (!upd.changes) throw Object.assign(new Error(`Butuh ${cost} emas untuk latihan ini.`), { status: 400 });
       return { row, cost };
     });
-    await addXp(done.row, 1);
+    await addXp(done.row, 20);
     await chronicleDone(done.row, 'train');
     const newLevel = done.row[col] + 1;
     const cooldownMs = trainCooldownMs(newLevel);
@@ -552,6 +553,52 @@ export function registerCore(app) {
     await setMission(result.locked, 'bread', Math.min(10, (m.bread || 0) + 1));
     await chronicleDone(result.locked, 'eat');
     res.json({ ok: true, energy: result.energy, gained: result.gained });
+  }));
+
+  // ---------- MINUMAN ENERGI (tiket #17 LIO, v3.1.0) ----------
+  // Kaleng Minuman Energi: beli di Inventaris 0,10 emas/kaleng, sekali
+  // minum +1 energi (dibatasi cap energi pemain). Beli: emas dipotong
+  // atomik (UPDATE bersyarat + cek changes); minum: kaleng diambil dari
+  // inventaris + energi naik, tidak melebihi cap.
+  app.post('/api/shop/energy-drink', authRequired, citizenRequired, r(async (req, res) => {
+    const rawQty = Number((req.body || {}).qty);
+    if (!Number.isInteger(rawQty) || rawQty < 1 || rawQty > 100) return res.status(400).json({ error: 'Jumlah 1–100 kaleng.' });
+    const qty = rawQty;
+    const cost = Math.round(ENERGY_DRINK_PRICE_GOLD * qty * 100) / 100;
+    const drink = await one('SELECT id FROM commodities WHERE name = ?', [ENERGY_DRINK_NAME]);
+    if (!drink) return res.status(500).json({ error: 'Minuman Energi belum tersedia.' });
+    const bought = await tx(async (t) => {
+      const upd = await t.run('UPDATE citizens SET gold = gold - ? WHERE id = ? AND gold >= ?', [cost, req.citizen.id, cost]);
+      if (!upd.changes) throw Object.assign(new Error(`Butuh ${cost} emas untuk ${qty} kaleng Minuman Energi.`), { status: 400 });
+      await addItem(req.citizen.id, drink.id, 1, qty, t);
+      return qty;
+    });
+    res.json({ ok: true, qty: bought, cost, priceEach: ENERGY_DRINK_PRICE_GOLD });
+  }));
+
+  app.post('/api/inventory/drink', authRequired, citizenRequired, r(async (req, res) => {
+    const rawQty = Number((req.body || {}).qty);
+    if (!Number.isInteger(rawQty) || rawQty < 1 || rawQty > 100) return res.status(400).json({ error: 'Jumlah 1–100 kaleng.' });
+    const qty = rawQty;
+    const drink = await one('SELECT id FROM commodities WHERE name = ?', [ENERGY_DRINK_NAME]);
+    if (!drink) return res.status(500).json({ error: 'Minuman Energi belum tersedia.' });
+    const result = await tx(async (t) => {
+      const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      const buildings = await convoyBuildings(locked.id, t);
+      const cap = energyCapFor(locked.level, locked.premium_until > Date.now(), buildings.has('health'));
+      const room = cap - locked.energy;
+      if (room <= 0) throw Object.assign(new Error('Energi sudah penuh.'), { status: 400 });
+      const stock = await t.one('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1', [locked.id, drink.id]);
+      const have = stock?.qty || 0;
+      if (have <= 0) throw Object.assign(new Error('Tidak ada Minuman Energi di inventaris. Beli dulu di bawah.'), { status: 400 });
+      const drinkQty = Math.min(qty, have, room);
+      const ok = await takeItem(locked.id, drink.id, 1, drinkQty, t);
+      if (!ok) throw Object.assign(new Error('Tidak ada Minuman Energi di inventaris.'), { status: 400 });
+      const energy = locked.energy + drinkQty * ENERGY_DRINK_ENERGY;
+      await t.run('UPDATE citizens SET energy = ? WHERE id = ?', [energy, locked.id]);
+      return { energy, gained: drinkQty * ENERGY_DRINK_ENERGY, drank: drinkQty, remaining: have - drinkQty, cap };
+    });
+    res.json({ ok: true, ...result });
   }));
 
   // ---------- MISI HARIAN ----------
@@ -954,13 +1001,17 @@ export function registerCore(app) {
       await t.run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), c.id]);
       return { used, fraction: used / 100, full: used === 100, fatigue: locked.fatigue, eco: locked.attr_eco };
     }
-    // XP + tugas Kronik "Kerjakan satu giliran" hanya untuk shift PENUH
-    // (100 energi) — kalau shift 1 energi ikut menyelesaikannya, itu
-    // exploit hadiah Kronik.
+    // XP PROPORSIONAL (tiket #22 LIO, v3.1.0): tiap shift memberi XP
+    // sebanding energi yang dipakai — 50 energi -> 10 XP, 1 energi ->
+    // minimal 1 XP (tetap nambah, bukan 0). Jam ganda 00:00–01:00 WIB
+    // (tiket #21): XP shift ×2. Tugas Kronik "Kerjakan satu giliran"
+    // TETAP hanya untuk shift PENUH (100 energi) — kalau shift 1 energi
+    // ikut menyelesaikannya, itu exploit hadiah Kronik.
     async function rewardShift(spent) {
-      if (!spent.full) return;
-      await addXp(c, xpGainForShift());
-      await chronicleDone(c, 'shift');
+      const xpGained = xpGainForShiftEnergy(spent.used);
+      await addXp(c, xpGained);
+      if (spent.full) await chronicleDone(c, 'shift');
+      return { xpGained, doubleXp: isDoubleXpHour() };
     }
     const shiftPrefix = (spent) => spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%): `;
     const bonusNote = (bonus) => {
@@ -1040,8 +1091,8 @@ export function registerCore(app) {
       });
       const usdValue = Math.round(spent.qty * com.ref_usd * 100) / 100;
       const note = `${shiftPrefix(spent)}Dibayar ${spent.qty}× ${job.resource} (setara ~${fmtRp(usdValue)}).`;
-      await rewardShift(spent);
-      return res.json({ ok: true, gross: usdValue, net: 0, tax: 0, goods: `${spent.qty}× ${job.resource}`, note, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
+      const xp = await rewardShift(spent);
+      return res.json({ ok: true, gross: usdValue, net: 0, tax: 0, goods: `${spent.qty}× ${job.resource}`, note: xp.doubleXp ? `${note} 🌙 Jam ganda: XP ×2!` : note, xpGained: xp.xpGained, doubleXp: xp.doubleXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
     }
     if (job.salary_type === 'share') {
       // Bagi hasil: 80–98% dibayar dalam bentuk barang (sumber daya perusahaan).
@@ -1058,8 +1109,8 @@ export function registerCore(app) {
         return { ...s, gross, units, bonus };
       });
       goodsNote = `${shiftPrefix(spent)}Dibayar ${spent.units}× ${resource} (bagi hasil ${pct}%).${bonusNote(spent.bonus)}`;
-      await rewardShift(spent);
-      return res.json({ ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, note: goodsNote, companyBonus: spent.bonus || null, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
+      const xp = await rewardShift(spent);
+      return res.json({ ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, note: xp.doubleXp ? `${goodsNote} 🌙 Jam ganda: XP ×2!` : goodsNote, companyBonus: spent.bonus || null, xpGained: xp.xpGained, doubleXp: xp.doubleXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
     }
     const spent = await tx(async (t) => {
       const s = await spendEnergy(t);
@@ -1070,8 +1121,9 @@ export function registerCore(app) {
       const bonus = await grantCompanyShiftBonus(t, job, s, c);
       return { ...s, gross: scaledGross, net: scaledNet, tax: Math.round(scaledGross * taxRate * 100) / 100, bonus };
     });
-    await rewardShift(spent);
-    res.json({ ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, note: `${spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%).`}${bonusNote(spent.bonus)}`.trim(), companyBonus: spent.bonus || null, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
+    const xp = await rewardShift(spent);
+    const baseNote = `${spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%).`}${bonusNote(spent.bonus)}`.trim();
+    res.json({ ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, note: xp.doubleXp ? `${baseNote} 🌙 Jam ganda: XP ×2!`.trim() : baseNote, companyBonus: spent.bonus || null, xpGained: xp.xpGained, doubleXp: xp.doubleXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
   }));
 
   // ---------- PERUSAHAAN ----------
@@ -1366,6 +1418,45 @@ export function registerCore(app) {
     res.json({ ok: true });
   }));
 
+  // ---------- UBAH PENAWARAN (tiket #23 LIO, v3.1.0) ----------
+  // "Penawaranku" selama ini hanya bisa dibatalkan — kini bisa diubah
+  // tanpa batalkan dulu: tambah/kurangi jumlah dan/atau ubah harga.
+  // Jumlah naik -> selisih diambil dari inventaris; jumlah turun ->
+  // selisih kembali ke inventaris. Harga berubah -> cek batas wajar
+  // (seperti pasang penawaran baru). Hanya pemilik (bukan pemilik -> 404,
+  // pola yang sama seperti cancel). Jumlah hasil akhir >= MIN_OFFER_QTY.
+  app.patch('/api/market/offers/:id', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.market, 'bertransaksi di pasar'), r(async (req, res) => {
+    const { qty, price } = req.body || {};
+    const offerId = Number(req.params.id);
+    const newQty = qty === undefined ? null : Math.floor(Number(qty));
+    const newPrice = price === undefined ? null : Number(price);
+    if (newQty !== null && (!Number.isFinite(newQty) || newQty < MIN_OFFER_QTY)) return res.status(400).json({ error: `Jumlah penawaran minimum ${MIN_OFFER_QTY} unit.` });
+    if (newPrice !== null && (!Number.isFinite(newPrice) || newPrice <= 0)) return res.status(400).json({ error: 'Harga harus lebih dari 0.' });
+    if (newQty === null && newPrice === null) return res.status(400).json({ error: 'Tidak ada perubahan (isi jumlah dan/atau harga baru).' });
+    if (newPrice !== null) {
+      const offer0 = await one('SELECT * FROM market_offers WHERE id = ? AND seller_id = ?', [offerId, req.citizen.id]);
+      if (!offer0) return res.status(404).json({ error: 'Penawaran tidak ditemukan.' });
+      const bad = await enforcePriceBand(offer0.commodity_id, offer0.tier, newPrice, req.citizen.id);
+      if (bad) return res.status(400).json({ error: `Harga di luar batas wajar (median 14 hari ${bad.median.toFixed(2)} — batas ${bad.lo.toFixed(2)}–${bad.hi.toFixed(2)}).` });
+    }
+    const updated = await tx(async (t) => {
+      const offer = await t.one(forUpdate('SELECT * FROM market_offers WHERE id = ? AND seller_id = ?'), [offerId, req.citizen.id]);
+      if (!offer) throw Object.assign(new Error('Penawaran tidak ditemukan.'), { status: 404 });
+      const qty2 = newQty ?? offer.qty;
+      const price2 = newPrice ?? offer.price;
+      if (qty2 > offer.qty) {
+        const ok = await takeItem(req.citizen.id, offer.commodity_id, offer.tier, qty2 - offer.qty, t);
+        if (!ok) throw Object.assign(new Error('Jumlah di inventaris tidak mencukupi untuk menambah penawaran.'), { status: 400 });
+      } else if (qty2 < offer.qty) {
+        await addItem(req.citizen.id, offer.commodity_id, offer.tier, offer.qty - qty2, t);
+      }
+      const upd = await t.run('UPDATE market_offers SET qty = ?, price = ? WHERE id = ? AND qty = ?', [qty2, price2, offer.id, offer.qty]);
+      if (!upd.changes) throw Object.assign(new Error('Penawaran sudah berubah.'), { status: 400 });
+      return { ...offer, qty: qty2, price: price2 };
+    });
+    res.json({ ok: true, offer: updated });
+  }));
+
   // ---------- ORDER BELI / ORDER BOOK (Tahap 4) ----------
   // Dana TIDAK dikunci saat order dipasang (aturan pemilik 28 Nov 2026):
   // pembeli baru dipotong saat ada penjual yang memenuhi order lewat
@@ -1458,6 +1549,37 @@ export function registerCore(app) {
       return { refund: 0, currency };
     });
     res.json({ ok: true, ...result });
+  }));
+
+  // Ubah order beli (tiket #23 LIO, v3.1.0): jumlah dan/atau harga.
+  // Tanpa escrow (aturan v2.3.0) tidak ada dana yang perlu disesuaikan —
+  // cukup ubah barisnya. Jumlah tidak boleh di bawah yang sudah terpenuhi
+  // (qty_filled) dan tetap >= MIN_OFFER_QTY. Hanya pemilik (404).
+  app.patch('/api/market/buy-orders/:id', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.market, 'bertransaksi di pasar'), r(async (req, res) => {
+    const { qty, price } = req.body || {};
+    const orderId = Number(req.params.id);
+    const newQty = qty === undefined ? null : Math.floor(Number(qty));
+    const newPrice = price === undefined ? null : Number(price);
+    if (newQty !== null && (!Number.isFinite(newQty) || newQty < MIN_OFFER_QTY)) return res.status(400).json({ error: `Order beli minimum ${MIN_OFFER_QTY} unit.` });
+    if (newPrice !== null && (!Number.isFinite(newPrice) || newPrice <= 0)) return res.status(400).json({ error: 'Harga harus lebih dari 0.' });
+    if (newQty === null && newPrice === null) return res.status(400).json({ error: 'Tidak ada perubahan (isi jumlah dan/atau harga baru).' });
+    if (newPrice !== null) {
+      const order0 = await one('SELECT * FROM market_buy_orders WHERE id = ? AND buyer_id = ?', [orderId, req.citizen.id]);
+      if (!order0) return res.status(404).json({ error: 'Order beli tidak ditemukan.' });
+      const bad = await enforcePriceBand(order0.commodity_id, order0.tier, newPrice, req.citizen.id);
+      if (bad) return res.status(400).json({ error: `Harga di luar batas wajar (median 14 hari ${bad.median.toFixed(2)} — batas ${bad.lo.toFixed(2)}–${bad.hi.toFixed(2)}).` });
+    }
+    const updated = await tx(async (t) => {
+      const order = await t.one(forUpdate('SELECT * FROM market_buy_orders WHERE id = ? AND buyer_id = ?'), [orderId, req.citizen.id]);
+      if (!order) throw Object.assign(new Error('Order beli tidak ditemukan.'), { status: 404 });
+      const qty2 = newQty ?? order.qty;
+      const price2 = newPrice ?? order.price;
+      if (qty2 < order.qty_filled) throw Object.assign(new Error(`Jumlah tidak boleh di bawah ${order.qty_filled} unit yang sudah terpenuhi.`), { status: 400 });
+      const upd = await t.run('UPDATE market_buy_orders SET qty = ?, price = ? WHERE id = ? AND qty = ? AND qty_filled = ?', [qty2, price2, order.id, order.qty, order.qty_filled]);
+      if (!upd.changes) throw Object.assign(new Error('Order beli sudah berubah.'), { status: 400 });
+      return { ...order, qty: qty2, price: price2 };
+    });
+    res.json({ ok: true, order: updated });
   }));
 
   // ---------- VALAS ----------
@@ -1727,7 +1849,15 @@ export function registerCore(app) {
     const c = req.citizen;
     const slots = 1 + (c.level >= 25 ? 1 : 0) + (c.level >= 50 ? 1 : 0) + (c.level >= 100 ? 1 : 0) + (c.premium_until > Date.now() ? 1 : 0);
     const rows = await sql('SELECT * FROM convoys WHERE citizen_id = ? ORDER BY slot', [c.id]);
-    res.json({ slots, used: rows.length, convoys: rows, buildings: CONVOY_BUILDINGS });
+    // Jumlah bahan yang dimiliki per resep (tiket #20): UI menampilkan
+    // "punya X / butuh Y" sebelum membangun.
+    const inv = await sql('SELECT i.qty, c.name FROM inventory i JOIN commodities c ON c.id = i.commodity_id WHERE i.citizen_id = ? AND i.tier = 1', [c.id]);
+    const owned = Object.fromEntries(inv.map((x) => [x.name, x.qty]));
+    const buildings = CONVOY_BUILDINGS.map((b) => ({
+      ...b,
+      cost: b.cost.map((it) => ({ ...it, owned: owned[it.name] || 0 })),
+    }));
+    res.json({ slots, used: rows.length, convoys: rows, buildings });
   }));
 
   app.post('/api/convoy/build', authRequired, citizenRequired, r(async (req, res) => {
@@ -1736,14 +1866,29 @@ export function registerCore(app) {
     if (!def) return res.status(400).json({ error: 'Bangunan tidak dikenal.' });
     const c = req.citizen;
     const slots = 1 + (c.level >= 25 ? 1 : 0) + (c.level >= 50 ? 1 : 0) + (c.level >= 100 ? 1 : 0) + (c.premium_until > Date.now() ? 1 : 0);
-    // Atomik: kunci baris warga, cek slot + potong emas bersyarat di dalam tx.
+    // Biaya BAHAN (tiket #20 LIO, v3.1.0) — bukan lagi 10 emas. Atomik:
+    // kunci baris warga, cek slot + cek SEMUA bahan dulu, baru potong
+    // semuanya; bila satu bahan kurang, tidak ada yang terpotong.
     const convoyId = await tx(async (t) => {
       await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
       const existing = await t.sql('SELECT * FROM convoys WHERE citizen_id = ?', [c.id]);
       if (existing.length >= slots) throw Object.assign(new Error('Slot konvoi penuh. Naik level / Premium untuk slot tambahan.'), { status: 400 });
       if (existing.some((x) => x.building === building)) throw Object.assign(new Error('Satu bangunan per jenis dalam satu waktu.'), { status: 400 });
-      const upd = await t.run('UPDATE citizens SET gold = gold - 10 WHERE id = ? AND gold >= 10', [c.id]);
-      if (!upd.changes) throw Object.assign(new Error('Membangun konvoi butuh 10 emas.'), { status: 400 });
+      const missing = [];
+      const items = [];
+      for (const it of def.cost) {
+        const com = await t.one('SELECT * FROM commodities WHERE name = ?', [it.name]);
+        if (!com) throw Object.assign(new Error(`Bahan ${it.name} tidak dikenal.`), { status: 500 });
+        const stock = await t.one(forUpdate('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1'), [c.id, com.id]);
+        const have = stock?.qty || 0;
+        if (have < it.qty) missing.push(`${it.name} ${have}/${it.qty}`);
+        items.push({ com, stock, qty: it.qty });
+      }
+      if (missing.length) throw Object.assign(new Error(`Bahan tidak cukup: ${missing.join(', ')}.`), { status: 400 });
+      for (const it of items) {
+        const ok = await takeItem(c.id, it.com.id, 1, it.qty, t);
+        if (!ok) throw Object.assign(new Error('Bahan tidak cukup.'), { status: 400 });
+      }
       const slot = existing.length;
       const cv = await t.run('INSERT INTO convoys (citizen_id, slot, building, region_id, expires_at, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
         [c.id, slot, building, c.region_id, Date.now() + 7 * 24 * 60 * 60 * 1000, Date.now()]);

@@ -301,6 +301,9 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 
 /* ---------- avatar ---------- */
 .avatar-img { border-radius: 50%; object-fit: cover; display: block; flex: none; }
+/* Foto profil besar di halaman profil (tiket #11, v3.1.0): tampil dengan
+   aspek asli (contain), bukan lingkaran crop — maks 220px. */
+.profile-photo { display: block; width: auto; max-width: 220px; max-height: 220px; height: auto; object-fit: contain; border-radius: 12px; border: 2px solid var(--gold-dim); background: #0a0f1c; }
 .avatar-initial { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: linear-gradient(135deg, #22345c, #101a30); border: 1px solid var(--gold-dim); color: var(--gold-bright); font-family: 'Oswald', sans-serif; font-weight: 700; flex: none; }
 .msg-avatar { overflow: hidden; }
 .profile-avatar-row { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 8px; flex-wrap: wrap; }

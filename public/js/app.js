@@ -43,6 +43,28 @@ const avatarHtml = (avatar, username, size = 40) => avatar
   ? `<img src="${esc(avatar)}" class="avatar-img" style="width:${size}px;height:${size}px" alt="">`
   : `<span class="avatar-initial" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px">${esc((username || '?')[0].toUpperCase())}</span>`;
 
+// Jam ganda XP (tiket #21, v3.1.0): 00:00–01:00 WIB shift memberi XP ×2.
+// Server memakai aturan yang sama (isDoubleXpHour di src/game.js — jam UTC
+// + 7); di sini dihitung dari zona Asia/Jakarta supaya chip tampil tepat
+// walau jam perangkat pemain melenceng dari WIB.
+function wibHourNow() {
+  try {
+    const h = Number(new Intl.DateTimeFormat('id-ID', { timeZone: 'Asia/Jakarta', hour: 'numeric', hour12: false }).format(new Date()));
+    return h === 24 ? 0 : h; // beberapa implementasi Intl menulis tengah malam sebagai 24
+  } catch { return new Date().getHours(); }
+}
+function isDoubleXpNow() { return wibHourNow() === 0; }
+function doubleXpChip() { return isDoubleXpNow() ? `<p class="small" style="color:#ffd700">🌙 <b>JAM GANDA XP ×2</b> — sekarang (00:00–01:00 WIB)! Shift apa pun memberi XP dua kali lipat.</p>` : ''; }
+
+// Foto profil: tampil BESAR dengan aspek asli (tiket #11 LIO, v3.1.0) —
+// bukan lingkaran kecil yang memotong foto. Avatar lama (kotak 256×256)
+// tetap tampil normal sebagai kotak. Bila belum ada foto, inisial 144px.
+function profilePhotoHtml(avatar, username) {
+  return avatar
+    ? `<img src="${esc(avatar)}" class="profile-photo" alt="Foto profil ${esc(username || '')}">`
+    : `<span class="avatar-initial" style="width:144px;height:144px;font-size:65px">${esc((username || '?')[0].toUpperCase())}</span>`;
+}
+
 // Foto: TIDAK ada gerbang tipe/ekstensi di depan — picker Android sering
 // memberi file.type kosong DAN nama tanpa ekstensi yang dikenali (tanpa
 // ekstensi, .gif, .jfif, dsb.) padahal isinya JPEG valid yang bisa dibaca
@@ -60,8 +82,9 @@ function imageErrorMessage(err) {
   return err === 'size' ? IMAGE_ERROR_SIZE : IMAGE_ERROR_FORMAT;
 }
 
-// Baca file gambar → resize/crop persegi 256×256 lewat canvas → data URL JPEG,
-// plus thumbnail 48×48 untuk daftar chat/DM (Tahap 3, §6.3).
+// Baca file gambar → resize mengikuti aspek asli (sisi terpanjang 256px)
+// lewat canvas → data URL JPEG, plus thumbnail 48px untuk daftar chat/DM
+// (Tahap 3, §6.3; aspek dipertahankan sejak v3.1.0, tiket #11).
 // Mengembalikan { avatar, avatarSm } atau { error: 'format' | 'size' }:
 // 'format' = bukan gambar / tidak bisa dibaca browser, 'size' = hasil
 // resize tetap > 500 KB (thumbnail > 25 KB).
@@ -75,13 +98,16 @@ async function processAvatarFile(file) {
       i.onerror = () => rej(new Error('gagal membaca gambar'));
       i.src = url;
     });
+    // Foto profil mengikuti ASPEK ASLI galeri (tiket #11 LIO, v3.1.0):
+    // diperkecil sampai sisi terpanjang 256px TANPA crop persegi —
+    // sebelumnya foto dipotong jadi kotak 256×256 di tengah, jadi foto
+    // vertikal/horizontal terpotong dan terlihat kecil/burem.
     const canvas = document.createElement('canvas');
-    canvas.width = 256; canvas.height = 256;
+    const scale = Math.min(1, 256 / Math.max(img.width, img.height));
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
     const ctx = canvas.getContext('2d');
-    const s = Math.min(img.width, img.height);
-    const sx = Math.floor((img.width - s) / 2);
-    const sy = Math.floor((img.height - s) / 2);
-    ctx.drawImage(img, sx, sy, s, s, 0, 0, 256, 256);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     let avatar = null;
     for (const q of [0.85, 0.6, 0.4]) {
       const dataUrl = canvas.toDataURL('image/jpeg', q);
@@ -89,10 +115,12 @@ async function processAvatarFile(file) {
       if (dataUrl.length <= 682667) { avatar = dataUrl; break; }
     }
     if (!avatar) return { error: 'size' };
-    // Thumbnail 48×48 dari canvas yang sama (25 KB biner ≈ 34.100 karakter).
+    // Thumbnail 48px (sisi terpanjang) dari canvas yang sama, aspek ikut.
     const sm = document.createElement('canvas');
-    sm.width = 48; sm.height = 48;
-    sm.getContext('2d').drawImage(canvas, 0, 0, 48, 48);
+    const smScale = Math.min(1, 48 / Math.max(canvas.width, canvas.height));
+    sm.width = Math.max(1, Math.round(canvas.width * smScale));
+    sm.height = Math.max(1, Math.round(canvas.height * smScale));
+    sm.getContext('2d').drawImage(canvas, 0, 0, sm.width, sm.height);
     const avatarSm = sm.toDataURL('image/jpeg', 0.8);
     if (avatarSm.length > 34100) return { error: 'size' };
     return { avatar, avatarSm };
@@ -291,6 +319,7 @@ async function api(path, opts = {}) {
   return data;
 }
 const post = (path, body = {}) => api(path, { method: 'POST', body });
+const patch = (path, body = {}) => api(path, { method: 'PATCH', body });
 
 // ---------- AUTH ----------
 function hideLoading() {
@@ -916,7 +945,8 @@ ROUTES.dashboard = async () => {
   ${ME.job ? `<div class="panel" id="dash-shift">
     <div class="panel-head"><h3>💼 PEKERJAAN</h3><button class="btn-text gold" type="button" data-goto="#/jobs">LIHAT ›</button></div>
     <div class="kv"><span class="k">${esc(ME.job.title)} · ${esc(ME.job.company_name || 'ADMIN')}</span><span class="v gold-text">${payLabel(ME.job)}</span></div>
-    <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah sebanding dengan energi yang dipakai.</p>
+    <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah dan XP sebanding dengan energi yang dipakai.</p>
+    ${doubleXpChip()}
     <button class="btn-gold" id="btn-dash-shift" type="button" ${c.energy <= 0 ? 'disabled' : ''}>KERJAKAN SATU GILIRAN (${Math.min(c.energy, 100)} ⚡)</button>
   </div>` : ''}
   <div class="panel" id="dash-map">
@@ -1063,11 +1093,12 @@ ROUTES.dashboard = async () => {
     }).join('');
     // Kartu MAKANAN: ketuk kartu = makan (sama seperti tombol MAKAN di Inventaris).
     $$('#dash-food [data-eat]').forEach((b) => b.onclick = () => eatMeal(Number(b.dataset.eat)));
-    // INVENTARIS (UI batch 2): kartu barang T1 (maks 6) di panel dashboard.
+    // INVENTARIS (tiket #18 LIO, v3.1.0): SEMUA barang + jumlahnya di panel
+    // dashboard (dulu hanya kartu T1 maks 6 — senjata/roti/bahan lain
+    // tidak kelihatan). Daftar lengkap tetap ada di #/inventory.
     const invEl = $('#dash-inv-grid');
     if (invEl) {
-      const t1 = inv.items.filter((i) => i.tier === 1).slice(0, 6);
-      invEl.innerHTML = t1.length ? t1.map((i) => `<div class="inv-card"><div class="nm">${esc(i.name)}</div><div class="qty">×${i.qty}</div><div class="muted small">T1</div></div>`).join('') : '<p class="muted">Inventaris kosong.</p>';
+      invEl.innerHTML = inv.items.length ? inv.items.map((i) => `<div class="inv-card"><div class="nm">${esc(i.name)}</div><div class="qty">×${i.qty}</div><div class="muted small">T${i.tier}</div></div>`).join('') : '<p class="muted">Inventaris kosong.</p>';
     }
   }).catch(() => { const el = $('#dash-food'); if (el) el.innerHTML = `<p class="muted">Gagal memuat makanan.</p>`; });
   // Panel UI batch 2 (angka dunia + kartu wilayah + PETA LANGSUNG + konvoi):
@@ -1173,6 +1204,16 @@ ROUTES.inventory = async () => {
     }).join('')}</div>
     ${foods.length ? '' : '<p class="muted" style="margin-top:8px">Tidak ada roti. Beli di Pasar.</p>'}
   </div>
+  <div class="panel"><h3>🥤 MINUMAN ENERGI</h3>
+    <p class="muted small">Sekali minum +1 energi (dibatasi cap energimu). Harga 0,10 emas/kaleng — beli di sini, langsung masuk inventaris.</p>
+    <div class="kv"><span class="k">Kaleng yang kamu punya</span><span class="v"><b>×${(inv.items.find((i) => i.name === 'Minuman Energi' && i.tier === 1)?.qty || 0)}</b></span></div>
+    <div class="kv"><span class="k">Energi sekarang</span><span class="v">${ME.citizen.energy}/${ME.citizen.energyCap || 100} ⚡</span></div>
+    <div class="row">
+      <label>JUMLAH BELI<input id="drink-buy-qty" type="number" value="10" min="1" max="100"></label>
+      <button class="btn-gold" id="btn-drink-buy" type="button">BELI · 0,10 emas/kaleng</button>
+      <button class="btn-gold" id="btn-drink" type="button" ${(inv.items.find((i) => i.name === 'Minuman Energi' && i.tier === 1)?.qty || 0) ? '' : 'disabled'}>MINUM 1 KALENG (+1 ⚡)</button>
+    </div>
+  </div>
   <div class="panel"><h3>📦 SEMUA BARANG</h3>
     ${inv.items.length ? `<table class="table"><tr><th>Barang</th><th>Tingkat</th><th>Jumlah</th><th>Nilai</th></tr>
     ${inv.items.map((i) => `<tr><td>${esc(i.name)}</td><td>T${i.tier}</td><td>×${i.qty}</td><td>${fmtRp(i.qty * i.ref_usd)}</td></tr>`).join('')}</table>`
@@ -1182,6 +1223,14 @@ ROUTES.inventory = async () => {
     try { const r = await post('/api/eat', { tier: Number(b.dataset.eat) }); toast(`Energi +${r.gained} (sekarang ${r.energy}/${ME.citizen.energyCap || 100}).`); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   });
+  $('#btn-drink-buy').onclick = async () => {
+    try { const r = await post('/api/shop/energy-drink', { qty: Number($('#drink-buy-qty').value || 1) }); toast(`Membeli ${r.qty} kaleng Minuman Energi seharga ${r.cost} emas.`); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  };
+  $('#btn-drink').onclick = async () => {
+    try { const r = await post('/api/inventory/drink', { qty: 1 }); toast(`Energi +${r.gained} (sekarang ${r.energy}/${r.cap}). Sisa kaleng: ${r.remaining}.`); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  };
 };
 
 // ---------- KONVOI ----------
@@ -1189,10 +1238,14 @@ ROUTES.convoy = async () => {
   const cv = await api('/api/convoy');
   $('#page').innerHTML = page('KONVOI', `${cv.used}/${cv.slots} slot terpakai · tiap bangunan berdiri 7 hari lalu roboh`, `
   <div class="panel"><h3>🏗️ BANGUN KONVOI</h3>
-    <p class="muted small">Satu bangunan per jenis dalam satu waktu. Biaya 10 emas. Slot tambahan di Level 25 / 50 / 100 dan Premium.</p>
-    ${cv.buildings.map((b) => `
-      <div class="kv"><span class="k">${esc(b.name)}<br><small class="muted">${esc(b.desc)}</small></span>
-      <span class="v">${cv.convoys.some((x) => x.building === b.type) ? '✓ Dibangun' : `<button class="btn-gold btn-sm" data-build="${b.type}">BANGUN · 10 emas</button>`}</span></div>`).join('')}
+    <p class="muted small">Satu bangunan per jenis dalam satu waktu. Biaya dibayar BAHAN MENTAH dari inventarismu (bukan emas lagi). Slot tambahan di Level 25 / 50 / 100 dan Premium.</p>
+    ${cv.buildings.map((b) => {
+      const recipe = (b.cost || []).map((it) => `${esc(it.name)} ${it.owned ?? 0}/${it.qty}`).join(' + ');
+      const afford = (b.cost || []).every((it) => (it.owned ?? 0) >= it.qty);
+      return `
+      <div class="kv"><span class="k">${esc(b.name)}<br><small class="muted">${esc(b.desc)}</small><br><small class="${afford ? '' : 'muted'}" style="${afford ? 'color:#3fb950' : ''}">🧱 ${recipe}</small></span>
+      <span class="v">${cv.convoys.some((x) => x.building === b.type) ? '✓ Dibangun' : `<button class="btn-gold btn-sm" data-build="${b.type}" ${afford ? '' : 'disabled'}>BANGUN</button>`}</span></div>`;
+    }).join('')}
   </div>
   <div class="panel"><h3>🚚 KONVOIMU</h3>
     ${cv.convoys.length ? cv.convoys.map((x) => {
@@ -1206,9 +1259,9 @@ ROUTES.convoy = async () => {
     catch (e) { toast(e.message); }
   });
   $$('[data-demolish]').forEach((b) => b.onclick = async () => {
-    // Tahap 3: bongkar konvoi itu destruktif (bonus hilang, 10 emas tidak
-    // kembali) — minta konfirmasi dulu.
-    if (!confirm('Bongkar bangunan konvoi ini? Bonusnya hilang dan 10 emas yang sudah dibayar tidak kembali.')) return;
+    // Tahap 3: bongkar konvoi itu destruktif (bonus hilang, bahan yang
+    // sudah dibayar tidak kembali) — minta konfirmasi dulu.
+    if (!confirm('Bongkar bangunan konvoi ini? Bonusnya hilang dan bahan yang sudah dibayar tidak kembali.')) return;
     try { await post('/api/convoy/demolish', { id: Number(b.dataset.demolish) }); toast('Bangunan dibongkar.'); route(); }
     catch (e) { toast(e.message); }
   });
@@ -1232,8 +1285,28 @@ ROUTES.achievements = async () => {
 };
 
 // ---------- NOTIFIKASI ----------
+// Tab notifikasi (tiket #16 Vincent, v3.1.0): Terbaru | Sistem | Pasar —
+// supaya tidak perlu scroll jauh. Pemetaan kategori: Pasar = EKONOMI
+// (bonus perusahaan, pasar); Sistem = sisanya (SISTEM, ADMIN, POLITIK,
+// PERANG, DIPLOMASI, SOSIAL). Tab aktif disimpan di memori selama sesi.
+let notifTab = 'terbaru';
+const NOTIF_TABS = [
+  { key: 'terbaru', label: 'Terbaru', match: () => true },
+  { key: 'sistem', label: 'Sistem', match: (x) => x.category !== 'EKONOMI' },
+  { key: 'pasar', label: 'Pasar', match: (x) => x.category === 'EKONOMI' },
+];
 ROUTES.notifications = async () => {
   const [n, ann] = await Promise.all([api('/api/notifications'), api('/api/announcements')]);
+  const renderNotifList = () => {
+    const tab = NOTIF_TABS.find((t) => t.key === notifTab) || NOTIF_TABS[0];
+    const list = n.notifications.filter(tab.match);
+    const box = $('#notif-list');
+    if (box) box.innerHTML = list.length ? list.map((x) => `
+      <div class="kv"><span class="k"><span class="chip">${esc(x.category)}</span> <b>${esc(x.title)}</b><br><small class="muted">${esc(x.content)}</small></span>
+      <span class="v small muted" style="white-space:nowrap;flex-shrink:0">${ago(x.created_at)}</span></div>`).join('')
+      : '<p class="muted">Belum ada notifikasi di tab ini.</p>';
+    $$('#notif-tabs [data-ntab]').forEach((b) => b.classList.toggle('active', b.dataset.ntab === tab.key));
+  };
   $('#page').innerHTML = page('NOTIFIKASI', '', `
   <div class="panel"><h3>📣 APA YANG BARU</h3>
     ${ann.announcements.length ? ann.announcements.map((a) => `
@@ -1246,11 +1319,11 @@ ROUTES.notifications = async () => {
   </div>
   <div class="panel">
     <div class="panel-head"><h3>🔔 Pusat Notifikasi</h3><button class="btn-ghost btn-sm" id="btn-read-all">Tandai Semua Dibaca</button></div>
-    ${n.notifications.length ? n.notifications.map((x) => `
-      <div class="kv"><span class="k"><span class="chip">${esc(x.category)}</span> <b>${esc(x.title)}</b><br><small class="muted">${esc(x.content)}</small></span>
-      <span class="v small muted" style="white-space:nowrap;flex-shrink:0">${ago(x.created_at)}</span></div>`).join('')
-      : '<p class="muted">Belum ada notifikasi.</p>'}
+    <div class="tabs" id="notif-tabs">${NOTIF_TABS.map((t) => `<button class="tab ${t.key === notifTab ? 'active' : ''}" type="button" data-ntab="${t.key}">${t.label} (${n.notifications.filter(t.match).length})</button>`).join('')}</div>
+    <div id="notif-list"></div>
   </div>`);
+  renderNotifList();
+  $$('#notif-tabs [data-ntab]').forEach((b) => b.onclick = () => { notifTab = b.dataset.ntab; renderNotifList(); });
   $$('[data-ann-read]').forEach((b) => b.onclick = async () => {
     try { await post('/api/announcements/read', { id: Number(b.dataset.annRead) }); route(); }
     catch (e) { toast(e.message); }
@@ -1300,14 +1373,14 @@ ROUTES.profile = async (username) => {
   <div class="panel">
     <div class="panel-head"><h3>👤 IDENTITAS</h3><span class="chip">LEVEL ${pr.level}</span></div>
     <div class="profile-avatar-row">
-      <span id="profile-avatar">${avatarHtml(pr.avatar, pr.username, 144)}</span>
+      <span id="profile-avatar">${profilePhotoHtml(pr.avatar, pr.username)}</span>
       ${pr.user_id === ME.citizen.user_id ? `
       <div>
         <input type="file" id="avatar-file" accept="image/*" hidden>
         <button class="btn-gold btn-sm" id="btn-avatar-change" type="button">📷 Ubah Foto</button>
         ${pr.avatar ? `<button class="btn-ghost btn-sm" id="btn-avatar-delete" type="button">🗑 Hapus Foto</button>` : ''}
         <div id="avatar-preview" style="margin-top:8px"></div>
-        <p class="muted small">Foto di-crop persegi &amp; diperkecil jadi 256×256 (maks 500 KB).</p>
+        <p class="muted small">Foto menyesuaikan ukuran aslinya (sisi terpanjang maks 256px, maks 500 KB).</p>
       </div>` : ''}
     </div>
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(pr.publicId)}</b></span></div>
@@ -1421,10 +1494,17 @@ ROUTES.profile = async (username) => {
 // ---------- PENGATURAN ----------
 ROUTES.settings = async () => {
   const c = ME.citizen;
+  const blocked = await api('/api/chat/blocked').catch(() => ({ blocked: [] }));
   $('#page').innerHTML = page('PENGATURAN', '', `
   <div class="panel"><h3>📝 IDENTITAS</h3>
     <label>BIOGRAFI (maks 1000 karakter)<textarea id="set-bio" rows="3">${esc(c.bio || '')}</textarea></label>
     <button class="btn-gold" id="btn-save-bio">Simpan Biografi</button>
+  </div>
+  <div class="panel"><h3>🚫 PEMAIN YANG DIBLOKIR</h3>
+    <p class="muted small">Pesan chat dari pemain di bawah ini tidak terlihat lagi. Ketuk "Buka Blokir" bila berubah pikiran.</p>
+    ${blocked.blocked.length ? blocked.blocked.map((b) => `<div class="kv"><span class="k">${avatarHtml(b.avatar, b.username, 32)} ${esc(b.username)}</span>
+      <span class="v"><button class="btn-ghost btn-sm" data-unblock="${b.citizen_id}" type="button">Buka Blokir</button></span></div>`).join('')
+      : '<p class="muted">Belum ada pemain yang diblokir.</p>'}
   </div>
   <div class="panel"><h3>✏️ GANTI NAMA WARGA</h3>
     <p class="muted small">Biaya 50 emas. Nama 3–24 karakter (huruf, angka, underscore).</p>
@@ -1445,6 +1525,10 @@ ROUTES.settings = async () => {
     try { await post('/api/profile/bio', { bio: $('#set-bio').value }); toast('Biografi disimpan.'); }
     catch (e) { toast(e.message); }
   };
+  $$('[data-unblock]').forEach((b) => b.onclick = async () => {
+    try { await post('/api/chat/unblock', { citizen_id: Number(b.dataset.unblock) }); toast('Blokir dibuka.'); route(); }
+    catch (e) { toast(e.message); }
+  });
   $('#btn-sound-toggle').onclick = () => {
     const on = !soundEnabled();
     setSoundEnabled(on);
@@ -1887,7 +1971,7 @@ function marketPage(scope) {
     $('#page').innerHTML = page(scope === 'global' ? 'PASAR GLOBAL' : 'PASAR',
       scope === 'global' ? 'Perdagangan antarnegara dalam EMAS · pajak impor 2%' : 'Pasar lokal — barang diperdagangkan dalam Rupiah', `
     <div class="stat-grid">
-      <div class="stat-cell"><div class="stat-label">📋 Penawaran Terbuka</div><div class="stat-num">${fmt(data.stats.offers)}</div><div class="stat-sub">di 15 komoditas</div></div>
+      <div class="stat-cell"><div class="stat-label">📋 Penawaran Terbuka</div><div class="stat-num">${fmt(data.stats.offers)}</div><div class="stat-sub">di ${data.commodities.length} komoditas</div></div>
       <div class="stat-cell"><div class="stat-label">📈 Transaksi · 24J</div><div class="stat-num">${fmt(data.stats.tx)}</div><div class="stat-sub">${fmt(data.stats.units)} unit berpindah tangan</div></div>
       <div class="stat-cell"><div class="stat-label">💰 Omzet · 24J</div><div class="stat-num gold">${money(data.stats.turnover)}</div><div class="stat-sub">24 jam terakhir</div></div>
       <div class="stat-cell"><div class="stat-label">🏆 Paling Laris</div><div class="stat-num gold" style="font-size:24px">${data.recentTx[0] ? esc(data.recentTx[0].commodity_name) : '—'}</div><div class="stat-sub">transaksi terakhir</div></div>
@@ -1932,7 +2016,8 @@ function marketPage(scope) {
     </div>
     <div class="panel"><h3>🧾 ORDER BELIKU</h3>
       ${data.myBuyOrders.length ? data.myBuyOrders.map((o) => `<div class="kv"><span class="k">${esc(o.commodity_name)} T${o.tier} · ${o.qty_filled}/${o.qty} terpenuhi · ${money(o.price)}</span>
-        <span class="v"><button class="btn-danger btn-sm" data-cancel-order="${o.id}">Batalkan</button></span></div>`).join('')
+        <span class="v"><button class="btn-ghost btn-sm" data-edit-order="${o.id}">✏️ Ubah</button> <button class="btn-danger btn-sm" data-cancel-order="${o.id}">Batalkan</button></span></div>
+        <div class="edit-box" id="edit-order-${o.id}" hidden></div>`).join('')
         : '<p class="muted">Belum ada order beli aktif.</p>'}
     </div>
     <div class="panel"><h3>💰 JUAL BARANG</h3>
@@ -1948,7 +2033,8 @@ function marketPage(scope) {
     </div>
     <div class="panel"><h3>🧾 PENAWARANKU</h3>
       ${data.mine.length ? data.mine.map((o) => `<div class="kv"><span class="k">${esc(o.commodity_name)} T${o.tier} ×${o.qty} · ${money(o.price)}</span>
-        <span class="v"><button class="btn-danger btn-sm" data-cancel="${o.id}">Batalkan</button></span></div>`).join('')
+        <span class="v"><button class="btn-ghost btn-sm" data-edit-offer="${o.id}">✏️ Ubah</button> <button class="btn-danger btn-sm" data-cancel="${o.id}">Batalkan</button></span></div>
+        <div class="edit-box" id="edit-offer-${o.id}" hidden></div>`).join('')
         : '<p class="muted">Belum ada penawaran aktif.</p>'}
     </div>
     <div class="panel"><h3>🕒 TRANSAKSI TERAKHIR</h3>
@@ -2084,6 +2170,41 @@ function marketPage(scope) {
       try { await post('/api/market/cancel', { offer_id: Number(b.dataset.cancel) }); toast('Penawaran dibatalkan, barang kembali ke inventaris.'); route(); }
       catch (e) { toast(e.message); }
     });
+    // UBAH PENAWARAN / ORDER BELI (tiket #23 LIO, v3.1.0): form inline di
+    // bawah baris — ubah jumlah (tambah bahan tanpa batalkan dulu) dan/atau
+    // harga, lalu simpan. Jumlah penawaran naik -> selisih diambil dari
+    // inventaris; turun -> selisih kembali ke inventaris.
+    const openEditBox = (box, currentQty, currentPrice, onSave) => {
+      box.hidden = false;
+      box.innerHTML = `<div class="row" style="margin-top:6px">
+        <label>JUMLAH (min 10)<input type="number" class="edit-qty" value="${currentQty}" min="10"></label>
+        <label>HARGA / UNIT (${curLabel})<input type="number" class="edit-price" step="0.01" value="${currentPrice}"></label>
+        <span style="display:flex;gap:6px;align-items:flex-end"><button class="btn-gold btn-sm edit-save" type="button">Simpan</button>
+        <button class="btn-ghost btn-sm edit-cancel" type="button">Batal</button></span></div>`;
+      box.querySelector('.edit-cancel').onclick = () => { box.hidden = true; box.innerHTML = ''; };
+      box.querySelector('.edit-save').onclick = async () => {
+        try {
+          await onSave(Number(box.querySelector('.edit-qty').value), priceInputUsd(box.querySelector('.edit-price')));
+          toast('Penawaran diubah.');
+          await refreshMe(); route();
+        } catch (e) { toast(e.message); }
+      };
+    };
+    $$('[data-edit-offer]').forEach((b) => b.onclick = () => {
+      const o = data.mine.find((x) => x.id === Number(b.dataset.editOffer));
+      if (!o) return;
+      // Harga tersimpan dalam mata uang ruangannya (lokal = USD, tampil
+      // Rupiah; global = emas) — isi form dengan nilai TAMPIL, bukan USD
+      // mentah, supaya konsisten dengan form jual (priceInputUsd).
+      const displayPrice = scope === 'global' ? o.price : Math.round(o.price * RP_PER_USD);
+      openEditBox($('#edit-offer-' + o.id), o.qty, displayPrice, (qty, price) => patch('/api/market/offers/' + o.id, { qty, price }));
+    });
+    $$('[data-edit-order]').forEach((b) => b.onclick = () => {
+      const o = data.myBuyOrders.find((x) => x.id === Number(b.dataset.editOrder));
+      if (!o) return;
+      const displayPrice = scope === 'global' ? o.price : Math.round(o.price * RP_PER_USD);
+      openEditBox($('#edit-order-' + o.id), o.qty, displayPrice, (qty, price) => patch('/api/market/buy-orders/' + o.id, { qty, price }));
+    });
   };
 }
 ROUTES.market = marketPage('local');
@@ -2176,7 +2297,8 @@ const payLabel = (j) => j.salary_type === 'goods'
 async function doShift() {
   try {
     const r = await post('/api/jobs/shift');
-    toast(r.goods ? `Shift selesai! ${r.note}` : `Shift selesai!${r.note ? ' ' + r.note : ''} Gaji bersih ${fmtRp(r.net)} (pajak ${fmtRp(r.tax)}).`);
+    const xpNote = r.xpGained ? ` +${r.xpGained} XP${r.doubleXp ? ' (×2 jam ganda!)' : ''}` : '';
+    toast(r.goods ? `Shift selesai! ${r.note}${xpNote}` : `Shift selesai!${r.note ? ' ' + r.note : ''} Gaji bersih ${fmtRp(r.net)} (pajak ${fmtRp(r.tax)}).${xpNote}`);
     await refreshMe(); route();
   } catch (e) { toast(e.message); }
 }
@@ -2216,9 +2338,10 @@ ROUTES.jobs = async () => {
   </div>
   ${myJob ? `<div class="panel"><h3>💼 PEKERJAANMU</h3>
     <div class="kv"><span class="k">${esc(myJob.title)} · ${esc(myJob.company_name || 'ADMIN')}</span><span class="v">${payLabel(myJob)}</span></div>
-    <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah sebanding dengan energi yang dipakai (50 energi → ~50% hadiah). ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan (tarif sesuai UU yang berlaku).'}</p>
+    <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah DAN XP sebanding dengan energi yang dipakai (50 energi → ~50% hadiah + 10 XP; 1 energi pun tetap dapat 1 XP). ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan (tarif sesuai UU yang berlaku).'}</p>
+    ${doubleXpChip()}
     <div class="row"><button class="btn-gold" id="btn-shift" ${ME.citizen.energy <= 0 ? 'disabled' : ''}>KERJAKAN SATU GILIRAN (${Math.min(ME.citizen.energy, 100)} ⚡)</button>
-    <button class="btn-ghost" id="btn-quit">Berhenti Kerja</button></div></div>` : ''}
+    <button class="btn-ghost" id="btn-quit">Berhenti Kerja</button></div></div>` : `${doubleXpChip()}`}
   <div class="panel"><h3>📍 DI WILAYAHMU${myRegionName ? ' — ' + esc(myRegionName.toUpperCase()) : ''}</h3>
     ${data.adminPayMult && data.adminPayMult !== 1 ? `<p class="muted small">Upah ADMIN saat ini ${Math.round(data.adminPayMult * 100)}% dari upah dasar (UU yang berlaku).</p>` : ''}
     ${localJobs.length ? `<div id="jobs-local-list">${localJobs.map((j) => jobCard(j, true)).join('')}</div>` : emptyState('💼', 'Belum ada lowongan di wilayahmu', 'Lowongan ADMIN dan perusahaan warga akan muncul di sini.')}

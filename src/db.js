@@ -907,6 +907,8 @@ export const COMMODITIES = [
   { name: 'Bahan Bangunan', category: 'Komponen', usd: 17.85, gold: 0.62 },
   { name: 'Bahan Bakar', category: 'Komponen', usd: 27.99, gold: 0.60 },
   { name: 'Elektronik', category: 'Komponen', usd: 18.00, gold: 0.63 },
+  // Minuman Energi (v3.1.0, tiket #17 LIO): 0,10 emas/kaleng, +1 energi.
+  { name: 'Minuman Energi', category: 'Perbekalan', usd: 1.83, gold: 0.10 },
 ];
 
 // Lowongan resmi ADMIN — satu-satunya pekerjaan di awal permainan (modal awal).
@@ -1056,6 +1058,7 @@ export async function initDb() {
     await migrateTravelColumns(t);
     await migrateCompanyColumns(t);
     await migrateCreditColumns(t);
+    await migrateXpScale(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1094,6 +1097,11 @@ async function runDataFixups() {
   }
   await run('UPDATE users SET is_admin = 1 WHERE email = ?', [ADMIN_EMAIL]);
   await run("UPDATE users SET is_banned = 0, banned_reason = '', banned_at = 0 WHERE is_admin = 1 AND is_banned = 1");
+  // Minuman Energi (v3.1.0, tiket #17): komoditas baru — seed hanya jalan
+  // bila tabel commodities kosong, jadi DB lama dilengkapi di sini
+  // (tiap boot, murah: satu SELECT + INSERT bila belum ada).
+  const drink = await one("SELECT id FROM commodities WHERE name = 'Minuman Energi'");
+  if (!drink) await run("INSERT INTO commodities (name, category, ref_usd, ref_gold) VALUES ('Minuman Energi', 'Perbekalan', 1.83, 0.10)");
   // Lowongan ADMIN baru (perluasan 12 wilayah) juga masuk ke DB lama —
   // runDataFixups jalan tiap boot (jalur cepat), jadi tidak butuh migrasi.
   await ensureAdminJobs({ one, run });
@@ -1129,7 +1137,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1368,6 +1376,16 @@ async function migrateCreditColumns(t) {
   await addCol('citizens', 'credit_score', 'INTEGER NOT NULL DEFAULT 100');
   await addCol('citizens', 'credit_updated_at', 'BIGINT NOT NULL DEFAULT 0');
   await addCol('chat_reports', 'verdict', "TEXT NOT NULL DEFAULT ''");
+}
+
+// Skala XP v3.1.0 (tiket #22 LIO): threshold naik level dan semua sumber
+// XP dikali 20 (level*5 -> level*100, shift 1 -> 20 XP) supaya kecepatan
+// naik level tidak berubah. XP tersimpan pemain lama ikut dikali 20 agar
+// progres mereka (fraksi menuju level berikutnya) TETAP SAMA. Hanya jalan
+// sekali saat migrasi ke v14 (di dalam transaksi initDb — gagal = rollback
+// total, tidak bisa terkalikan dua kali).
+async function migrateXpScale(t) {
+  await t.run('UPDATE citizens SET xp = xp * 20 WHERE xp > 0');
 }
 
 // Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di

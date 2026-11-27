@@ -27,8 +27,14 @@
 // makin rendah skor makin banyak batasan (pers <80, partai <60, pasar
 // <40, chat/DM <20); skor 0 = akun dibanned otomatis (bisa banding,
 // unban mengembalikan skor ke 50).
+// Update sedang v3.1.0 = batch fitur tiket (saran LIO + Vincent, 28 Nov
+// 2026): ubah penawaran pasar; XP shift proporsional + target level
+// ratusan; XP ×2 jam 00:00–01:00 WIB; konvoi dibayar bahan (bukan emas);
+// minuman energi 0,10 emas/kaleng (+1 energi); tab notifikasi; daftar
+// pemain yang diblokir; inventaris lengkap di dashboard; foto profil
+// mengikuti aspek asli galeri.
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '3.0.0';
+export const VERSION = '3.1.0';
 
 // --- Sistem kredit skor (v3.0.0, saran LIO tiket #7) ---
 // Semua warga mulai 100. Laporan chat yang terbukti benar menurunkan skor
@@ -82,10 +88,28 @@ export const INCOME_TAX = 0.02;
 export const IMPORT_TAX = 0.02;
 export const MIN_OFFER_QTY = 10;
 
-// XP: naik level butuh level*5 XP (level 1 -> 5 XP, level 2 -> 10 XP, dst.)
-export function xpForLevel(level) { return level * 5; }
+// XP: naik level butuh level*100 XP (level 1 -> 100 XP, level 2 -> 200 XP,
+// dst. — RATUSAN, bukan puluhan; permintaan LIO tiket #22, 28 Nov 2026).
+// Skala lama level*5 (5/10/15...) dikali 20; semua sumber XP ikut dikali
+// 20 supaya kecepatan naik level TIDAK berubah (level N tetap butuh
+// level*5 giliran penuh). Migrasi v14 mengalikan XP tersimpan pemain lama
+// ×20 agar progres mereka tidak hilang.
+export function xpForLevel(level) { return level * 100; }
 
-export function xpGainForShift() { return 1; }
+export function xpGainForShift() { return 20; }
+
+// XP shift PROPORSIONAL dengan energi yang dipakai (tiket #22): shift
+// 50 energi -> 10 XP, shift 1 energi -> minimal 1 XP (tetap nambah, bukan
+// 0). Pembulatan floor, konsisten dengan hadiah shift. Jam ganda
+// 00:00–01:00 WIB (tiket #21): XP shift ×2.
+export function isDoubleXpHour(now = Date.now()) {
+  const wibHour = (new Date(now).getUTCHours() + 7) % 24;
+  return wibHour === 0;
+}
+export function xpGainForShiftEnergy(usedEnergy, now = Date.now()) {
+  const base = Math.max(1, Math.floor(xpGainForShift() * usedEnergy / 100));
+  return isDoubleXpHour(now) ? base * 2 : base;
+}
 
 // Kelelahan menurunkan hasil kerja: mulai 10.000 (×0,75), 15.000 (×0,5).
 // Berlaku untuk gaji USD maupun upah bahan mentah.
@@ -363,12 +387,23 @@ export function productionWithBonus(amount) { return Math.round(amount * 1.1); }
 export function warDamageWithBonus(damage) { return Math.round(damage * 1.1); }
 
 // --- Bangunan konvoi ---
+// Biaya BANGUN: BAHAN MENTAH dari inventaris pembangun (tiket #20 LIO,
+// 28 Nov 2026) — bukan lagi 10 emas. Resep dipilih mengikuti contoh
+// pemain (RS Lapangan: 20 Gandum + 30 Besi) dan seimbang dengan upah
+// ADMIN (1 shift ≈ 38–44 bahan): 1–2 shift cukup untuk 1 bangunan.
 export const CONVOY_BUILDINGS = [
-  { type: 'health', name: 'Rumah Sakit Lapangan', desc: '+10% pemulihan energi harian' },
-  { type: 'education', name: 'Sekolah Keliling', desc: 'Latihan 10% lebih murah' },
-  { type: 'industry', name: 'Gudang Industri', desc: '+10% produksi perusahaan' },
-  { type: 'military', name: 'Pos Militer', desc: '+10% kerusakan perang' },
+  { type: 'health', name: 'Rumah Sakit Lapangan', desc: '+10% pemulihan energi harian', cost: [{ name: 'Gandum Mentah', qty: 20 }, { name: 'Besi Mentah', qty: 30 }] },
+  { type: 'education', name: 'Sekolah Keliling', desc: 'Latihan 10% lebih murah', cost: [{ name: 'Kayu', qty: 20 }, { name: 'Kapas Mentah', qty: 20 }] },
+  { type: 'industry', name: 'Gudang Industri', desc: '+10% produksi perusahaan', cost: [{ name: 'Besi Mentah', qty: 30 }, { name: 'Batu Bara', qty: 20 }] },
+  { type: 'military', name: 'Pos Militer', desc: '+10% kerusakan perang', cost: [{ name: 'Besi Mentah', qty: 30 }, { name: 'Minyak Mentah', qty: 10 }] },
 ];
+
+// --- Minuman energi (tiket #17 LIO, 28 Nov 2026) ---
+// Kaleng minuman energi: dibeli di Inventaris seharga 0,10 emas/kaleng,
+// sekali minum +1 energi (dibatasi cap energi pemain).
+export const ENERGY_DRINK_NAME = 'Minuman Energi';
+export const ENERGY_DRINK_PRICE_GOLD = 0.10;
+export const ENERGY_DRINK_ENERGY = 1;
 
 // --- Redesain dunia (27 Nov 2026): tanpa negara awal + parlemen 2 Des ---
 // Dunia mulai TERPECAH: semua wilayah merdeka (tidak bernegara). Warga yang

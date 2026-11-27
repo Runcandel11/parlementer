@@ -1198,6 +1198,20 @@ export function registerCivic(app) {
     return 'Ruang tidak dikenal.';
   }
 
+  // Daftar pemain yang diblokir (tiket #14 Vincent, v3.1.0): menu di
+  // Pengaturan menampilkan semua yang diblokir + tombol buka blokir.
+  // HARUS terdaftar SEBELUM GET /api/chat/:room di bawah — Express
+  // mencocokkan rute berurutan, dan ':room' akan menelan 'blocked'
+  // sebagai nama ruang (→ 404 "Ruang tidak dikenal").
+  app.get('/api/chat/blocked', authRequired, citizenRequired, r(async (req, res) => {
+    const rows = await sql(
+      `SELECT b.blocked_id AS citizen_id, u.username, u.avatar FROM blocked b
+       JOIN citizens c ON c.id = b.blocked_id JOIN users u ON u.id = c.user_id
+       WHERE b.blocker_id = ? ORDER BY u.username`,
+      [req.citizen.id]);
+    res.json({ blocked: rows });
+  }));
+
   app.get('/api/chat/:room', authRequired, citizenRequired, r(async (req, res) => {
     const room = req.params.room;
     const roomErr = await validateRoom(room, req.citizen);

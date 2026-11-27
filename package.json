@@ -35,7 +35,8 @@
     "test:ui-icons": "node test/ui-icons-dom.js",
     "test:company-dom": "node test/company-dom.js",
     "test:map-dom": "node test/map-dom.js",
-    "test:credit-dom": "node test/credit-dom.js"
+    "test:credit-dom": "node test/credit-dom.js",
+    "test:ticket-dom": "node test/ticket-dom.js"
   },
   "type": "module",
   "version": "1.0.0"
