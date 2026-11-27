@@ -126,7 +126,12 @@ async function main() {
   console.log('\n[5] Pekerjaan ADMIN (dibayar bahan mentah) & shift');
   r = await A.get('/api/jobs');
   const adminJobs = r.data.jobs.filter((j) => j.is_admin === 1);
-  check('Ada 6 lowongan ADMIN', adminJobs.length === 6, `ditemukan ${adminJobs.length}`);
+  check('Ada 18 lowongan ADMIN (satu per wilayah, Kepri 2)', adminJobs.length === 18, `ditemukan ${adminJobs.length}`);
+  check('Lowongan ADMIN ada di semua 17 wilayah',
+    new Set(adminJobs.map((j) => j.region_id)).size === 17,
+    `wilayah=${[...new Set(adminJobs.map((j) => j.region_id))].length}`);
+  check('Semua lowongan ADMIN tanpa batas kursi (seats 1.000.000)',
+    adminJobs.every((j) => j.seats === 1000000), `seats=${[...new Set(adminJobs.map((j) => j.seats))].join(',')}`);
   check('Semua lowongan ADMIN dibayar bahan mentah (bukan USD)',
     adminJobs.every((j) => j.salary_type === 'goods' && j.resource && j.pay_qty > 0),
     adminJobs.map((j) => `${j.title}:${j.resource}×${j.pay_qty}`).join(', '));
@@ -1899,6 +1904,125 @@ async function main() {
   check('Tag <script> di isi teks tetap terbit sebagai teks biasa', r.status === 200 && !!r.data.articleId, `status=${r.status} ${r.data.error || ''}`);
   r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Terlalu Panjang', content: 'x'.repeat(1300001) });
   check('Isi > 1,3 jt karakter ditolak 400', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+
+  console.log('\n[5b] Profil publik, shift fleksibel & ADMIN tanpa batas');
+  // Ditempatkan di AKHIR file dengan sengaja: seksi [12]/[14] mengandalkan
+  // urutan pendaftaran + jumlah pemain yang tetap (B = user 2, R = user 3,
+  // total 12 pemain) — pemain baru di sini tidak boleh menggeser ID itu.
+  // Semua pemain di sini baru (J/K/L/M) dan tidak bergantung pada state A.
+  const J = new Client();
+  const K = new Client();
+  const L = new Client();
+  const M = new Client();
+  // Batas registrasi 20/IP/24 jam sudah habis dipakai 20 pendaftaran
+  // sebelumnya dalam suite ini — 4 akun ini memakai IP berbeda lewat
+  // X-Forwarded-For (pola yang sama seperti [23b]/[28]).
+  J.extraHeaders = { 'X-Forwarded-For': '127.0.0.5' };
+  K.extraHeaders = { 'X-Forwarded-For': '127.0.0.6' };
+  L.extraHeaders = { 'X-Forwarded-For': '127.0.0.7' };
+  M.extraHeaders = { 'X-Forwarded-For': '127.0.0.8' };
+  r = await J.post('/api/auth/register', { email: 'wargaJ@test.local', password: 'rahasia123', username: 'warga_j' });
+  check('Daftar warga J berhasil', r.status === 200 && r.data.ok);
+  r = await K.post('/api/auth/register', { email: 'wargaK@test.local', password: 'rahasia123', username: 'warga_k' });
+  check('Daftar warga K berhasil', r.status === 200 && r.data.ok);
+  r = await L.post('/api/auth/register', { email: 'wargaL@test.local', password: 'rahasia123', username: 'warga_l' });
+  check('Daftar warga L berhasil', r.status === 200 && r.data.ok);
+  r = await M.post('/api/auth/register', { email: 'wargaM@test.local', password: 'rahasia123', username: 'warga_m' });
+  check('Daftar warga M berhasil', r.status === 200 && r.data.ok);
+
+  // --- Lowongan ADMIN tanpa batas: J + K + M melamar lowongan yang SAMA
+  // (ADMIN di wilayah lahir J) — ketiganya diterima, seats_taken tetap 0.
+  r = await J.get('/api/jobs');
+  const adminJobs5b = r.data.jobs.filter((x) => x.is_admin === 1);
+  check('Lowongan ADMIN: 18 lowongan (satu per wilayah, Kepri 2)', adminJobs5b.length === 18, `ditemukan ${adminJobs5b.length}`);
+  check('Lowongan ADMIN: ada di semua 17 wilayah', new Set(adminJobs5b.map((x) => x.region_id)).size === 17);
+  check('Lowongan ADMIN: seats 1.000.000 (tanpa batas)', adminJobs5b.every((x) => x.seats === 1000000));
+  const meJ = (await J.get('/api/me')).data;
+  const jobJ = adminJobs5b.find((x) => x.region_id === meJ.citizen.region_id);
+  check('Ada lowongan ADMIN di wilayah lahir J', !!jobJ, `region=${meJ.region?.name}`);
+  const kId = (await K.get('/api/me')).data.citizen.id;
+  const mId = (await M.get('/api/me')).data.citizen.id;
+  const db5b = new DatabaseSync(DB_PATH);
+  db5b.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(meJ.citizen.region_id, kId);
+  db5b.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(meJ.citizen.region_id, mId);
+  db5b.close();
+  r = await J.post('/api/jobs/apply', { job_id: jobJ.id });
+  check('J melamar lowongan ADMIN di wilayahnya', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await K.post('/api/jobs/apply', { job_id: jobJ.id });
+  check('K melamar lowongan ADMIN yang sama dengan J (tanpa batas)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await M.post('/api/jobs/apply', { job_id: jobJ.id });
+  check('M melamar lowongan ADMIN yang sama (pekerja ke-3, tetap diterima)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await J.get('/api/jobs');
+  const jobAfter5b = r.data.jobs.find((x) => x.id === jobJ.id);
+  const meJ3 = (await J.get('/api/me')).data.citizen;
+  const meK3 = (await K.get('/api/me')).data.citizen;
+  const meM3 = (await M.get('/api/me')).data.citizen;
+  check('Lowongan ADMIN menampung J+K+M (tanpa batas), seats_taken tetap 0',
+    jobAfter5b.workers >= 3 && jobAfter5b.seats_taken === 0 && meJ3.job_id === jobJ.id && meK3.job_id === jobJ.id && meM3.job_id === jobJ.id,
+    `workers=${jobAfter5b.workers} seats_taken=${jobAfter5b.seats_taken}`);
+
+  // --- Shift fleksibel: L melamar ADMIN di wilayahnya sendiri.
+  const meL = (await L.get('/api/me')).data;
+  const jobsL = (await L.get('/api/jobs')).data.jobs;
+  const jobL = jobsL.find((x) => x.is_admin === 1 && x.region_id === meL.citizen.region_id);
+  check('Ada lowongan ADMIN di wilayah lahir L', !!jobL, `region=${meL.region?.name}`);
+  r = await L.post('/api/jobs/apply', { job_id: jobL.id });
+  check('L melamar lowongan ADMIN di wilayahnya', r.status === 200 && r.data.ok);
+  // effectiveQty = jumlah setelah pengali UU upah ADMIN (bila ada) — pakai
+  // itu sebagai dasar ekspektasi supaya tes tidak rapuh terhadap UU.
+  const baseQty = jobL.effectiveQty ?? jobL.pay_qty;
+  const dbL = new DatabaseSync(DB_PATH);
+  dbL.prepare('UPDATE citizens SET energy = 50 WHERE id = ?').run(meL.citizen.id);
+  dbL.close();
+  r = await L.post('/api/jobs/shift');
+  const expect50 = Math.floor(baseQty * 0.5);
+  const got50 = r.data.goods ? Number(String(r.data.goods).split('×')[0]) : -1;
+  check(`Shift 50 energi: dibayar ~50% (${expect50}× ${jobL.resource})`, r.status === 200 && got50 >= expect50 - 1 && got50 <= expect50 + 1, `goods=${r.data.goods} energyUsed=${r.data.energyUsed}`);
+  check('Respons shift 50 energi: energyUsed 50, energyPct 50', r.data.energyUsed === 50 && r.data.energyPct === 50, `energyUsed=${r.data.energyUsed} energyPct=${r.data.energyPct}`);
+  const dbL2 = new DatabaseSync(DB_PATH);
+  dbL2.prepare('UPDATE citizens SET energy = 1 WHERE id = ?').run(meL.citizen.id);
+  dbL2.close();
+  r = await L.post('/api/jobs/shift');
+  const got1 = r.data.goods ? Number(String(r.data.goods).split('×')[0]) : -1;
+  check('Shift 1 energi: dibayar ~1% (maks 1 unit, bukan penuh)', r.status === 200 && got1 <= 1, `goods=${r.data.goods}`);
+  check('Respons shift 1 energi: energyUsed 1, energyPct 1', r.data.energyUsed === 1 && r.data.energyPct === 1, `energyUsed=${r.data.energyUsed}`);
+  const dbL3 = new DatabaseSync(DB_PATH);
+  dbL3.prepare('UPDATE citizens SET energy = 0 WHERE id = ?').run(meL.citizen.id);
+  dbL3.close();
+  r = await L.post('/api/jobs/shift');
+  check('Shift dengan energi 0 ditolak (400)', r.status === 400, `status=${r.status}`);
+  const meL2 = (await L.get('/api/me')).data.citizen;
+  check('Shift sebagian: XP tetap 0 (XP hanya untuk shift penuh)', meL2.xp === 0, `xp=${meL2.xp}`);
+  check('Shift sebagian: counter shift tetap naik (2 giliran)', meL2.shifts === 2, `shifts=${meL2.shifts}`);
+  const dbL4 = new DatabaseSync(DB_PATH);
+  const chronL = dbL4.prepare('SELECT chronicle_done FROM citizens WHERE id = ?').get(meL.citizen.id).chronicle_done;
+  dbL4.close();
+  check('Shift sebagian TIDAK menyelesaikan tugas Kronik shift (anti-exploit)', !JSON.parse(chronL).includes('shift'), `chronicle_done=${chronL}`);
+
+  // --- Profil publik: M baru; J melihat profilnya.
+  const meM = (await M.get('/api/me')).data;
+  r = await J.get('/api/profile/warga_m');
+  check('Profil publik M: level + shifts + terakhir main tampil', r.status === 200 && r.data.profile.level === 1 && r.data.profile.shifts === 0 && typeof r.data.profile.last_seen_at === 'number' && r.data.profile.last_seen_at > 0, `last_seen_at=${r.data.profile.last_seen_at}`);
+  check('Profil publik M: citizen_id cocok (target tombol Chat/DM)', r.data.profile.citizen_id === meM.citizen.id, `citizen_id=${r.data.profile.citizen_id}`);
+  check('Profil publik TIDAK membocorkan emas/USD/energi/email/kelelahan',
+    r.data.profile.gold === undefined && r.data.profile.usd === undefined && r.data.profile.email === undefined && r.data.profile.energy === undefined && r.data.profile.fatigue === undefined && r.data.profile.missions === undefined,
+    `gold=${r.data.profile.gold} usd=${r.data.profile.usd}`);
+  check('Profil orang lain: referral_code + referral disembunyikan', r.data.profile.referral_code == null && r.data.profile.referral == null, `referral_code=${r.data.profile.referral_code}`);
+  r = await M.get('/api/profile/warga_m');
+  check('Profil sendiri: referral_code + referral tampil', typeof r.data.profile.referral_code === 'string' && !!r.data.profile.referral, `code=${r.data.profile.referral_code}`);
+  r = await M.post('/api/profile/bio', { bio: 'Halo, aku M.' });
+  check('Edit bio dari profil berhasil', r.status === 200 && r.data.ok);
+  r = await J.get('/api/profile/warga_m');
+  check('Bio baru tampil di profil publik', r.data.profile.bio === 'Halo, aku M.', `bio=${r.data.profile.bio}`);
+  r = await M.post('/api/profile/bio', { bio: 'x'.repeat(1001) });
+  check('Bio > 1000 karakter ditolak (400)', r.status === 400);
+  r = await J.get('/api/dms/' + meM.citizen.id);
+  check('Buka DM ke M dari profil (citizen_id): 200', r.status === 200, `status=${r.status}`);
+  r = await J.post('/api/dms/' + meM.citizen.id, { content: 'Halo M, salam kenal' });
+  check('Kirim DM ke M berhasil', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  const meJ2 = (await J.get('/api/me')).data.citizen;
+  r = await M.get('/api/dms');
+  check('M melihat percakapan dengan J di daftar DM', r.data.conversations.some((cv) => cv.other_id === meJ2.id), `convs=${r.data.conversations.length}`);
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

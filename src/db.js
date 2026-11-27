@@ -8,7 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { PARLIAMENT_OPENS_AT_DEFAULT } from './game.js';
+import { ADMIN_JOB_SEATS, PARLIAMENT_OPENS_AT_DEFAULT } from './game.js';
 
 // Email yang menjadi admin otomatis (satu-satunya admin; tidak ada endpoint
 // promosi admin). Dibandingkan case-insensitive (email selalu disimpan lowercase).
@@ -941,7 +941,43 @@ export const ADMIN_JOBS = [  { title: 'Pekerja Gudang Pelabuhan', salary: 48, re
   { title: 'Asisten Toko Kelontong', salary: 45, resource: 'Gandum Mentah', qty: 38, region: 'Jawa Barat', desc: 'Melayani pembeli, menata rak, dan menjaga kasir.' },
   { title: 'Buruh Tani', salary: 42, resource: 'Kapas Mentah', qty: 21, region: 'Jawa Timur', desc: 'Panen dan olah hasil kebun. Bonus panen saat musim raya.' },
   { title: 'Penjaga Malam Pasar', salary: 47, resource: 'Batu Bara', qty: 39, region: 'Sumatera Utara', desc: 'Ronda malam di pasar tradisional sampai subuh.' },
+  // Perluasan 27 Nov 2026 (perintah pemilik): lowongan ADMIN ada di SEMUA
+  // 17 wilayah — satu per wilayah yang belum punya. Judul unik per
+  // lowongan (dipakai runDataFixups untuk mengenali lowongan ADMIN).
+  { title: 'Pekerja Gudang Logistik', salary: 46, resource: 'Besi Mentah', qty: 42, region: 'Jawa Tengah', desc: 'Atur stok dan bongkar muat di gudang logistik.' },
+  { title: 'Pemandu Wisata Danau', salary: 44, resource: 'Kayu', qty: 40, region: 'Sumatera Barat', desc: 'Antar wisatawan keliling danau dan jelaskan sejarahnya.' },
+  { title: 'Buruh Perkebunan Karet', salary: 45, resource: 'Kapas Mentah', qty: 24, region: 'Sumatera Selatan', desc: 'Sadap karet dan olah hasil kebun setiap pagi.' },
+  { title: 'Pekerja Hutan Lestari', salary: 46, resource: 'Kayu', qty: 44, region: 'Kalimantan Barat', desc: 'Rawat hutan lestari dan panen kayu legal.' },
+  { title: 'Pekerja Tambang Batu Bara', salary: 47, resource: 'Batu Bara', qty: 40, region: 'Kalimantan Timur', desc: 'Kerja di tambang batu bara dengan alat berat.' },
+  { title: 'Sopir Angkutan Sungai', salary: 45, resource: 'Minyak Mentah', qty: 38, region: 'Kalimantan Selatan', desc: 'Antar barang lewat sungai dengan perahu motor.' },
+  { title: 'Nelayan Pesisir', salary: 44, resource: 'Gandum Mentah', qty: 36, region: 'Sulawesi Selatan', desc: 'Melayang di laut dan jual hasil tangkapan di pasar.' },
+  { title: 'Pekerja Pelabuhan Manado', salary: 46, resource: 'Besi Mentah', qty: 40, region: 'Sulawesi Utara', desc: 'Bongkar muat kapal di pelabuhan Manado.' },
+  { title: 'Pelayan Warung Pantai', salary: 44, resource: 'Kapas Mentah', qty: 22, region: 'Bali', desc: 'Layani wisatawan di warung tepi pantai.' },
+  { title: 'Pemandu Pendaki Rinjani', salary: 43, resource: 'Kayu', qty: 38, region: 'Nusa Tenggara Barat', desc: 'Pandu pendaki dan jaga jalur gunung.' },
+  { title: 'Penjaga Pelabuhan Kupang', salary: 45, resource: 'Batu Bara', qty: 36, region: 'Nusa Tenggara Timur', desc: 'Jaga keamanan pelabuhan Kupang siang dan malam.' },
+  { title: 'Pekerja Perkebunan Sagu', salary: 46, resource: 'Gandum Mentah', qty: 42, region: 'Papua', desc: 'Olah sagu di perkebunan dan kirim ke pasar.' },
 ];
+
+// Pastikan SEMUA lowongan ADMIN ada (satu per judul di ADMIN_JOBS) —
+// idempotent, dipakai seed DB baru DAN runDataFixups (DB lama yang hanya
+// punya 6 lowongan lama mendapat 12 lowongan baru tanpa migrasi skema).
+// Kursi ADMIN = ADMIN_JOB_SEATS (tanpa batas pekerja); lowongan ADMIN lama
+// (kursi 4) ikut dinaikkan. `db` = { one, run } (modul atau transaksi).
+async function ensureAdminJobs(db) {
+  const now = Date.now();
+  for (const j of ADMIN_JOBS) {
+    const reg = await db.one('SELECT id FROM regions WHERE name = ?', [j.region]);
+    if (!reg) continue;
+    const existing = await db.one('SELECT id, seats FROM jobs WHERE is_admin = 1 AND title = ?', [j.title]);
+    if (!existing) {
+      await db.run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, resource, pay_qty, level_min, tier, seats, seats_taken, region_id, description, created_at)
+        VALUES (NULL,1,?,?, 'goods', ?, ?,1,1,?,0,?,?,?) RETURNING id`,
+        [j.title, j.salary, j.resource, j.qty, ADMIN_JOB_SEATS, reg.id, j.desc, now]);
+    } else if (Number(existing.seats) !== ADMIN_JOB_SEATS) {
+      await db.run('UPDATE jobs SET seats = ? WHERE id = ?', [ADMIN_JOB_SEATS, existing.id]);
+    }
+  }
+}
 
 export async function closeDb() {
   if (pool) { try { await pool.end(); } catch { /* abaikan */ } pool = null; poolPromise = null; }
@@ -1030,6 +1066,9 @@ async function runDataFixups() {
   }
   await run('UPDATE users SET is_admin = 1 WHERE email = ?', [ADMIN_EMAIL]);
   await run("UPDATE users SET is_banned = 0, banned_reason = '', banned_at = 0 WHERE is_admin = 1 AND is_banned = 1");
+  // Lowongan ADMIN baru (perluasan 12 wilayah) juga masuk ke DB lama —
+  // runDataFixups jalan tiap boot (jalur cepat), jadi tidak butuh migrasi.
+  await ensureAdminJobs({ one, run });
   for (const j of ADMIN_JOBS) {
     await run(
       "UPDATE jobs SET salary_type = 'goods', resource = ?, pay_qty = ?, salary = ? WHERE is_admin = 1 AND title = ?",
@@ -1472,15 +1511,9 @@ async function seed(t = { one, run }) {
   // (migrateWorldRedesign).
   await t.run("INSERT INTO db_meta (key, value) VALUES ('parliament_opens_at', ?) ON CONFLICT(key) DO NOTHING",
     [String(PARLIAMENT_OPENS_AT_DEFAULT)]);
-  const jobCount = await t.one('SELECT COUNT(*) AS c FROM jobs WHERE is_admin = 1');
-  if (Number(jobCount.c) === 0) {
-    for (const j of ADMIN_JOBS) {
-      const reg = await t.one('SELECT id FROM regions WHERE name = ?', [j.region]);
-      await t.run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, resource, pay_qty, level_min, tier, seats, seats_taken, region_id, description, created_at)
-        VALUES (NULL,1,?,?, 'goods', ?, ?,1,1,4,0,?,?,?) RETURNING id`,
-        [j.title, j.salary, j.resource, j.qty, reg.id, j.desc, now]);
-    }
-  }
+  // Lowongan ADMIN: pastikan semuanya ada (idempotent — DB lama yang
+  // hanya punya 6 lowongan lama ikut dilengkapi 12 lowongan baru di sini).
+  await ensureAdminJobs(t);
   const world = await t.one('SELECT * FROM world WHERE id = 1');
   if (!world) {
     await t.run('INSERT INTO world (id, day, last_tick_date) VALUES (1,1,?) RETURNING id',

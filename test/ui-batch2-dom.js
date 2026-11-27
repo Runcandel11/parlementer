@@ -204,7 +204,7 @@ async function main() {
     check('dashboard: kartu wilayah menampilkan skor kota + peringkat', regionText.includes('Skor Kota') && regionText.includes(`${myRegionRow.city_score}/10`) && /Peringkat\s*\d+\/17/.test(regionText), regionText.slice(0, 120));
     check('dashboard: kartu wilayah menampilkan 5 bar infrastruktur', ['Kesehatan', 'Pendidikan', 'Militer', 'Industri', 'Listrik'].every((x) => regionText.includes(x)), regionText.slice(0, 200));
     check('dashboard: kartu wilayah menampilkan kapasitas + pemberontakan 0/5', regionText.includes('Kapasitas Wilayah') && regionText.includes('0/5 pendukung'), regionText.slice(0, 200));
-    check('dashboard: kartu wilayah menampilkan wilayah merdeka (tanpa negara)', regionText.includes('Wilayah Merdeka') && !regionText.includes('Republik Indonesia'));
+    check('dashboard: kartu wilayah menampilkan wilayah belum bernegara (tanpa negara)', regionText.includes('Belum Bernegara') && !regionText.includes('Republik Indonesia'));
     check('dashboard: tombol DUKUNG PEMBERONTAKAN tampil', !!document.querySelector('#btn-dash-rebel'), document.querySelector('#btn-dash-rebel')?.textContent);
 
     // --- UNDANG TEMAN (overlay) ---

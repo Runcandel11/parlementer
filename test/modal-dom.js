@@ -578,7 +578,7 @@ async function main() {
     window.eval('route()');
     await sleep(300);
     const dashText = document.querySelector('#page').textContent;
-    check('Dashboard: hero profil tampil (nama + Wilayah Merdeka + Jakarta)', !!document.querySelector('.profile-hero-name') && dashText.includes('Wilayah Merdeka') && dashText.includes('Jakarta'));
+    check('Dashboard: hero profil tampil (nama + Belum Bernegara + Jakarta)', !!document.querySelector('.profile-hero-name') && dashText.includes('Belum Bernegara') && dashText.includes('Jakarta'));
     check('Dashboard: blok LEVEL tampil (angka emas + XP)', dashText.includes('LEVEL') && dashText.includes('0 / 5 XP'));
     check('Dashboard: blok ENERGI tampil (100/100 + teks penuh)', dashText.includes('ENERGI') && dashText.includes('100/100') && dashText.includes('Penuh — gunakan untuk bekerja'));
     check('Dashboard: blok KELELAHAN tampil (ambang 10.000/15.000)', dashText.includes('KELELAHAN') && dashText.includes('10.000 ×0.75') && dashText.includes('15.000 ×0.5'));
@@ -669,7 +669,7 @@ async function main() {
     window.location.hash = '#/profile';
     window.eval('route()');
     await sleep(300);
-    check('Profil: hero tampil (nama + Wilayah Merdeka + Jakarta)', !!document.querySelector('.profile-hero-name') && document.querySelector('.profile-hero-name').textContent.includes('warga_tes') && document.querySelector('#page').textContent.includes('Wilayah Merdeka') && document.querySelector('#page').textContent.includes('Jakarta'));
+    check('Profil: hero tampil (nama + Belum Bernegara + Jakarta)', !!document.querySelector('.profile-hero-name') && document.querySelector('.profile-hero-name').textContent.includes('warga_tes') && document.querySelector('#page').textContent.includes('Belum Bernegara') && document.querySelector('#page').textContent.includes('Jakarta'));
     // Foto profil (Masalah 1): tombol Ubah Foto muncul di profil sendiri
     // (user_id sama dengan ME) dan TIDAK muncul di profil orang lain.
     // Perbandingan memakai user_id, bukan username — nama tampil huruf

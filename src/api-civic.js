@@ -251,7 +251,7 @@ export function registerCivic(app) {
     // bisa mendirikan negara di sana.
     const myRegion = await one('SELECT * FROM regions WHERE id = ?', [c.home_region_id]);
     if (!myRegion) return res.status(400).json({ error: 'Wilayah asalmu tidak ditemukan.' });
-    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayah asalmu sudah bernegara. Pindah kewarganegaraan ke wilayah merdeka dulu untuk mendirikan negara.' });
+    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayah asalmu sudah bernegara. Pindah kewarganegaraan ke wilayah yang belum bernegara dulu untuk mendirikan negara.' });
     const taken = await one('SELECT id FROM country WHERE LOWER(name) = LOWER(?)', [cleanName]);
     if (taken) return res.status(400).json({ error: 'Nama negara sudah dipakai.' });
     const now = Date.now();
@@ -296,7 +296,7 @@ export function registerCivic(app) {
     // harus masih merdeka.
     const myRegion = await one('SELECT * FROM regions WHERE id = ?', [c.home_region_id]);
     if (!myRegion) return res.status(400).json({ error: 'Wilayah asalmu tidak ditemukan.' });
-    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayah asalmu sudah bernegara — unifikasi hanya untuk wilayah merdeka.' });
+    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayah asalmu sudah bernegara — unifikasi hanya untuk wilayah yang belum bernegara.' });
     const existing = await one("SELECT id FROM country_joins WHERE region_id = ? AND status = 'voting' AND ends_at > ?", [myRegion.id, Date.now()]);
     if (existing) return res.status(400).json({ error: 'Sudah ada usulan unifikasi yang sedang divoting untuk wilayah asalmu.' });
     const now = Date.now();

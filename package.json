@@ -28,6 +28,7 @@
     "test:market-dom": "node test/market-dom.js",
     "test:ui-batch2": "node test/ui-batch2-dom.js",
     "test:landing-glass": "node test/landing-glass-dom.js",
+    "test:profile-admin": "node test/profile-admin-dom.js",
     "test:ssl": "node test/ssl-warning.mjs"
   },
   "type": "module",

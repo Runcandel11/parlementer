@@ -515,7 +515,7 @@ function renderHUD() {
   setVersion(ME.version);
   const c = ME.citizen;
   $('#hud-name').textContent = c.username + (c.isPremium ? ' ◆' : '');
-  $('#hud-region').textContent = (ME.region?.name || '') + ' · ' + (ME.region?.country_name || ME.country?.name || 'Wilayah Merdeka');
+  $('#hud-region').textContent = (ME.region?.name || '') + ' · ' + (ME.region?.country_name || ME.country?.name || 'Belum Bernegara');
   $('#hud-usd').textContent = fmtRp(c.usd);
   $('#hud-gold').textContent = fmt(c.gold);
   // Perisai HUD (UI batch 2): angka BESAR di dalam perisai = LEVEL warga;
@@ -851,7 +851,7 @@ ROUTES.dashboard = async () => {
     <div class="profile-hero">
       <a class="profile-hero-name" data-goto="#/profile" title="Lihat profilmu">${esc(c.username)}</a>
       <div class="profile-hero-sub">
-        <span><span class="dot-red">■</span> ${esc(ME.region?.country_name || ME.country?.name || 'Wilayah Merdeka')}</span>
+        <span><span class="dot-red">■</span> ${esc(ME.region?.country_name || ME.country?.name || 'Belum Bernegara')}</span>
         <span><span class="muted">📍</span> ${esc(ME.region?.name || '')}</span>
       </div>
     </div>
@@ -883,6 +883,12 @@ ROUTES.dashboard = async () => {
       <div class="kv"><span class="k">Rupiah</span><span class="v">${fmtRp(c.usd)}</span></div>
     </div>
   </div>
+  ${ME.job ? `<div class="panel" id="dash-shift">
+    <div class="panel-head"><h3>💼 PEKERJAAN</h3><button class="btn-text gold" type="button" data-goto="#/jobs">LIHAT ›</button></div>
+    <div class="kv"><span class="k">${esc(ME.job.title)} · ${esc(ME.job.company_name || 'ADMIN')}</span><span class="v gold-text">${payLabel(ME.job)}</span></div>
+    <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah sebanding dengan energi yang dipakai.</p>
+    <button class="btn-gold" id="btn-dash-shift" type="button" ${c.energy <= 0 ? 'disabled' : ''}>KERJAKAN SATU GILIRAN (${Math.min(c.energy, 100)} ⚡)</button>
+  </div>` : ''}
   <div class="panel" id="dash-map">
     <div class="panel-head"><h3>🗺️ PETA LANGSUNG</h3><button class="btn-text gold" type="button" data-goto="#/map">BUKA PETA ›</button></div>
     <div class="map-tiles" id="dash-map-tiles"><p class="muted small">Memuat…</p></div>
@@ -941,6 +947,9 @@ ROUTES.dashboard = async () => {
   });
   // Tombol UNDANG TEMAN (UI batch 2): buka popup referral.
   $('#btn-invite')?.addEventListener('click', () => openReferralModal());
+  // Tombol SHIFT di dashboard (permintaan LIO): kerja tanpa masuk halaman
+  // Pekerjaan dulu — handler sama dengan halaman Pekerjaan (doShift).
+  $('#btn-dash-shift')?.addEventListener('click', doShift);
   // Tiga panel API diisi paralel, masing-masing begitu selesai — gagal satu
   // tidak menggagalkan yang lain (allSettled + pesan gagal per panel).
   const eatMeal = async (tier) => {
@@ -1039,7 +1048,7 @@ ROUTES.dashboard = async () => {
       const w = s.world;
       g.innerHTML = `
       <div class="stat-cell"><div class="stat-label">👥 Populasi Dunia</div><div class="stat-num">${fmt(w.population)}</div><div class="stat-sub">Hari ${ME.world.day}</div></div>
-      <div class="stat-cell"><div class="stat-label">🏳️ Negara</div><div class="stat-num">${fmt(w.countries)}</div><div class="stat-sub">${fmt(w.freeRegions)} wilayah merdeka</div></div>
+      <div class="stat-cell"><div class="stat-label">🏳️ Negara</div><div class="stat-num">${fmt(w.countries)}</div><div class="stat-sub">${fmt(w.freeRegions)} wilayah belum bernegara</div></div>
       <div class="stat-cell"><div class="stat-label">🗺️ Wilayah</div><div class="stat-num">${fmt(w.regions)}</div><div class="stat-sub">${fmt(s.myRegion.population)} warga di wilayahku</div></div>
       <div class="stat-cell"><div class="stat-label">🟢 Online</div><div class="stat-num">${fmt(ME.onlineCount ?? 0)}</div><div class="stat-sub">aktif 5 menit terakhir</div></div>`;
     }
@@ -1052,7 +1061,7 @@ ROUTES.dashboard = async () => {
       <p class="lbl-gold" style="margin:0">DITEMPATKAN DI</p>
       <h4 style="font-size:22px">${esc(r.name)}</h4>
       ${ME.travel ? `<p class="teal-text small">✈️ Dalam perjalanan ke ${esc(ME.travel.toRegionName)} — tiba ${fmtCountdown(ME.travel.remainingMs)} lagi.</p>` : ''}
-      <p class="muted">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Wilayah Merdeka'}</p>
+      <p class="muted">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Belum Bernegara'}</p>
       <div class="kv"><span class="k">Skor Kota</span><span class="v"><span class="region-score">${r.city_score}<small>/10</small></span></span></div>
       <div class="kv"><span class="k">Peringkat</span><span class="v">${r.rank}/17 wilayah</span></div>
       ${infra.map(([label, v]) => `<div class="infra-row"><span class="lbl">${label}</span><span class="bar"><i style="width:${Math.min(100, (Number(v) / 10) * 100)}%"></i></span><span class="val">${v}</span></div>`).join('')}
@@ -1084,7 +1093,7 @@ ROUTES.dashboard = async () => {
       <button class="map-tile ${r.id === d.mine ? 'mine' : ''} ${r.country_name ? '' : 'free'}" type="button" data-goto="#/regions/${r.id}" title="${esc(r.name)} — ${r.population} warga">
         ${r.country_name ? '' : '<span class="mt-q" aria-hidden="true">?</span>'}
         <span class="mt-name">${esc(r.name)}</span>
-        <span class="mt-sub"><span class="mt-dot ${r.country_name ? '' : 'free'}"></span>${r.id === d.mine ? '<span class="you">📍 KAMU</span>' : esc(r.country_name || 'Merdeka')}</span>
+        <span class="mt-sub"><span class="mt-dot ${r.country_name ? '' : 'free'}"></span>${r.id === d.mine ? '<span class="you">📍 KAMU</span>' : esc(r.country_name || 'Belum Bernegara')}</span>
       </button>`).join('');
   }).catch(() => { const el = $('#dash-map-tiles'); if (el) el.innerHTML = '<p class="muted">Gagal memuat peta.</p>'; });
   const fillConvoy = api('/api/convoy').then((cv) => {
@@ -1249,7 +1258,7 @@ ROUTES.profile = async (username) => {
   <div class="profile-hero">
     <div class="profile-hero-name">${esc(pr.username)}${pr.isPremium ? ' ◆' : ''}</div>
     <div class="profile-hero-sub">
-      <span><span class="dot-red">■</span> ${esc(pr.country_name || 'Wilayah Merdeka')}</span>
+      <span><span class="dot-red">■</span> ${esc(pr.country_name || 'Belum Bernegara')}</span>
       <span><span class="muted">📍</span> ${esc(pr.region_name)}</span>
     </div>
   </div>
@@ -1267,12 +1276,19 @@ ROUTES.profile = async (username) => {
       </div>` : ''}
     </div>
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(pr.publicId)}</b></span></div>
-    <div class="kv"><span class="k">Kewarganegaraan</span><span class="v">${esc(pr.country_name || 'Wilayah Merdeka')}</span></div>
+    <div class="kv"><span class="k">Kewarganegaraan</span><span class="v">${esc(pr.country_name || 'Belum Bernegara')}</span></div>
     <div class="kv"><span class="k">Daerah asal</span><span class="v">${esc(pr.region_name)}</span></div>
     <div class="kv"><span class="k">Partai</span><span class="v">${pr.party ? esc(pr.party.name) + ' [' + esc(pr.party.tag) + ']' : '—'}</span></div>
     <div class="kv"><span class="k">Bergabung</span><span class="v">${fmtDate(pr.created_at)}</span></div>
+    <div class="kv"><span class="k">Terakhir main</span><span class="v">${pr.last_seen_at ? ago(pr.last_seen_at) : 'Belum pernah'}</span></div>
     ${pr.bio ? `<p style="margin-top:10px">${esc(pr.bio)}</p>` : ''}
+    ${pr.user_id === ME.citizen.user_id ? `<div style="margin-top:12px">
+      <label class="small muted">BIOGRAFI (maks 1000 karakter)</label>
+      <textarea id="profile-bio" rows="3" style="width:100%;margin-top:4px">${esc(pr.bio || '')}</textarea>
+      <button class="btn-gold btn-sm" id="btn-save-profile-bio" type="button" style="margin-top:6px">Simpan Biografi</button>
+    </div>` : ''}
   </div>
+  ${pr.user_id !== ME.citizen.user_id ? `<button class="btn-gold" data-goto="#/messages/${pr.citizen_id}" type="button" style="margin-bottom:12px">💬 Chat dengan ${esc(pr.username)}</button>` : ''}
   ${pr.referral ? `<div class="panel"><h3>🔗 KODE REFERRAL</h3>
     <div class="kv"><span class="k">Kode referralmu</span><span class="v"><b>${esc(pr.referral.code)}</b> <button class="btn-gold btn-sm" id="btn-copy-ref" type="button">Salin</button></span></div>
     <div class="kv"><span class="k">Link ajakan</span><span class="v small">${esc(location.origin + '/?ref=' + pr.referral.code)}</span></div>
@@ -1315,6 +1331,14 @@ ROUTES.profile = async (username) => {
   // Tombol UNDANG TEMAN di panel referral profil (UI batch 2).
   const inviteBtn = $('#btn-invite-profile');
   if (inviteBtn && pr.referral) inviteBtn.onclick = () => openReferralModal(pr.referral.code);
+
+  // Edit BIO langsung dari profil sendiri (saran Vincent, tiket #9) —
+  // tanpa lewat Pengaturan. Simpan lalu muat ulang halaman profil.
+  const bioSaveBtn = $('#btn-save-profile-bio');
+  if (bioSaveBtn) bioSaveBtn.onclick = async () => {
+    try { await post('/api/profile/bio', { bio: $('#profile-bio').value }); toast('Biografi disimpan.'); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  };
 
   // ---------- FOTO PROFIL (hanya profil sendiri) ----------
   // Penentu "profil sendiri" = ID warga (user_id), BUKAN username — nama
@@ -2087,6 +2111,18 @@ const payLabel = (j) => j.salary_type === 'goods'
   ? `${fmt(j.effectiveQty ?? j.pay_qty)}× ${j.resource} / shift`
   : `${fmtRp(j.salary)} / shift`;
 
+// Shift dari mana saja (halaman Pekerjaan + dashboard): satu handler yang
+// sama — POST /api/jobs/shift lalu segarkan data + halaman. Pesan toast
+// memakai note server (sudah berisi info energi + hadiah bila shift
+// sebagian); gaji tetap hanya perlu net/pajak.
+async function doShift() {
+  try {
+    const r = await post('/api/jobs/shift');
+    toast(r.goods ? `Shift selesai! ${r.note}` : `Shift selesai!${r.note ? ' ' + r.note : ''} Gaji bersih ${fmtRp(r.net)} (pajak ${fmtRp(r.tax)}).`);
+    await refreshMe(); route();
+  } catch (e) { toast(e.message); }
+}
+
 // ---------- PEKERJAAN ----------
 ROUTES.jobs = async () => {
   const data = await api('/api/jobs');
@@ -2100,27 +2136,22 @@ ROUTES.jobs = async () => {
   </div>
   ${myJob ? `<div class="panel"><h3>💼 PEKERJAANMU</h3>
     <div class="kv"><span class="k">${esc(myJob.title)} · ${esc(myJob.company_name || 'ADMIN')}</span><span class="v">${payLabel(myJob)}</span></div>
-    <p class="muted small">Satu giliran memakai 100 energi. ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan (tarif sesuai UU yang berlaku).'}</p>
-    <div class="row"><button class="btn-gold" id="btn-shift">KERJAKAN SATU GILIRAN (100 ⚡)</button>
+    <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah sebanding dengan energi yang dipakai (50 energi → ~50% hadiah). ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan (tarif sesuai UU yang berlaku).'}</p>
+    <div class="row"><button class="btn-gold" id="btn-shift" ${ME.citizen.energy <= 0 ? 'disabled' : ''}>KERJAKAN SATU GILIRAN (${Math.min(ME.citizen.energy, 100)} ⚡)</button>
     <button class="btn-ghost" id="btn-quit">Berhenti Kerja</button></div></div>` : ''}
   <div class="panel"><h3>📋 PAPAN LOWONGAN</h3>
     ${data.adminPayMult && data.adminPayMult !== 1 ? `<p class="muted small">Upah ADMIN saat ini ${Math.round(data.adminPayMult * 100)}% dari upah dasar (UU yang berlaku).</p>` : ''}
     ${data.jobs.length ? data.jobs.map((j) => `
       <div class="card">
         <h4>${esc(j.title)} ${j.is_admin ? '<span class="chip">ADMIN</span>' : ''}</h4>
-        <p class="muted small">${esc(j.company_name || 'Pemerintah')} · ${esc(j.region_name)} · Level ${j.level_min}+ · ${j.workers}/${j.seats} kursi</p>
+        <p class="muted small">${esc(j.company_name || 'Pemerintah')} · ${esc(j.region_name)} · Level ${j.level_min}+ · ${j.is_admin ? 'Tanpa batas kursi' : `${j.workers}/${j.seats} kursi`}</p>
         <p class="small">${esc(j.description || '')}</p>
         <div class="kv"><span class="k">${j.salary_type === 'goods' ? 'Upah (bahan mentah)' : j.salary_type === 'share' ? 'Bagi hasil' : 'Gaji tetap'}</span><span class="v gold-text">${payLabel(j)}</span></div>
         ${j.salary_type === 'goods' ? `<p class="muted small">Setara ~${fmtRp(j.salary)} / shift · jual bahannya di pasar untuk uang.</p>` : ''}
         <button class="btn-gold btn-sm" data-apply="${j.id}" ${ME.citizen.job_id === j.id ? 'disabled' : ''}>${ME.citizen.job_id === j.id ? '✓ Pekerjaanmu' : 'LAMAR'}</button>
       </div>`).join('') : emptyState('💼', 'Belum ada lowongan', 'Lowongan ADMIN dan perusahaan warga akan muncul di sini.')}
   </div>`);
-  $('#btn-shift')?.addEventListener('click', async () => {
-    try { const r = await post('/api/jobs/shift');
-      toast(r.goods ? `Shift selesai! ${r.note}` : `Shift selesai! Gaji bersih ${fmtRp(r.net)} (pajak ${fmtRp(r.tax)}).`);
-      await refreshMe(); route(); }
-    catch (e) { toast(e.message); }
-  });
+  $('#btn-shift')?.addEventListener('click', doShift);
   $('#btn-quit')?.addEventListener('click', async () => {
     try { await post('/api/jobs/quit'); toast('Kamu berhenti bekerja.'); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
@@ -2194,7 +2225,7 @@ ROUTES.map = async () => {
   // Banner transit (27 Nov 2026): selama bepergian, tombol travel di
   // semua kartu nonaktif — warga tiba saat waktunya habis.
   const transitBanner = ME.travel ? `<div class="panel"><p class="teal-text" style="margin:0">✈️ Dalam perjalanan ke <b>${esc(ME.travel.toRegionName)}</b> — tiba dalam ${fmtCountdown(ME.travel.remainingMs)} lagi.</p></div>` : '';
-  $('#page').innerHTML = page('PETA DUNIA', '17 wilayah merdeka. Klik wilayah untuk detail dan bepergian.', `
+  $('#page').innerHTML = page('PETA DUNIA', '17 wilayah belum bernegara. Klik wilayah untuk detail dan bepergian.', `
   ${transitBanner}
   <div class="panel"><h3>🔍 CARI WILAYAH</h3>
     <input id="region-search" placeholder="Cari wilayah...">
@@ -2204,7 +2235,7 @@ ROUTES.map = async () => {
     <div class="card region-card" data-name="${esc(r.name.toLowerCase())}">
       <div class="panel-head"><h4>${esc(r.name)}</h4><span class="chip">${esc(r.type)} · Skor ${r.city_score}/10</span></div>
       <p class="muted small">${r.population} warga · ${r.companies} perusahaan · Pemberontakan ${r.rebellion}/5${r.resource_bonus ? ' · Bonus: ' + esc(r.resource_bonus) : ''}</p>
-      <p class="muted small">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Wilayah Merdeka'}</p>
+      <p class="muted small">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Belum Bernegara'}</p>
       <div class="row"><button class="btn-gold btn-sm" data-goto="#/regions/${r.id}">Lihat Wilayah</button>
       ${r.id === data.home ? '<span class="chip gold">🏠 KEWARGANEGARAAN</span>' : ''}
       ${r.id === data.mine ? '<span class="chip teal">📍 KAMU DI SINI</span>' : ME.travel ? '<span class="chip">✈️ Dalam perjalanan</span>' : `<button class="btn-ghost btn-sm" data-travel="${r.id}">Bepergian (~${r.travelMinutes} mnt · ${data.travelTickets || 1} 🎫)</button>`}</div>
@@ -2224,7 +2255,7 @@ ROUTES.regions = async (id) => {
   if (id) {
     const d = await api('/api/regions/' + id);
     const r = d.region;
-    $('#page').innerHTML = page(esc(r.name).toUpperCase(), `${esc(r.type)} · ${r.country_name ? esc(r.country_name) : 'Wilayah Merdeka'}`, `
+    $('#page').innerHTML = page(esc(r.name).toUpperCase(), `${esc(r.type)} · ${r.country_name ? esc(r.country_name) : 'Belum Bernegara'}`, `
     <div class="stat-grid">
       <div class="stat-cell"><div class="stat-label">🏙️ Skor Kota</div><div class="stat-num">${r.city_score}<span style="font-size:18px;color:var(--muted)">/10</span></div></div>
       <div class="stat-cell"><div class="stat-label">👥 Warga</div><div class="stat-num">${fmt(r.population)}</div></div>
@@ -2240,8 +2271,8 @@ ROUTES.regions = async (id) => {
       <div class="kv"><span class="k">Kapasitas wilayah</span><span class="v">${r.capacity}% ${d.home ? '· Ini wilayah asalmu' : ''}</span></div>
     </div>
     <div class="panel"><h3>⚖️ POLITIK</h3>
-      <div class="kv"><span class="k">Negara</span><span class="v">${r.country_name ? esc(r.country_name) : 'Wilayah Merdeka'}</span></div>
-      <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${d.taxIncome ?? 0}%${r.country_name ? '' : ' · wilayah merdeka tidak memungut pajak'}</span></div>
+      <div class="kv"><span class="k">Negara</span><span class="v">${r.country_name ? esc(r.country_name) : 'Belum Bernegara'}</span></div>
+      <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${d.taxIncome ?? 0}%${r.country_name ? '' : ' · wilayah yang belum bernegara tidak memungut pajak'}</span></div>
       <div class="kv"><span class="k">Pajak produksi</span><span class="v">1%</span></div>
       <div class="kv"><span class="k">Pajak impor / ekspor</span><span class="v">2% / 2%</span></div>
       <div class="kv"><span class="k">Perbatasan</span><span class="v">Terbuka</span></div>
@@ -2298,7 +2329,7 @@ ROUTES.country = async () => {
   const title = c ? esc(c.name).toUpperCase() : 'BELUM BERNEGARA';
   const sub = c
     ? `${sysLabel(c.system).label} · ${ideLabel(c.ideology).label} · Ibu kota ${esc(c.capital)}`
-    : 'Dunia masih terpecah — wilayahmu merdeka. Dirikan negaramu sendiri atau gabung lewat unifikasi.';
+    : 'Dunia masih terpecah — wilayahmu belum bernegara. Dirikan negaramu sendiri atau gabung lewat unifikasi.';
   const body = c ? `
   <div class="stat-grid">
     <div class="stat-cell"><div class="stat-label">👥 Warga</div><div class="stat-num">${fmt(myCountryRow?.citizen_count ?? 0)}</div></div>
@@ -2372,7 +2403,7 @@ ROUTES.country = async () => {
     ${!d.myMinisterRole ? '<p class="muted small">Kamu bukan menteri. Wewenang ini hanya untuk Menteri Ekonomi, Pertahanan, dan Dalam Negeri.</p>' : ''}
   </div>
   ${d.wars.length ? `<div class="panel"><h3>⚔️ PERANG AKTIF</h3>${d.wars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}</div>` : ''}` : `
-  <div class="panel"><h3>🕊️ WILAYAHMU MERDEKA</h3>
+  <div class="panel"><h3>🕊️ WILAYAHMU BELUM BERNEGARA</h3>
     <p>Wilayah kewarganegaraanmu adalah <b>${esc(d.myRegion?.name || '')}</b> — wilayah ini belum bernegara. Kamu bisa mendirikan negara sendiri (wilayahmu jadi ibu kota) atau mengusulkan wilayahmu bergabung dengan negara yang sudah ada.</p>
     <div class="kv"><span class="k">Wilayahmu</span><span class="v">${esc(d.myRegion?.name || '')} · ${esc(d.myRegion?.type || '')}</span></div>
     <div class="kv"><span class="k">Levelmu</span><span class="v">${ME.citizen.level} (butuh Level ${rules.minLevel} untuk mendirikan negara)</span></div>
@@ -2461,12 +2492,12 @@ ROUTES.stats = async () => {
   const emptyRows = '<p class="muted">Belum ada data.</p>';
   const levelRows = (rows) => rows.length ? rows.map((x, i) => `
     <div class="leader-row"><span class="leader-rank">${i + 1}</span>
-      <div class="leader-main"><div class="leader-name">${esc(x.username)}</div><div class="leader-sub">${esc(x.region_name)}${x.country_name ? ' · ' + esc(x.country_name) : ' · Wilayah Merdeka'}</div>
+      <div class="leader-main"><div class="leader-name" data-goto="#/profile/${encodeURIComponent(x.username)}" style="cursor:pointer" title="Lihat profil ${esc(x.username)}">${esc(x.username)}</div><div class="leader-sub">${esc(x.region_name)}${x.country_name ? ' · ' + esc(x.country_name) : ' · Belum Bernegara'}</div>
       <div class="bar leader-bar"><i style="width:${Math.round((Number(x.level) / (Number(rows[0]?.level) || 1)) * 100)}%"></i></div></div>
       <span class="leader-val">LV ${x.level} <small>${fmt(x.xp)} XP</small></span></div>`).join('') : emptyRows;
   const regionRows = (rows) => rows.length ? rows.map((x, i) => `
     <div class="leader-row"><span class="leader-rank">${i + 1}</span>
-      <div class="leader-main"><div class="leader-name">${esc(x.name)}</div><div class="leader-sub">${esc(x.country_name || 'Wilayah Merdeka')} · ${esc(x.type)}</div>
+      <div class="leader-main"><div class="leader-name">${esc(x.name)}</div><div class="leader-sub">${esc(x.country_name || 'Belum Bernegara')} · ${esc(x.type)}</div>
       <div class="bar leader-bar"><i style="width:${Math.round((Number(x.citizens) / (Number(rows[0]?.citizens) || 1)) * 100)}%"></i></div></div>
       <span class="leader-val">${fmt(x.citizens)} <small>warga</small></span></div>`).join('') : emptyRows;
   const partyRows = (rows) => rows.length ? rows.map((x, i) => `
@@ -2490,7 +2521,7 @@ ROUTES.stats = async () => {
       ${cell('🚩 Partai', fmt(w.parties), 'partai terdaftar')}
       ${cell('🏭 Perusahaan', fmt(w.companies), 'perusahaan aktif')}
     </div>
-    <p class="muted small" style="margin-top:10px">Populasi dunia ${fmt(w.population)} warga · ${fmt(w.regions)} wilayah · ${fmt(w.countries)} negara · ${fmt(w.freeRegions)} wilayah merdeka.</p>
+    <p class="muted small" style="margin-top:10px">Populasi dunia ${fmt(w.population)} warga · ${fmt(w.regions)} wilayah · ${fmt(w.countries)} negara · ${fmt(w.freeRegions)} wilayah belum bernegara.</p>
   </div>
   <div class="panel"><h3>🏆 PEMIMPIN TIAP DAFTAR — LEVEL TERTINGGI</h3>
     <div id="leaders-level">${levelRows(stats.topLevel)}</div>
@@ -2836,12 +2867,12 @@ ROUTES.war = async (id) => {
     </div>
     <div class="panel"><h3>🏆 PEJUANG TERATAS</h3>
       ${d.fighters.length ? d.fighters.map((f, i) => `
-        <div class="kv"><span class="k">#${i + 1} ${esc(f.username)} ${f.side === 'attacker' ? '🔥' : '🛡️'}</span>
+        <div class="kv"><span class="k">#${i + 1} <span data-goto="#/profile/${encodeURIComponent(f.username)}" style="cursor:pointer" title="Lihat profil ${esc(f.username)}">${esc(f.username)}</span> ${f.side === 'attacker' ? '🔥' : '🛡️'}</span>
         <span class="v">${fmt(f.damage)} kerusakan · ${f.attacks} serangan</span></div>`).join('')
         : '<p class="muted">Belum ada yang bertempur di front ini.</p>'}
     </div>
     <div class="panel"><h3>📜 UMPAN FRONT</h3>
-      ${d.feed.length ? d.feed.map((a) => `<div class="kv"><span class="k">${esc(a.username)} ${a.side === 'attacker' ? '🔥 menyerang' : '🛡️ bertahan'} · ${a.ammo}</span>
+      ${d.feed.length ? d.feed.map((a) => `<div class="kv"><span class="k"><span data-goto="#/profile/${encodeURIComponent(a.username)}" style="cursor:pointer" title="Lihat profil ${esc(a.username)}">${esc(a.username)}</span> ${a.side === 'attacker' ? '🔥 menyerang' : '🛡️ bertahan'} · ${a.ammo}</span>
         <span class="v">${fmt(a.damage)} dmg · ${ago(a.created_at)}</span></div>`).join('')
         : '<p class="muted">Belum ada serangan.</p>'}
     </div>
@@ -2856,7 +2887,7 @@ ROUTES.war = async (id) => {
   const data = await api('/api/wars');
   const active = data.wars.filter((w) => w.status === 'active');
   const ended = data.wars.filter((w) => w.status !== 'active');
-  $('#page').innerHTML = page('PERANG TANAH AIR', 'Front pemberontakan di wilayah-wilayah merdeka.', `
+  $('#page').innerHTML = page('PERANG TANAH AIR', 'Front pemberontakan di wilayah-wilayah yang belum bernegara.', `
   ${active.length ? active.map((w) => `
     <div class="card"><h4>🔥 ${esc(w.name)}</h4>
     <p class="muted small">${esc(w.region_name)} · ${esc(w.attacker_label)} vs ${esc(w.defender_label)} · berakhir ${fmtDate(w.ends_at)}</p>
@@ -3061,7 +3092,7 @@ ROUTES['press/league'] = async () => {
       : '<p class="muted">Belum ada koran yang berlaga.</p>'}
   </div>
   <div class="panel"><h3>✍️ PAPAN ATAS JURNALIS</h3>
-    ${l.journalists.length ? l.journalists.map((j, i) => `<div class="kv"><span class="k">#${i + 1} ${esc(j.username)}</span><span class="v">${fmt(j.score)} poin</span></div>`).join('')
+    ${l.journalists.length ? l.journalists.map((j, i) => `<div class="kv"><span class="k">#${i + 1} <span data-goto="#/profile/${encodeURIComponent(j.username)}" style="cursor:pointer" title="Lihat profil ${esc(j.username)}">${esc(j.username)}</span></span><span class="v">${fmt(j.score)} poin</span></div>`).join('')
       : '<p class="muted">Belum ada jurnalis yang berlaga.</p>'}
   </div>`);
 };
@@ -3165,7 +3196,7 @@ async function renderChatRoom(room) {
       <div class="msg-avatar">${avatarHtml(m.avatar, m.username, 48)}</div>
       <div class="msg-body">
         <div class="msg-head">
-          <span class="msg-name ${m.isPremium ? 'premium-name' : ''}">${esc(m.username)}${m.isPremium ? ' ◆' : ''}</span>
+          <span class="msg-name ${m.isPremium ? 'premium-name' : ''}" data-goto="#/profile/${encodeURIComponent(m.username)}" style="cursor:pointer" title="Lihat profil ${esc(m.username)}">${esc(m.username)}${m.isPremium ? ' ◆' : ''}</span>
           ${m.party_tag ? `<span class="msg-tag">[${esc(m.party_tag)}]</span>` : ''}
           <span class="msg-time">${fmtTime(m.created_at)}</span>
         </div>
@@ -3289,7 +3320,7 @@ ROUTES.messages = async (otherId) => {
     <div id="dm-list" style="max-height:55vh;overflow-y:auto">
       ${d.messages.length ? d.messages.map((m) => `
         <div class="msg"><div class="msg-avatar">${avatarHtml(m.from_avatar, m.from_name, 48)}</div>
-        <div class="msg-body"><div class="msg-head"><span class="msg-name">${esc(m.from_name)}</span><span class="msg-time">${fmtTime(m.created_at)}</span></div>
+        <div class="msg-body"><div class="msg-head"><span class="msg-name" data-goto="#/profile/${encodeURIComponent(m.from_name)}" style="cursor:pointer" title="Lihat profil ${esc(m.from_name)}">${esc(m.from_name)}</span><span class="msg-time">${fmtTime(m.created_at)}</span></div>
         <div class="msg-bubble">${esc(m.content)}</div></div></div>`).join('')
         : '<p class="muted">Belum ada pesan. Mulai percakapan!</p>'}
     </div>

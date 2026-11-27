@@ -25,6 +25,15 @@ export function fatigueMult(fatigue) {
   return 1;
 }
 
+// Kursi lowongan ADMIN: TIDAK TERBATAS jumlah pekerjanya (perintah
+// pemilik 27 Nov 2026 — lowongan ADMIN ada di semua 17 wilayah tanpa
+// batas pekerja). Diwujudkan sebagai angka kursi yang sangat besar
+// (1.000.000) + pengecualian kursi di apply/quit + tampilan "Tanpa batas
+// kursi" di UI — bukan kursi tak hingga di skema, supaya CHECK
+// seats_taken <= seats tetap berlaku dan statistik kursi tidak meledak
+// (GET /api/jobs mengecualikan kursi ADMIN dari jumlah kursi kosong).
+export const ADMIN_JOB_SEATS = 1000000;
+
 // Gaji shift: 100 energi = 1 shift penuh.
 // Gaji dasar per 10 energi 4,80 USD + bonus Ekonomi (0,30 USD per level Ekonomi per 10 energi).
 // Contoh referensi: shift penuh ~48 USD sebelum pajak.

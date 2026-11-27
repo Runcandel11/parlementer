@@ -7,7 +7,7 @@
 //       dashboard (landing tidak menghadang);
 //   (3) ?ref= tetap membuka tab DAFTAR dengan kode terisi;
 //   (4) PETA LANGSUNG: wilayah tanpa negara = kaca abu-abu (kelas free) +
-//       tanda "?" (17 ubin, semua merdeka di DB segar);
+//       tanda "?" (17 ubin, semua belum bernegara di DB segar);
 //   (5) UI KACA: CSS memakai backdrop-filter; ikon atas diperkecil (32px);
 //   (6) VERSI: footer landing + drawer menampilkan "Parlementer v2.1.3"
 //       dari konstanta VERSION (API /api/world + /api/me).
@@ -135,10 +135,10 @@ async function main() {
     const tiles = [...document.querySelectorAll('.map-tile')];
     check('dashboard: PETA LANGSUNG menampilkan 17 ubin wilayah', tiles.length === 17, `ubin=${tiles.length}`);
     const freeTiles = tiles.filter((t) => t.classList.contains('free'));
-    check('peta: semua 17 ubin bertanda wilayah merdeka (kelas free)', freeTiles.length === 17, `free=${freeTiles.length}`);
-    check('peta: semua ubin merdeka menampilkan tanda "?"', freeTiles.length === 17 && freeTiles.every((t) => t.textContent.includes('?')));
+    check('peta: semua 17 ubin bertanda wilayah belum bernegara (kelas free)', freeTiles.length === 17, `free=${freeTiles.length}`);
+    check('peta: semua ubin belum bernegara menampilkan tanda "?"', freeTiles.length === 17 && freeTiles.every((t) => t.textContent.includes('?')));
     const myTile = tiles.find((t) => t.classList.contains('mine'));
-    check('peta: ubin wilayahku tetap bertanda KAMU (meski merdeka)', !!myTile && myTile.textContent.includes('KAMU'));
+    check('peta: ubin wilayahku tetap bertanda KAMU (meski belum bernegara)', !!myTile && myTile.textContent.includes('KAMU'));
 
     // --- CSS: kaca + ikon kecil ---
     const css = fs.readFileSync(ROOT + 'public/css/style.css', 'utf8');

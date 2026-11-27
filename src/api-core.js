@@ -222,7 +222,8 @@ export function registerCore(app) {
   const MAX_PASSWORD_BYTES = 72; // bcrypt memotong password di atas 72 byte
 
   // Registrasi dibatasi 20/IP/24 jam (anti multi-akun massal, DB-backed).
-  // Tes e2e mendaftar 15 akun dari 127.0.0.1 — di bawah batas ini.
+  // Tes e2e memakai tepat 20 pendaftaran dari 127.0.0.1 — pemain tambahan
+  // di tes memakai IP berbeda lewat X-Forwarded-For (lihat [23b]/[28]/[5b]).
   const registerRateLimit = dbRateLimit({
     keyFn: (req) => 'register:' + (req.ip || 'unknown'),
     max: 20,
@@ -726,7 +727,12 @@ export function registerCore(app) {
   // #/profile/NAMA-KAPITAL harus tetap menemukan warga yang namanya
   // tersimpan campuran huruf — sebelumnya `=` peka huruf bisa 404.
   app.get('/api/profile/:username', authRequired, r(async (req, res) => {
-    const q = 'SELECT u.id, u.username, u.avatar, u.premium_until, u.referral_code, c.* FROM users u JOIN citizens c ON c.user_id = u.id WHERE ';
+    // Kolom eksplisit (bukan `c.*`): `id` ada di users DAN citizens —
+    // `SELECT *` membuat `u.id` ambigu (driver menyimpan kolom terakhir).
+    const q = `SELECT c.id AS citizen_id, u.id AS user_id, u.username, u.avatar, u.premium_until, u.referral_code,
+      c.level, c.xp, c.bio, c.shifts, c.total_salary, c.total_damage, c.attacks, c.frontline_attacks,
+      c.attr_str, c.attr_edu, c.attr_eco, c.created_at, c.last_seen_at, c.party_id, c.home_region_id
+      FROM users u JOIN citizens c ON c.user_id = u.id WHERE `;
     let u = await one(q + 'u.username = ?', [req.params.username]);
     if (!u) u = await one(q + 'LOWER(u.username) = LOWER(?)', [req.params.username]);
     if (!u) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
@@ -734,16 +740,33 @@ export function registerCore(app) {
     // bukan lokasi kunjungan saat ini.
     const region = await one('SELECT r.name, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [u.home_region_id]);
     const party = u.party_id ? await one('SELECT name, tag FROM parties WHERE id = ?', [u.party_id]) : null;
-    const companies = await sql('SELECT id, name, type FROM companies WHERE owner_id = ?', [u.id]);
-    const articles = await sql('SELECT id, title, created_at FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT 5', [u.id]);
+    const companies = await sql('SELECT id, name, type FROM companies WHERE owner_id = ?', [u.citizen_id]);
+    const articles = await sql('SELECT id, title, created_at FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT 5', [u.citizen_id]);
     // Statistik referral hanya untuk pemilik profil sendiri.
     let referral = null;
-    if (req.userId === u.id) {
-      const uses = await one('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?', [u.id]);
-      const paid = await one("SELECT COUNT(*) AS n FROM referral_pending WHERE referrer_id = ? AND status = 'paid'", [u.id]);
+    let referralCode = null;
+    if (req.userId === u.user_id) {
+      const uses = await one('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?', [u.user_id]);
+      const paid = await one("SELECT COUNT(*) AS n FROM referral_pending WHERE referrer_id = ? AND status = 'paid'", [u.user_id]);
       referral = { code: u.referral_code, uses: Number(uses.n), goldEarned: Number(paid.n) * 200 };
+      referralCode = u.referral_code;
     }
-    res.json({ profile: { ...u, publicId: publicId(u.id), referral_code: u.referral_code, referral, pass_hash: undefined, region_name: region?.name, country_name: region?.country_name || null, party, companies, articles, isPremium: u.premium_until > Date.now() } });
+    // Profil publik = ALLOWLIST eksplisit (jangan spread `...u`: baris
+    // citizens membawa gold/usd/energi/kelelahan/misi/kronik yang TIDAK
+    // boleh bocor ke pemain lain — audit §4.12 memperingatkan pola spread
+    // baris user ke respons). last_seen_at = "terakhir main" (kolom sudah
+    // ada sejak v7, heartbeat /api/me memperbaruinya).
+    res.json({ profile: {
+      citizen_id: u.citizen_id, user_id: u.user_id, username: u.username, avatar: u.avatar,
+      publicId: publicId(u.user_id), level: u.level, xp: u.xp, bio: u.bio,
+      shifts: u.shifts, total_salary: u.total_salary,
+      total_damage: u.total_damage, attacks: u.attacks, frontline_attacks: u.frontline_attacks,
+      attr_str: u.attr_str, attr_edu: u.attr_edu, attr_eco: u.attr_eco,
+      created_at: u.created_at, last_seen_at: u.last_seen_at,
+      region_name: region?.name, country_name: region?.country_name || null,
+      party, companies, articles, referral, referral_code: referralCode,
+      isPremium: u.premium_until > Date.now(),
+    } });
   }));
   app.post('/api/profile/bio', authRequired, citizenRequired, r(async (req, res) => {
     const { bio } = req.body || {};
@@ -822,7 +845,7 @@ export function registerCore(app) {
        FROM jobs j LEFT JOIN companies co ON co.id = j.company_id
        JOIN regions r ON r.id = j.region_id WHERE ${where} ORDER BY ${order}`,
       params);
-    const stats = await one('SELECT COUNT(*) AS open, SUM(seats - seats_taken) AS seats, MAX(salary) AS best FROM jobs WHERE seats_taken < seats');
+    const stats = await one('SELECT COUNT(*) AS open, SUM(CASE WHEN is_admin = 0 THEN seats - seats_taken ELSE 0 END) AS seats, MAX(salary) AS best FROM jobs WHERE seats_taken < seats');
     // Upah ADMIN yang berlaku (Tahap 5): UU upah ADMIN mengubah jumlah
     // bahan mentah per shift (pengali admin_pay_mult + ideologi Sosialisme
     // ×1.1). Frontend menampilkan effectiveQty agar yang terlihat sama
@@ -846,11 +869,15 @@ export function registerCore(app) {
       if (c.level < job.level_min) throw Object.assign(new Error(`Butuh Level ${job.level_min} untuk melamar.`), { status: 400 });
       if (c.region_id !== job.region_id) throw Object.assign(new Error('Kamu harus berada di wilayah perusahaan itu untuk melamar.'), { status: 400 });
       if (c.job_id === job.id) throw Object.assign(new Error('Kamu sudah bekerja di lowongan ini.'), { status: 400 });
-      if (job.seats_taken >= job.seats) throw Object.assign(new Error('Kursi lowongan ini sudah penuh.'), { status: 400 });
+      // Lowongan ADMIN tanpa batas pekerja: lewati cek + hitung kursi
+      // (jumlah pekerja dibaca dari citizens.job_id di GET /api/jobs).
+      if (!job.is_admin && job.seats_taken >= job.seats) throw Object.assign(new Error('Kursi lowongan ini sudah penuh.'), { status: 400 });
       if (c.job_id) await t.run('UPDATE jobs SET seats_taken = seats_taken - 1 WHERE id = ? AND seats_taken > 0', [c.job_id]);
       await t.run('UPDATE citizens SET job_id = ? WHERE id = ?', [job.id, c.id]);
-      const inc = await t.run('UPDATE jobs SET seats_taken = seats_taken + 1 WHERE id = ? AND seats_taken < seats', [job.id]);
-      if (!inc.changes) throw Object.assign(new Error('Kursi lowongan ini sudah penuh.'), { status: 400 });
+      if (!job.is_admin) {
+        const inc = await t.run('UPDATE jobs SET seats_taken = seats_taken + 1 WHERE id = ? AND seats_taken < seats', [job.id]);
+        if (!inc.changes) throw Object.assign(new Error('Kursi lowongan ini sudah penuh.'), { status: 400 });
+      }
     });
     await chronicleDone(req.citizen, 'job');
     res.json({ ok: true });
@@ -877,35 +904,54 @@ export function registerCore(app) {
     const myCountry = await getMyCountry({ one }, c);
     const taxRate = getIncomeTaxRate({ one }, myCountry);
     const adminPayMult = getAdminPayMult({ one }, myCountry);
-    const { gross, net } = shiftSalary(job.salary, c.attr_eco, c.fatigue, taxRate);
+    // SHIFT FLEKSIBEL (permintaan pemain LIO, 27 Nov 2026): giliran memakai
+    // energi yang ADA sampai 100 — 50 energi pun bisa kerja. Hadiah
+    // PROPORSIONAL dengan energi yang dipakai (fraksi = energi/100):
+    // 50 energi → ~50% hadiah, 1 energi → ~1% (bukan penuh — itu exploit).
     // Pengurang energi atomik (dipakai ketiga jenis gaji): kunci baris warga,
-    // potong 100 energi hanya bila masih >= 100 (cek changes). Dua shift
-    // paralel: yang kedua gagal dengan 400, energi tidak pernah negatif.
+    // potong energi yang dipakai hanya bila masih cukup (cek changes). Dua
+    // shift paralel: yang kedua gagal dengan 400, energi tidak pernah negatif.
     async function spendEnergy(t) {
       const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
-      const upd = await t.run('UPDATE citizens SET energy = energy - 100, energy_spent_today = energy_spent_today + 100, fatigue = fatigue + 100, shifts = shifts + 1 WHERE id = ? AND energy >= 100', [c.id]);
-      if (!upd.changes) throw Object.assign(new Error(`Energi tidak cukup (${locked?.energy ?? 0}/100). Makan roti dulu.`), { status: 400 });
+      const energy = locked?.energy ?? 0;
+      if (energy <= 0) throw Object.assign(new Error('Energi habis (0). Makan roti dulu.'), { status: 400 });
+      const used = Math.min(energy, 100);
+      const upd = await t.run('UPDATE citizens SET energy = energy - ?, energy_spent_today = energy_spent_today + ?, fatigue = fatigue + ?, shifts = shifts + 1 WHERE id = ? AND energy >= ?', [used, used, used, c.id, used]);
+      if (!upd.changes) throw Object.assign(new Error(`Energi tidak cukup (${energy}). Makan roti dulu.`), { status: 400 });
       const m = JSON.parse(locked.missions || '{}');
-      m.energy = Math.min(500, (locked.energy_spent_today || 0) + 100);
+      m.energy = Math.min(500, (locked.energy_spent_today || 0) + used);
       await t.run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), c.id]);
+      return { used, fraction: used / 100, full: used === 100, fatigue: locked.fatigue, eco: locked.attr_eco };
     }
+    // XP + tugas Kronik "Kerjakan satu giliran" hanya untuk shift PENUH
+    // (100 energi) — kalau shift 1 energi ikut menyelesaikannya, itu
+    // exploit hadiah Kronik.
+    async function rewardShift(spent) {
+      if (!spent.full) return;
+      await addXp(c, xpGainForShift());
+      await chronicleDone(c, 'shift');
+    }
+    const shiftPrefix = (spent) => spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%): `;
     let goodsNote = '';
     if (job.salary_type === 'goods') {
       // Lowongan ADMIN: dibayar BAHAN MENTAH, bukan uang (tanpa pajak).
       // Jumlah dipengaruhi kelelahan seperti gaji (×0,75 / ×0,5) dan
-      // pengali upah ADMIN dari UU yang berlaku (Tahap 5).
+      // pengali upah ADMIN dari UU yang berlaku (Tahap 5) — lalu dikali
+      // fraksi energi, dibulatkan ke BAWAH (floor — sama seperti rumus
+      // shift penuh lama dan effectiveQty yang tampil di /api/jobs; 1
+      // energi bisa 0 unit).
       const com = await one('SELECT * FROM commodities WHERE name = ?', [job.resource]);
       if (!com) throw Object.assign(new Error('Bahan upah lowongan ini tidak dikenal.'), { status: 500 });
-      const qty = Math.max(1, Math.floor((job.pay_qty || 0) * fatigueMult(c.fatigue) * adminPayMult));
-      const usdValue = Math.round(qty * com.ref_usd * 100) / 100;
-      await tx(async (t) => {
-        await spendEnergy(t);
-        await addItem(c.id, com.id, 1, qty, t);
+      const spent = await tx(async (t) => {
+        const s = await spendEnergy(t);
+        const qty = Math.floor((job.pay_qty || 0) * fatigueMult(s.fatigue) * adminPayMult * s.fraction);
+        if (qty > 0) await addItem(c.id, com.id, 1, qty, t);
+        return { ...s, qty };
       });
-      const note = `Dibayar ${qty}× ${job.resource} (setara ~${fmtRp(usdValue)}).`;
-      await addXp(c, xpGainForShift());
-      await chronicleDone(c, 'shift');
-      return res.json({ ok: true, gross: usdValue, net: 0, tax: 0, goods: `${qty}× ${job.resource}`, note });
+      const usdValue = Math.round(spent.qty * com.ref_usd * 100) / 100;
+      const note = `${shiftPrefix(spent)}Dibayar ${spent.qty}× ${job.resource} (setara ~${fmtRp(usdValue)}).`;
+      await rewardShift(spent);
+      return res.json({ ok: true, gross: usdValue, net: 0, tax: 0, goods: `${spent.qty}× ${job.resource}`, note, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
     }
     if (job.salary_type === 'share') {
       // Bagi hasil: 80–98% dibayar dalam bentuk barang (sumber daya perusahaan).
@@ -913,23 +959,27 @@ export function registerCore(app) {
       const company = job.company_id ? await one('SELECT * FROM companies WHERE id = ?', [job.company_id]) : null;
       const resource = company?.resource || 'Gandum Mentah';
       const com = await one('SELECT * FROM commodities WHERE name = ?', [resource]);
-      const units = Math.max(1, Math.floor((gross * pct / 100) / com.ref_usd));
-      await tx(async (t) => {
-        await spendEnergy(t);
-        await addItem(c.id, com.id, 1, units, t);
+      const spent = await tx(async (t) => {
+        const s = await spendEnergy(t);
+        const gross = shiftSalary(job.salary, s.eco, s.fatigue, taxRate).gross * s.fraction;
+        const units = Math.max(0, Math.floor((gross * pct / 100) / com.ref_usd));
+        if (units > 0) await addItem(c.id, com.id, 1, units, t);
+        return { ...s, gross, units };
       });
-      goodsNote = ` Dibayar ${units}× ${resource} (bagi hasil ${pct}%).`;
-      await addXp(c, xpGainForShift());
-      await chronicleDone(c, 'shift');
-      return res.json({ ok: true, gross, net: 0, tax: 0, goods: `${units}× ${resource}`, note: goodsNote });
+      goodsNote = `${shiftPrefix(spent)}Dibayar ${spent.units}× ${resource} (bagi hasil ${pct}%).`;
+      await rewardShift(spent);
+      return res.json({ ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, note: goodsNote, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
     }
-    await tx(async (t) => {
-      await spendEnergy(t);
-      await t.run('UPDATE citizens SET usd = usd + ?, total_salary = total_salary + ? WHERE id = ?', [net, net, c.id]);
+    const spent = await tx(async (t) => {
+      const s = await spendEnergy(t);
+      const { gross, net } = shiftSalary(job.salary, s.eco, s.fatigue, taxRate);
+      const scaledGross = Math.round(gross * s.fraction * 100) / 100;
+      const scaledNet = Math.round(net * s.fraction * 100) / 100;
+      await t.run('UPDATE citizens SET usd = usd + ?, total_salary = total_salary + ? WHERE id = ?', [scaledNet, scaledNet, c.id]);
+      return { ...s, gross: scaledGross, net: scaledNet, tax: Math.round(scaledGross * taxRate * 100) / 100 };
     });
-    await addXp(c, xpGainForShift());
-    await chronicleDone(c, 'shift');
-    res.json({ ok: true, gross, net, tax: gross * taxRate });
+    await rewardShift(spent);
+    res.json({ ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, note: spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%).`, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
   }));
 
   // ---------- PERUSAHAAN ----------
@@ -1488,7 +1538,7 @@ export function registerCore(app) {
       [target.id, Date.now(), c.id, target.id, target.id, Date.now() - MOVE_COOLDOWN_MS]);
     if (!upd.changes) return res.status(400).json({ error: 'Tidak bisa pindah kewarganegaraan sekarang. Pastikan kamu sudah tiba, sedang berada di wilayah tujuan, dan jeda 7 hari sudah lewat.' });
     const country = await getMyCountry({ one }, { ...c, home_region_id: target.id });
-    await notify(c.id, 'SISTEM', 'Kewarganegaraan pindah', `Kewarganegaraanmu kini ${target.name}${country ? ` — kamu kini warga ${country.name}.` : ' (wilayah merdeka).'}`);
+    await notify(c.id, 'SISTEM', 'Kewarganegaraan pindah', `Kewarganegaraanmu kini ${target.name}${country ? ` — kamu kini warga ${country.name}.` : ' (belum bernegara).'}`);
     res.json({ ok: true, region: target.name, country: country ? country.name : null });
   }));
 

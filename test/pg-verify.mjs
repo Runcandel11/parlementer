@@ -60,7 +60,9 @@ async function main() {
   const coms = await pool.query('SELECT COUNT(*) AS n FROM commodities');
   check('Seed komoditas: 15', Number(coms.rows[0].n) === 15);
   const jobs = await pool.query('SELECT COUNT(*) AS n FROM jobs WHERE is_admin = 1');
-  check('Seed lowongan ADMIN: 6', Number(jobs.rows[0].n) === 6);
+  check('Seed lowongan ADMIN: 18 (satu per wilayah, Kepri 2)', Number(jobs.rows[0].n) === 18, `n=${jobs.rows[0].n}`);
+  const jobRegions = await pool.query('SELECT COUNT(DISTINCT region_id) AS n FROM jobs WHERE is_admin = 1');
+  check('Lowongan ADMIN: 17 wilayah tercakup', Number(jobRegions.rows[0].n) === 17, `n=${jobRegions.rows[0].n}`);
   await initDb();
   const regions2 = await pool.query('SELECT COUNT(*) AS n FROM regions');
   check('initDb kedua: seed tidak terduplikasi', Number(regions2.rows[0].n) === 17);
