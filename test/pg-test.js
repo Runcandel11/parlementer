@@ -45,7 +45,7 @@ check('15 komoditas ter-seed', Number(r.n) === 15, `n=${r.n}`);
 r = await one('SELECT COUNT(*) AS n FROM jobs WHERE is_admin = 1');
 check('6 lowongan ADMIN ter-seed', Number(r.n) === 6, `n=${r.n}`);
 r = await one('SELECT COUNT(*) AS n FROM country');
-check('1 negara (Republik Indonesia)', Number(r.n) === 1);
+check('0 negara di awal (redesain dunia — dunia terpecah)', Number(r.n) === 0, `n=${r.n}`);
 r = await one("SELECT COUNT(*) AS n FROM market_offers");
 check('Pasar mulai 0 penawaran', Number(r.n) === 0);
 r = await one('SELECT COUNT(*) AS n FROM citizens');
@@ -172,7 +172,7 @@ const tPar = Date.now() - t0;
 r = await one('SELECT COUNT(*) AS n FROM regions');
 check('initDb 10× paralel: seed tetap 17 (tidak terduplikasi)', Number(r.n) === 17, `n=${r.n}, ${tPar}ms`);
 const ver = await one("SELECT value FROM db_meta WHERE key = 'schema_version'");
-check('Penanda versi skema tersimpan (= 9)', ver?.value === '9', `value=${ver?.value}`);
+check('Penanda versi skema tersimpan (= 10)', ver?.value === '10', `value=${ver?.value}`);
 const t1 = Date.now();
 await initDb();
 const tFast = Date.now() - t1;
@@ -183,6 +183,39 @@ check('initDb paralel 10× selesai cepat (< 10 detik)', tPar < 10000, `${tPar}ms
 // di §2 tanpa kode) harus sudah dibuatkan kode oleh initDb kedua.
 const u0 = await one('SELECT referral_code FROM users WHERE email = ?', ['pg@test.local']);
 check('Jalur cepat: fixup data tetap jalan (referral_code terisi)', !!u0?.referral_code, `code=${u0?.referral_code}`);
+
+console.log('\n[10] Redesain dunia (27 Nov 2026): dunia terpecah + parlemen 2 Des');
+// Semua wilayah merdeka (country_id NULL, kolom warisan country kosong).
+r = await one('SELECT COUNT(*) AS n FROM regions WHERE country_id IS NULL');
+check('Semua 17 wilayah merdeka (country_id NULL)', Number(r.n) === 17, `n=${r.n}`);
+r = await one("SELECT COUNT(*) AS n FROM regions WHERE country <> ''");
+check("Kolom warisan regions.country kosong di semua wilayah", Number(r.n) === 0, `n=${r.n}`);
+// Tanggal buka parlemen tersimpan di db_meta ≈ 2 Des 2026 00:00 WIB.
+const po = await one("SELECT value FROM db_meta WHERE key = 'parliament_opens_at'");
+const opensAt = Number(po?.value);
+check('parliament_opens_at tersimpan di db_meta', Number.isFinite(opensAt) && opensAt > 0, `value=${po?.value}`);
+check('parliament_opens_at = 2 Des 2026 00:00 WIB', opensAt === Date.parse('2026-12-02T00:00:00+07:00'), `value=${opensAt}`);
+// Tabel baru ada.
+for (const t of ['party_seats', 'country_joins', 'country_join_votes']) {
+  r = await one("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name = ?", [t]).catch(() => null);
+  const exists = r ? Number(r.n) === 1 : false;
+  // pg-mem tidak selalu punya information_schema — fallback: query langsung.
+  if (!exists) {
+    try { await one(`SELECT COUNT(*) AS n FROM ${t}`); check(`Tabel ${t} ada`, true); }
+    catch { check(`Tabel ${t} ada`, false); }
+  } else check(`Tabel ${t} ada`, true);
+}
+// CHECK ideologi + sistem negara menolak nilai di luar daftar.
+let badIdeology = false;
+try { await run("INSERT INTO country (name, ideology, system, capital, founded) VALUES ('Negara Tes','Anarkisme','presidensial','Jakarta','2026-11-27') RETURNING id"); }
+catch { badIdeology = true; }
+check('Ideologi di luar daftar ditolak CHECK', badIdeology);
+let badSystem = false;
+try { await run("INSERT INTO country (name, ideology, system, capital, founded) VALUES ('Negara Tes 2','Konservatisme','monarki','Jakarta','2026-11-27') RETURNING id"); }
+catch { badSystem = true; }
+check('Sistem di luar daftar ditolak CHECK', badSystem);
+const okCountry = await run("INSERT INTO country (name, ideology, system, capital, founded) VALUES ('Negara Tes','Sosialisme','parlementer','Jakarta','2026-11-27') RETURNING id");
+check('Negara valid bisa dibuat (Sosialisme + parlementer)', typeof okCountry.id === 'number', `id=${okCountry.id}`);
 
 await closeDb();
 console.log(`\n[pg-test] SELESAI: ${passed} lolos, ${failed} gagal`);

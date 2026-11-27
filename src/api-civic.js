@@ -1,9 +1,11 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
-import { sql, one, run, tx, forUpdate, convoyBuildings } from './db.js';
+import { sql, one, run, tx, forUpdate, convoyBuildings, getParliamentOpensAt } from './db.js';
 import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl } from './util.js';
-import { warDamage, warDamageWithBonus, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT } from './game.js';
+import { warDamage, warDamageWithBonus, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS } from './game.js';
 
-const CHAT_ROOMS = ['global', 'indonesia', 'negara'];
+// Ruang chat publik yang selalu ada. Ruang wilayah (region_<id>) bersifat
+// dinamis — divalidasi terpisah di validateRoom (hanya wilayah sendiri).
+const CHAT_ROOMS = ['global', 'indonesia'];
 
 // Kirim notifikasi ke satu warga (dipakai juga oleh sistem banding).
 export async function notify(citizenId, category, title, content = '') {
@@ -19,24 +21,57 @@ export async function notifyAll(category, title, content = '') {
 }
 
 // --- Helper bersama Tahap 5 (dipakai juga api-core.js + tick.js) ---
-// Satu-satunya sumber kebenaran angka negara adalah baris country (id=1).
+// REDESAIN DUNIA (27 Nov 2026): TIDAK ADA lagi satu negara global (dulu
+// country id=1). Setiap warga punya negara lewat wilayahnya
+// (regions.country_id; NULL = wilayah merdeka / tidak bernegara).
+// getMyCountry(t, citizen) = satu-satunya cara mengambil "negara saya":
+// null bila wilayahnya merdeka. Semua helper angka menerima baris negara
+// (atau null) secara eksplisit — tidak ada lagi fallback ke id=1.
 // t adalah handle transaksi (punya .one) atau { one } di luar transaksi.
-export async function getCountryRow(t) {
-  const row = await t.one('SELECT * FROM country WHERE id = 1');
-  return row || { tax_income: 2, admin_pay_mult: 1, travel_tickets: 1, mobilization_until: 0, budget_kind: '', budget_until: 0, holiday_at: 0 };
+export async function getMyCountry(t, citizen) {
+  if (!citizen?.region_id) return null;
+  const reg = await t.one('SELECT country_id FROM regions WHERE id = ?', [citizen.region_id]);
+  if (!reg?.country_id) return null;
+  return (await t.one('SELECT * FROM country WHERE id = ?', [reg.country_id])) || null;
 }
-// Tarif pajak penghasilan yang berlaku saat ini, sebagai pecahan (0.02).
-export async function getIncomeTaxRate(t) {
-  const c = await getCountryRow(t);
-  return (Number(c.tax_income) || 0) / 100;
+// Ringkasan negara untuk respons API (tanpa kolom internal).
+export function countrySummary(c) {
+  if (!c) return null;
+  return {
+    id: c.id, name: c.name, ideology: c.ideology, system: c.system,
+    capital: c.capital, founded: c.founded, president_id: c.president_id,
+    tax_income: Number(c.tax_income), tax_production: Number(c.tax_production),
+    tax_import: Number(c.tax_import), tax_export: Number(c.tax_export),
+    treasury: Number(c.treasury), treasury_usd: Number(c.treasury_usd),
+    admin_pay_mult: Number(c.admin_pay_mult), travel_tickets: Number(c.travel_tickets),
+  };
 }
-export async function getAdminPayMult(t) {
-  const c = await getCountryRow(t);
-  return Number(c.admin_pay_mult) || 1;
+// Tarif pajak penghasilan yang berlaku untuk warga negara ini, sebagai
+// pecahan (0.02). Tanpa negara = 0% (tidak ada negara = tidak ada pajak).
+// Liberalisme: −1 poin dari tarif (minimal 0%).
+export function getIncomeTaxRate(t, country) {
+  const base = Number(country?.tax_income) || 0;
+  const delta = ideologyDef(country?.ideology).taxDelta;
+  return Math.max(0, base + delta) / 100;
 }
-export async function getTravelTickets(t) {
-  const c = await getCountryRow(t);
-  return Number(c.travel_tickets) || 1;
+// Pengali upah lowongan ADMIN untuk warga negara ini. Sosialisme: ×1.1
+// (dikalikan di atas admin_pay_mult hasil UU — keduanya berlaku).
+export function getAdminPayMult(t, country) {
+  const base = Number(country?.admin_pay_mult) || 1;
+  return base * ideologyDef(country?.ideology).adminPayMult;
+}
+// Tiket perjalanan yang dibutuhkan warga negara ini. Tanpa negara = 1.
+export function getTravelTickets(t, country) {
+  return Number(country?.travel_tickets) || 1;
+}
+// Gate parlemen: sebelum 2 Des 2026 fitur parlemen (UU, anggaran, pemakzulan)
+// terkunci. Mengembalikan { open, opensAt } — opensAt dari db_meta.
+export async function parliamentStatus() {
+  const opensAt = await getParliamentOpensAt();
+  return { open: Date.now() >= opensAt, opensAt };
+}
+export function parliamentLockedError(opensAt) {
+  return `Parlemen baru dibuka ${new Date(opensAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })} — ${parliamentCountdownText(Date.now(), opensAt)} lagi.`;
 }
 // Anggaran yang sedang berlaku (kind) atau null bila tidak ada/kedaluwarsa.
 export function budgetActive(country, now = Date.now()) {
@@ -54,9 +89,14 @@ export function ministerRole(country, citizenId) {
   return null;
 }
 export async function isMpCitizen(citizen) {
-  if (!citizen?.party_id) return false;
-  const p = await one('SELECT seats FROM parties WHERE id = ?', [citizen.party_id]);
-  return !!(p && p.seats > 0);
+  if (!citizen?.party_id || !citizen?.region_id) return false;
+  // Kursi parlemen dihitung PER NEGARA (party_seats): anggota partai hanya
+  // anggota parlemen bila partainya punya kursi di parlemen NEGARANYA.
+  const row = await one(
+    `SELECT ps.seats FROM party_seats ps JOIN regions r ON r.country_id = ps.country_id
+     WHERE ps.party_id = ? AND r.id = ? AND ps.seats > 0`,
+    [citizen.party_id, citizen.region_id]);
+  return !!row;
 }
 // Apakah ada perjanjian dagang AKTIF antara organisasi pembeli & penjual?
 // Bila ya, pajak penghasilan transaksi mereka dipotong setengah.
@@ -79,7 +119,9 @@ export async function hasDefensePact(t, citizenId) {
   return !!pact;
 }
 // Pengali kerusakan perang dari bonus Tahap 5 (anggaran perang, mobilisasi,
-// pakta pertahanan) + label bonus yang diterapkan (untuk ditampilkan).
+// pakta pertahanan) + ideologi Nasionalisme (+10%) + label bonus yang
+// diterapkan (untuk ditampilkan). country = null (wilayah merdeka) berarti
+// hanya pakta pertahanan yang bisa berlaku.
 export async function warDamageBonus(t, citizenId, country) {
   const now = Date.now();
   let mult = 1;
@@ -87,6 +129,7 @@ export async function warDamageBonus(t, citizenId, country) {
   if (budgetActive(country, now) === 'war') { mult *= BUDGET_WAR_DAMAGE_MULT; labels.push('Dana Perang +10%'); }
   if (Number(country?.mobilization_until) > now) { mult *= MOBILIZE_DAMAGE_MULT; labels.push('Mobilisasi +10%'); }
   if (await hasDefensePact(t, citizenId)) { mult *= DEFENSE_PACT_DAMAGE_MULT; labels.push('Pakta Pertahanan +10%'); }
+  if (country && ideologyDef(country.ideology).warDamageMult > 1) { mult *= ideologyDef(country.ideology).warDamageMult; labels.push('Nasionalisme +10%'); }
   return { mult, labels };
 }
 
@@ -103,47 +146,248 @@ export function registerCivic(app) {
   function partyTag(citizen) { return citizen.party_tag || null; }
 
   // ---------- NEGARA ----------
+  // Halaman Negara: dua keadaan.
+  // 1) Pemanggil BERWARGA NEGARA: tampilkan negaranya (ideologi + efek,
+  //    sistem + efek, presiden bergelar sesuai sistem, menteri, kas, wilayah
+  //    anggota, aturan pembentukan negara).
+  // 2) Pemanggil di wilayah MERDEKA: country = null + daftar semua negara
+  //    yang ada + aturan pembentukan negara + usulan unifikasi yang terbuka
+  //    untuk wilayahnya.
   app.get('/api/country', authRequired, citizenRequired, r(async (req, res) => {
-    const country = await one('SELECT * FROM country WHERE id = 1');
-    const stats = await one('SELECT COUNT(*) AS citizens FROM citizens');
-    const parties = await one('SELECT COUNT(*) AS n FROM parties');
-    const regions = await one('SELECT COUNT(*) AS n FROM regions');
-    const seats = await one('SELECT COALESCE(SUM(seats),0) AS n FROM parties');
-    const president = country.president_id
+    const country = await getMyCountry({ one }, req.citizen);
+    const myRegion = await one('SELECT r.*, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [req.citizen.region_id]);
+    const countries = await sql(
+      `SELECT c.*, (SELECT COUNT(*) FROM regions WHERE country_id = c.id) AS region_count,
+        (SELECT COUNT(*) FROM citizens ci JOIN regions r ON r.id = ci.region_id WHERE r.country_id = c.id) AS citizen_count,
+        (SELECT u.username FROM citizens pc JOIN users u ON u.id = pc.user_id WHERE pc.id = c.president_id) AS president_name
+       FROM country c ORDER BY c.id ASC`);
+    const president = country?.president_id
       ? await one('SELECT u.username FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.id = ?', [country.president_id]) : null;
     const ministers = {};
-    for (const [key, col] of [['economy', 'minister_economy'], ['foreign', 'minister_foreign'], ['home', 'minister_home'], ['defense', 'minister_defense']]) {
-      const id = country[col];
-      ministers[key] = id ? (await one('SELECT u.username FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.id = ?', [id]))?.username || 'Kosong' : 'Kosong';
+    if (country) {
+      for (const [key, col] of [['economy', 'minister_economy'], ['foreign', 'minister_foreign'], ['home', 'minister_home'], ['defense', 'minister_defense']]) {
+        const id = country[col];
+        ministers[key] = id ? (await one('SELECT u.username FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.id = ?', [id]))?.username || 'Kosong' : 'Kosong';
+      }
     }
-    const capitalSupport = await one("SELECT COUNT(*) AS n FROM war_support WHERE region_id = (SELECT id FROM regions WHERE name = 'Jakarta')");
-    const wars = await sql("SELECT w.*, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active'");
-    // Buku kas negara (Tahap 4, BUG-8): pemasukan pajak pasar + pengeluaran.
-    const treasuryTx = await sql('SELECT * FROM treasury_tx ORDER BY created_at DESC LIMIT 20');
+    const memberRegions = country ? await sql('SELECT id, name, type FROM regions WHERE country_id = ? ORDER BY name', [country.id]) : [];
+    const wars = country
+      ? await sql("SELECT w.*, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active' AND r.country_id = ?", [country.id])
+      : await sql("SELECT w.*, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active'");
+    const treasuryTx = country
+      ? await sql('SELECT * FROM treasury_tx WHERE country_id = ? ORDER BY created_at DESC LIMIT 20', [country.id])
+      : [];
+    // Usulan unifikasi yang terbuka untuk wilayah pemanggil (bila merdeka).
+    const openJoins = myRegion?.country_id ? [] : await sql(
+      `SELECT j.*, c.name AS country_name FROM country_joins j JOIN country c ON c.id = j.country_id
+       WHERE j.region_id = ? AND j.status = 'voting' AND j.ends_at > ? ORDER BY j.created_at DESC`,
+      [req.citizen.region_id, Date.now()]);
+    const myJoinVotes = openJoins.length
+      ? await sql('SELECT join_id, vote FROM country_join_votes WHERE citizen_id = ? AND join_id IN (' + openJoins.map(() => '?').join(',') + ')', [req.citizen.id, ...openJoins.map((j) => j.id)])
+      : [];
+    const par = await parliamentStatus();
     res.json({
-      country, president: president?.username || 'Kosong', ministers,
-      citizens: Number(stats.citizens), parties: Number(parties.n), regions: Number(regions.n),
-      seats: Number(seats.n), capitalRebellion: Number(capitalSupport.n), wars,
-      treasuryTx,
+      country: countrySummary(country),
+      countryFull: country || null,
+      myRegion: myRegion ? { id: myRegion.id, name: myRegion.name, type: myRegion.type, country_id: myRegion.country_id, country_name: myRegion.country_name } : null,
+      countries: countries.map((c) => ({ ...countrySummary(c), region_count: Number(c.region_count), citizen_count: Number(c.citizen_count), president_name: c.president_name || 'Kosong', president_title: systemDef(c.system).presidentTitle })),
+      president: president?.username || 'Kosong',
+      presidentTitle: country ? systemDef(country.system).presidentTitle : 'Presiden',
+      ministers, memberRegions, wars, treasuryTx, openJoins,
+      myJoinVotes: Object.fromEntries(myJoinVotes.map((v) => [v.join_id, v.vote])),
       // Tahap 5: jabatan pemanggil + status wewenang menteri (untuk UI).
       myMinisterRole: ministerRole(country, req.citizen.id),
-      isPresident: country.president_id === req.citizen.id,
-      activeBudget: budgetActive(country) ? { kind: budgetActive(country), until: Number(country.budget_until) } : null,
-      mobilizationUntil: Number(country.mobilization_until) || 0,
-      holidayAt: Number(country.holiday_at) || 0,
+      isPresident: !!country && country.president_id === req.citizen.id,
+      activeBudget: country && budgetActive(country) ? { kind: budgetActive(country), until: Number(country.budget_until) } : null,
+      mobilizationUntil: Number(country?.mobilization_until) || 0,
+      holidayAt: Number(country?.holiday_at) || 0,
+      parliamentOpen: par.open, parliamentOpensAt: par.opensAt,
+      // Aturan pembentukan negara + unifikasi (ditampilkan di halaman
+      // Negara — pemilik yang menetapkan, bisa diubah).
+      formationRules: {
+        minLevel: COUNTRY_FORM_MIN_LEVEL, costGold: COUNTRY_FORM_COST_GOLD,
+        joinMinLevel: COUNTRY_JOIN_MIN_LEVEL, joinVoteDays: COUNTRY_JOIN_VOTE_DAYS, joinMinYes: COUNTRY_JOIN_MIN_YES,
+      },
+      ideologies: COUNTRY_IDEOLOGIES,
+      systems: GOVERNMENT_SYSTEMS,
     });
+  }));
+
+  // Daftar publik semua negara (dipakai halaman Negara + statistik).
+  app.get('/api/countries', authRequired, citizenRequired, r(async (req, res) => {
+    const rows = await sql(
+      `SELECT c.*, (SELECT COUNT(*) FROM regions WHERE country_id = c.id) AS region_count,
+        (SELECT COUNT(*) FROM citizens ci JOIN regions r ON r.id = ci.region_id WHERE r.country_id = c.id) AS citizen_count,
+        (SELECT u.username FROM citizens pc JOIN users u ON u.id = pc.user_id WHERE pc.id = c.president_id) AS president_name
+       FROM country c ORDER BY c.id ASC`);
+    res.json({ countries: rows.map((c) => ({ ...countrySummary(c), region_count: Number(c.region_count), citizen_count: Number(c.citizen_count), president_name: c.president_name || 'Kosong', president_title: systemDef(c.system).presidentTitle })) });
+  }));
+
+  // ---------- MENDIRIKAN NEGARA ----------
+  // Aturan (dipilih agen — pemilik tidak menentukan, bisa diubah):
+  // Level 10 + 100 emas; wilayah pemanggil harus MERDEKA (belum bernegara)
+  // dan menjadi ibu kota + wilayah pertama. Nama unik (tak peka huruf).
+  // Ideologi + sistem dipilih saat mendirikan. Pendiri BUKAN otomatis
+  // presiden — presiden dipilih lewat pemilu (nominasi kepala partai).
+  // Pemilu pertama dijadwalkan otomatis: presiden 7 hari setelah didirikan;
+  // parlemen paling cepat saat parlemen dibuka (2 Des 2026) atau 3 hari
+  // setelah didirikan (bila didirikan sesudah parlemen dibuka).
+  app.post('/api/countries', authRequired, citizenRequired, r(async (req, res) => {
+    const { name, ideology, system } = req.body || {};
+    const c = req.citizen;
+    if (c.level < COUNTRY_FORM_MIN_LEVEL) return res.status(400).json({ error: `Mendirikan negara butuh Level ${COUNTRY_FORM_MIN_LEVEL}.` });
+    const cleanName = String(name || '').trim();
+    if (!cleanName || cleanName.length < 3 || cleanName.length > 40) return res.status(400).json({ error: 'Nama negara 3–40 karakter.' });
+    const ide = COUNTRY_IDEOLOGIES.find((x) => x.id === ideology);
+    if (!ide) return res.status(400).json({ error: 'Ideologi tidak dikenal.' });
+    const sys = GOVERNMENT_SYSTEMS.find((x) => x.id === system);
+    if (!sys) return res.status(400).json({ error: 'Sistem pemerintahan tidak dikenal.' });
+    const myRegion = await one('SELECT * FROM regions WHERE id = ?', [c.region_id]);
+    if (!myRegion) return res.status(400).json({ error: 'Wilayahmu tidak ditemukan.' });
+    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayahmu sudah bernegara. Pindah ke wilayah merdeka dulu untuk mendirikan negara.' });
+    const taken = await one('SELECT id FROM country WHERE LOWER(name) = LOWER(?)', [cleanName]);
+    if (taken) return res.status(400).json({ error: 'Nama negara sudah dipakai.' });
+    const now = Date.now();
+    const countryId = await tx(async (t) => {
+      await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
+      const reg = await t.one(forUpdate('SELECT * FROM regions WHERE id = ?'), [c.region_id]);
+      if (reg.country_id) throw Object.assign(new Error('Wilayahmu baru saja bergabung dengan negara lain.'), { status: 400 });
+      const dup = await t.one('SELECT id FROM country WHERE LOWER(name) = LOWER(?)', [cleanName]);
+      if (dup) throw Object.assign(new Error('Nama negara sudah dipakai.'), { status: 400 });
+      const ins = await t.run(
+        'INSERT INTO country (name, ideology, system, founder_id, capital, founded, treasury, treasury_usd, tax_income, tax_production, tax_import, tax_export) VALUES (?,?,?,?,?,?,0,0,2,1,2,2) RETURNING id',
+        [cleanName, ide.id, sys.id, c.id, reg.name, new Date(now).toISOString().slice(0, 10)]);
+      const upd = await t.run('UPDATE citizens SET gold = gold - ? WHERE id = ? AND gold >= ?', [COUNTRY_FORM_COST_GOLD, c.id, COUNTRY_FORM_COST_GOLD]);
+      if (!upd.changes) throw Object.assign(new Error(`Mendirikan negara butuh ${COUNTRY_FORM_COST_GOLD} emas.`), { status: 400 });
+      await t.run('UPDATE regions SET country_id = ? WHERE id = ?', [ins.id, reg.id]);
+      // Jadwalkan pemilu pertama negara ini.
+      const presOpens = now + PRESIDENT_ELECTION_DELAY_DAYS * 24 * 60 * 60 * 1000;
+      await t.run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','scheduled',?,?,?,?) RETURNING id",
+        [presOpens, presOpens + 3 * 24 * 60 * 60 * 1000, ins.id, now]);
+      const parOpens = Math.max(await getParliamentOpensAt(), now + PARLIAMENT_ELECTION_DELAY_DAYS * 24 * 60 * 60 * 1000);
+      await t.run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('parliament','scheduled',?,?,?,?) RETURNING id",
+        [parOpens, parOpens + 3 * 24 * 60 * 60 * 1000, ins.id, now]);
+      return ins.id;
+    });
+    await chronicleDone(c, 'country');
+    await notify(c.id, 'POLITIK', 'Negara baru berdiri!', `Kamu mendirikan ${cleanName} (${ide.label}, ${sys.label}) dengan ibu kota ${myRegion.name}. Pemilu presiden pertama dibuka ${new Date(now + PRESIDENT_ELECTION_DELAY_DAYS * 24 * 60 * 60 * 1000).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}.`);
+    res.json({ ok: true, countryId });
+  }));
+
+  // ---------- UNIFIKASI WILAYAH ----------
+  // Warga wilayah MERDEKA (Level 5) mengusulkan wilayahnya bergabung ke
+  // sebuah negara. Warga wilayah itu voting 3 hari; lolos bila YA > TIDAK
+  // dan YA minimal 3 (supaya satu orang tidak bisa menyeret satu wilayah).
+  // Pengusul otomatis memilih YA. Tidak ada mekanisme pemisahan diri
+  // (secession) — belum diminta pemilik.
+  app.post('/api/countries/:id/join', authRequired, citizenRequired, r(async (req, res) => {
+    const target = await one('SELECT * FROM country WHERE id = ?', [req.params.id]);
+    if (!target) return res.status(404).json({ error: 'Negara tidak ditemukan.' });
+    const c = req.citizen;
+    if (c.level < COUNTRY_JOIN_MIN_LEVEL) return res.status(400).json({ error: `Mengusulkan unifikasi butuh Level ${COUNTRY_JOIN_MIN_LEVEL}.` });
+    const myRegion = await one('SELECT * FROM regions WHERE id = ?', [c.region_id]);
+    if (!myRegion) return res.status(400).json({ error: 'Wilayahmu tidak ditemukan.' });
+    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayahmu sudah bernegara — unifikasi hanya untuk wilayah merdeka.' });
+    const existing = await one("SELECT id FROM country_joins WHERE region_id = ? AND status = 'voting' AND ends_at > ?", [myRegion.id, Date.now()]);
+    if (existing) return res.status(400).json({ error: 'Sudah ada usulan unifikasi yang sedang divoting untuk wilayahmu.' });
+    const now = Date.now();
+    const joinId = await tx(async (t) => {
+      const reg = await t.one(forUpdate('SELECT * FROM regions WHERE id = ?'), [c.region_id]);
+      if (reg.country_id) throw Object.assign(new Error('Wilayahmu baru saja bergabung dengan negara lain.'), { status: 400 });
+      const dup = await t.one("SELECT id FROM country_joins WHERE region_id = ? AND status = 'voting' AND ends_at > ?", [reg.id, now]);
+      if (dup) throw Object.assign(new Error('Sudah ada usulan unifikasi yang sedang divoting untuk wilayahmu.'), { status: 400 });
+      const j = await t.run(
+        "INSERT INTO country_joins (country_id, region_id, proposer_id, yes, no, status, ends_at, created_at) VALUES (?,?,?,1,0,'voting',?,?) RETURNING id",
+        [target.id, reg.id, c.id, now + COUNTRY_JOIN_VOTE_DAYS * 24 * 60 * 60 * 1000, now]);
+      await t.run('INSERT INTO country_join_votes (join_id, citizen_id, vote) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING join_id', [j.id, c.id, 'yes']);
+      return j.id;
+    });
+    res.json({ ok: true, joinId });
+  }));
+
+  // Usulan unifikasi yang terbuka untuk wilayah pemanggil.
+  app.get('/api/countries/joins', authRequired, citizenRequired, r(async (req, res) => {
+    const rows = await sql(
+      `SELECT j.*, c.name AS country_name, r.name AS region_name FROM country_joins j
+       JOIN country c ON c.id = j.country_id JOIN regions r ON r.id = j.region_id
+       WHERE j.region_id = ? AND j.status = 'voting' AND j.ends_at > ? ORDER BY j.created_at DESC`,
+      [req.citizen.region_id, Date.now()]);
+    const myVotes = rows.length
+      ? await sql('SELECT join_id, vote FROM country_join_votes WHERE citizen_id = ? AND join_id IN (' + rows.map(() => '?').join(',') + ')', [req.citizen.id, ...rows.map((j) => j.id)])
+      : [];
+    res.json({ joins: rows, myVotes: Object.fromEntries(myVotes.map((v) => [v.join_id, v.vote])) });
+  }));
+
+  // Voting unifikasi: hanya warga WILAYAH yang diusulkan yang boleh memilih
+  // (bukan warga negara tujuan). Satu suara per warga.
+  app.post('/api/countries/joins/:id/vote', authRequired, citizenRequired, r(async (req, res) => {
+    const { vote } = req.body || {};
+    if (!['yes', 'no'].includes(vote)) return res.status(400).json({ error: 'Pilihan suara tidak dikenal.' });
+    const j = await one("SELECT * FROM country_joins WHERE id = ? AND status = 'voting' AND ends_at > ?", [req.params.id, Date.now()]);
+    if (!j) return res.status(404).json({ error: 'Usulan unifikasi tidak ditemukan / voting sudah ditutup.' });
+    if (req.citizen.region_id !== j.region_id) return res.status(403).json({ error: 'Hanya warga wilayah yang diusulkan yang bisa memilih.' });
+    const col = vote === 'yes' ? 'yes' : 'no';
+    await tx(async (t) => {
+      const ins = await t.run('INSERT INTO country_join_votes (join_id, citizen_id, vote) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING join_id', [j.id, req.citizen.id, vote]);
+      if (!ins.changes) throw Object.assign(new Error('Kamu sudah memilih untuk usulan ini.'), { status: 400 });
+      await t.run(`UPDATE country_joins SET ${col} = ${col} + 1 WHERE id = ?`, [j.id]);
+    });
+    res.json({ ok: true });
+  }));
+
+  // ---------- IDEOLOGI / SISTEM / PAJAK (wewenang presiden) ----------
+  // Ideologi + sistem bisa diubah DUA cara (sesuai perintah pemilik):
+  // langsung oleh presiden (di sini) ATAU lewat UU jenis 'ideology' /
+  // 'system' yang disahkan parlemen (lihat tick.js applyLawEffect).
+  app.post('/api/country/ideology', authRequired, citizenRequired, r(async (req, res) => {
+    const { ideology } = req.body || {};
+    const country = await getMyCountry({ one }, req.citizen);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara.' });
+    if (country.president_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya Presiden yang bisa mengubah ideologi negara.' });
+    const ide = COUNTRY_IDEOLOGIES.find((x) => x.id === ideology);
+    if (!ide) return res.status(400).json({ error: 'Ideologi tidak dikenal.' });
+    await run('UPDATE country SET ideology = ? WHERE id = ?', [ide.id, country.id]);
+    await notifyAll('POLITIK', `Ideologi ${country.name} berubah`, `Presiden mengubah ideologi ${country.name} menjadi ${ide.label}. ${ide.desc}`);
+    res.json({ ok: true, ideology: ide.id });
+  }));
+
+  app.post('/api/country/system', authRequired, citizenRequired, r(async (req, res) => {
+    const { system } = req.body || {};
+    const country = await getMyCountry({ one }, req.citizen);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara.' });
+    if (country.president_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya Presiden yang bisa mengubah sistem pemerintahan.' });
+    const sys = GOVERNMENT_SYSTEMS.find((x) => x.id === system);
+    if (!sys) return res.status(400).json({ error: 'Sistem pemerintahan tidak dikenal.' });
+    await run('UPDATE country SET system = ? WHERE id = ?', [sys.id, country.id]);
+    await notifyAll('POLITIK', `Sistem ${country.name} berubah`, `Presiden mengubah sistem pemerintahan ${country.name} menjadi ${sys.label}. ${sys.desc}`);
+    res.json({ ok: true, system: sys.id });
+  }));
+
+  // Pajak langsung presiden — HANYA sistem diktator (1–5%). Sistem lain
+  // mengubah pajak lewat UU (jenis 'tax_income') yang disahkan parlemen.
+  app.post('/api/country/tax', authRequired, citizenRequired, r(async (req, res) => {
+    const { tax } = req.body || {};
+    const country = await getMyCountry({ one }, req.citizen);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara.' });
+    if (country.president_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya Presiden yang bisa mengubah pajak.' });
+    if (country.system !== 'diktator') return res.status(400).json({ error: 'Pajak langsung hanya bisa diubah presiden di sistem Diktator. Sistem lain memakai UU parlemen.' });
+    const t = Number(tax);
+    if (!Number.isFinite(t) || t < 1 || t > 5) return res.status(400).json({ error: 'Pajak penghasilan 1–5%.' });
+    await run('UPDATE country SET tax_income = ? WHERE id = ?', [t, country.id]);
+    res.json({ ok: true, tax_income: t });
   }));
 
   app.post('/api/country/appoint', authRequired, citizenRequired, r(async (req, res) => {
     const { role, citizen_id } = req.body || {};
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    const country = await getMyCountry({ one }, req.citizen);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara.' });
     if (country.president_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya Presiden yang bisa mengangkat menteri.' });
     const col = { economy: 'minister_economy', foreign: 'minister_foreign', home: 'minister_home', defense: 'minister_defense' }[role];
     if (!col) return res.status(400).json({ error: 'Jabatan tidak dikenal.' });
     const target = await one('SELECT id FROM citizens WHERE id = ?', [citizen_id]);
     if (!target) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
-    await run(`UPDATE country SET ${col} = ? WHERE id = 1`, [citizen_id]);
-    await notify(citizen_id, 'POLITIK', 'Kamu diangkat jadi menteri', `Presiden mengangkatmu sebagai menteri (${role}).`);
+    await run(`UPDATE country SET ${col} = ? WHERE id = ?`, [citizen_id, country.id]);
+    await notify(citizen_id, 'POLITIK', 'Kamu diangkat jadi menteri', `Presiden ${country.name} mengangkatmu sebagai menteri (${role}).`);
     res.json({ ok: true });
   }));
 
@@ -155,24 +399,32 @@ export function registerCivic(app) {
   // anggaran baru yang lolos.
   app.post('/api/country/budget', authRequired, citizenRequired, r(async (req, res) => {
     const { kind, amount } = req.body || {};
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    // Anggaran adalah fitur parlemen — terkunci sampai parlemen dibuka.
+    const par = await parliamentStatus();
+    if (!par.open) return res.status(403).json({ error: parliamentLockedError(par.opensAt) });
+    const country = await getMyCountry({ one }, req.citizen);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara.' });
     if (ministerRole(country, req.citizen.id) !== 'economy') return res.status(403).json({ error: 'Hanya Menteri Ekonomi yang bisa mengusulkan anggaran.' });
     if (!BUDGET_KINDS[kind]) return res.status(400).json({ error: 'Jenis anggaran tidak dikenal.' });
     const amt = Math.floor(Number(amount));
     if (!Number.isFinite(amt) || amt < 50 || amt > 500) return res.status(400).json({ error: 'Jumlah anggaran 50–500 emas.' });
-    const active = await one("SELECT id FROM budgets WHERE status = 'voting' AND ends_at > ?", [Date.now()]);
+    const active = await one("SELECT id FROM budgets WHERE country_id = ? AND status = 'voting' AND ends_at > ?", [country.id, Date.now()]);
     if (active) return res.status(400).json({ error: 'Sudah ada anggaran yang sedang divoting.' });
-    const b = await run('INSERT INTO budgets (proposer_id, kind, amount, status, ends_at, created_at) VALUES (?,?,?,\'voting\',?,?) RETURNING id',
-      [req.citizen.id, kind, amt, Date.now() + BUDGET_VOTE_DAYS * 24 * 60 * 60 * 1000, Date.now()]);
+    const b = await run('INSERT INTO budgets (proposer_id, kind, amount, status, ends_at, country_id, created_at) VALUES (?,?,?,\'voting\',?,?,?) RETURNING id',
+      [req.citizen.id, kind, amt, Date.now() + BUDGET_VOTE_DAYS * 24 * 60 * 60 * 1000, country.id, Date.now()]);
     res.json({ ok: true, budgetId: b.id });
   }));
 
   app.post('/api/country/budget/:id/vote', authRequired, citizenRequired, r(async (req, res) => {
     const { vote } = req.body || {};
     if (!['yes', 'no'].includes(vote)) return res.status(400).json({ error: 'Pilihan suara tidak dikenal.' });
+    const par = await parliamentStatus();
+    if (!par.open) return res.status(403).json({ error: parliamentLockedError(par.opensAt) });
     if (!await isMpCitizen(req.citizen)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa memilih anggaran.' });
     const b = await one("SELECT * FROM budgets WHERE id = ? AND status = 'voting' AND ends_at > ?", [req.params.id, Date.now()]);
     if (!b) return res.status(404).json({ error: 'Anggaran tidak ditemukan / voting sudah ditutup.' });
+    const myCountry = await getMyCountry({ one }, req.citizen);
+    if (!myCountry || b.country_id !== myCountry.id) return res.status(403).json({ error: 'Anggaran ini bukan dari negaramu.' });
     const col = vote === 'yes' ? 'yes' : 'no';
     await tx(async (t) => {
       const ins = await t.run('INSERT INTO budget_votes (budget_id, citizen_id, vote) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING budget_id', [b.id, req.citizen.id, vote]);
@@ -189,32 +441,34 @@ export function registerCivic(app) {
   // sekali per 24 jam. Biaya dipotong atomik dari kas negara; bila kas
   // kurang, aksi ditolak.
   app.post('/api/country/mobilize', authRequired, citizenRequired, r(async (req, res) => {
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    const country = await getMyCountry({ one }, req.citizen);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara.' });
     if (ministerRole(country, req.citizen.id) !== 'defense') return res.status(403).json({ error: 'Hanya Menteri Pertahanan yang bisa memobilisasi.' });
     if (Number(country.mobilization_until) > Date.now()) return res.status(400).json({ error: 'Mobilisasi sudah aktif.' });
     await tx(async (t) => {
-      const locked = await t.one(forUpdate('SELECT * FROM country WHERE id = 1'));
+      const locked = await t.one(forUpdate('SELECT * FROM country WHERE id = ?'), [country.id]);
       if (Number(locked.treasury) < MOBILIZE_COST_GOLD) throw Object.assign(new Error(`Mobilisasi butuh ${MOBILIZE_COST_GOLD} emas dari kas negara.`), { status: 400 });
       if (Number(locked.mobilization_until) > Date.now()) throw Object.assign(new Error('Mobilisasi sudah aktif.'), { status: 400 });
-      await t.run('UPDATE country SET treasury = treasury - ?, mobilization_until = ? WHERE id = 1', [MOBILIZE_COST_GOLD, Date.now() + MOBILIZE_DURATION_MS]);
-      await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES ('anggaran','gold',?,?,?) RETURNING id",
-        [-MOBILIZE_COST_GOLD, 'Mobilisasi pertahanan (+10% kerusakan perang 24 jam)', Date.now()]);
+      await t.run('UPDATE country SET treasury = treasury - ?, mobilization_until = ? WHERE id = ?', [MOBILIZE_COST_GOLD, Date.now() + MOBILIZE_DURATION_MS, country.id]);
+      await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, country_id, created_at) VALUES ('anggaran','gold',?,?,?,?) RETURNING id",
+        [-MOBILIZE_COST_GOLD, 'Mobilisasi pertahanan (+10% kerusakan perang 24 jam)', country.id, Date.now()]);
     });
-    await notifyAll('POLITIK', 'Mobilisasi pertahanan', 'Menteri Pertahanan memobilisasi negara: kerusakan perang semua warga +10% selama 24 jam.');
+    await notifyAll('POLITIK', 'Mobilisasi pertahanan', `Menteri Pertahanan ${country.name} memobilisasi negara: kerusakan perang semua warga +10% selama 24 jam.`);
     res.json({ ok: true });
   }));
 
   app.post('/api/country/holiday', authRequired, citizenRequired, r(async (req, res) => {
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    const country = await getMyCountry({ one }, req.citizen);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara.' });
     if (ministerRole(country, req.citizen.id) !== 'home') return res.status(403).json({ error: 'Hanya Menteri Dalam Negeri yang bisa menetapkan hari libur.' });
     if (Date.now() - Number(country.holiday_at) < HOLIDAY_COOLDOWN_MS) return res.status(400).json({ error: 'Hari libur baru bisa ditetapkan lagi setelah 24 jam.' });
     await tx(async (t) => {
-      const locked = await t.one(forUpdate('SELECT * FROM country WHERE id = 1'));
+      const locked = await t.one(forUpdate('SELECT * FROM country WHERE id = ?'), [country.id]);
       if (Number(locked.treasury) < HOLIDAY_COST_GOLD) throw Object.assign(new Error(`Hari libur butuh ${HOLIDAY_COST_GOLD} emas dari kas negara.`), { status: 400 });
       if (Date.now() - Number(locked.holiday_at) < HOLIDAY_COOLDOWN_MS) throw Object.assign(new Error('Hari libur baru bisa ditetapkan lagi setelah 24 jam.'), { status: 400 });
-      await t.run('UPDATE country SET treasury = treasury - ?, holiday_at = ? WHERE id = 1', [HOLIDAY_COST_GOLD, Date.now()]);
-      await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES ('anggaran','gold',?,?,?) RETURNING id",
-        [-HOLIDAY_COST_GOLD, 'Hari libur nasional (+20 energi semua warga)', Date.now()]);
+      await t.run('UPDATE country SET treasury = treasury - ?, holiday_at = ? WHERE id = ?', [HOLIDAY_COST_GOLD, Date.now(), country.id]);
+      await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, country_id, created_at) VALUES ('anggaran','gold',?,?,?,?) RETURNING id",
+        [-HOLIDAY_COST_GOLD, 'Hari libur nasional (+20 energi semua warga)', country.id, Date.now()]);
       // +20 energi untuk semua warga, dibatasi batas maksimum masing-masing
       // (rumus yang sama dengan tick harian: 100 + 5×(level−1), +20 Premium,
       // +10 RS Lapangan). Satu UPDATE seragam dengan CASE — atomik.
@@ -232,18 +486,29 @@ export function registerCivic(app) {
 
   // ---------- PARTAI ----------
   app.get('/api/parties', authRequired, citizenRequired, r(async (req, res) => {
+    // Kursi dihitung PER NEGARA (party_seats) — angka yang ditampilkan
+    // adalah kursi partai di parlemen NEGARA pemanggil (0 bila pemanggil
+    // di wilayah merdeka / partainya tak punya kursi di negaranya).
+    const myCountry = await getMyCountry({ one }, req.citizen);
     const rows = await sql(
       `SELECT p.*, u.username AS leader_name,
-        (SELECT COUNT(*) FROM party_members WHERE party_id = p.id) AS members
+        (SELECT COUNT(*) FROM party_members WHERE party_id = p.id) AS members,
+        COALESCE((SELECT seats FROM party_seats WHERE party_id = p.id AND country_id = ?), 0) AS seats
        FROM parties p JOIN citizens c ON c.id = p.leader_id JOIN users u ON u.id = c.user_id
-       ORDER BY p.seats DESC, members DESC`);
+       ORDER BY seats DESC, members DESC`,
+      [myCountry?.id || -1]);
     const mine = req.citizen.party_id
       ? await one('SELECT p.*, u.username AS leader_name FROM parties p JOIN citizens c ON c.id = p.leader_id JOIN users u ON u.id = c.user_id WHERE p.id = ?', [req.citizen.party_id])
       : null;
     const pending = mine ? await sql(
       `SELECT pm.*, u.username FROM party_members pm JOIN citizens c ON c.id = pm.citizen_id JOIN users u ON u.id = c.user_id
        WHERE pm.party_id = ? AND pm.role = 'pending'`, [mine.id]) : [];
-    res.json({ parties: rows, mine, pending });
+    // Anggota partaiku (leader + member) — dipakai halaman Pemilu untuk
+    // nominasi calon presiden oleh kepala partai (redesain dunia).
+    const members = mine ? await sql(
+      `SELECT pm.citizen_id, pm.role, u.username FROM party_members pm JOIN citizens c ON c.id = pm.citizen_id JOIN users u ON u.id = c.user_id
+       WHERE pm.party_id = ? AND pm.role IN ('leader','member') ORDER BY u.username`, [mine.id]) : [];
+    res.json({ parties: rows, mine, pending, members });
   }));
 
   app.post('/api/parties', authRequired, citizenRequired, r(async (req, res) => {
@@ -312,42 +577,53 @@ export function registerCivic(app) {
   }));
 
   // ---------- PARLEMEN ----------
+  // Parlemen dibuka 2 Des 2026 (lihat parliamentStatus). Sebelum dibuka:
+  // parliamentOpen=false + parliamentOpensAt — frontend menampilkan
+  // countdown + mengunci fitur (POST law/vote/impeach/budget menolak 403).
+  // Setelah dibuka: UU/anggaran/pemakzulan HANYA milik negara pemanggil.
   app.get('/api/parliament', authRequired, citizenRequired, r(async (req, res) => {
     const c = req.citizen;
-    const seats = await one('SELECT COALESCE(SUM(seats),0) AS n FROM parties');
-    const myParty = c.party_id ? await one('SELECT seats FROM parties WHERE id = ?', [c.party_id]) : null;
-    const isMp = !!(myParty && myParty.seats > 0);
+    const par = await parliamentStatus();
+    const country = await getMyCountry({ one }, c);
+    const countryId = country?.id || -1;
+    const seats = await one('SELECT COALESCE(SUM(seats),0) AS n FROM party_seats WHERE country_id = ?', [countryId]);
+    const isMp = await isMpCitizen(c);
     const laws = await sql(
       `SELECT l.*, u.username AS proposer_name FROM laws l
        JOIN citizens cc ON cc.id = l.proposer_id JOIN users u ON u.id = cc.user_id
-       ORDER BY l.created_at DESC LIMIT 20`);
+       WHERE l.country_id = ? ORDER BY l.created_at DESC LIMIT 20`,
+      [countryId]);
     const myVotes = await sql('SELECT law_id, vote FROM law_votes WHERE citizen_id = ?', [c.id]);
     // Anggaran (Tahap 5): voting + arsip, lengkap dengan suaraku.
     const budgets = await sql(
       `SELECT b.*, u.username AS proposer_name FROM budgets b
        JOIN citizens cc ON cc.id = b.proposer_id JOIN users u ON u.id = cc.user_id
-       ORDER BY b.created_at DESC LIMIT 10`);
+       WHERE b.country_id = ? ORDER BY b.created_at DESC LIMIT 10`,
+      [countryId]);
     const myBudgetVotes = await sql('SELECT budget_id, vote FROM budget_votes WHERE citizen_id = ?', [c.id]);
     // Pemakzulan (Tahap 5): voting + arsip.
     const impeachments = await sql(
       `SELECT i.*, u.username AS proposer_name, pu.username AS president_name FROM impeachments i
        JOIN citizens cc ON cc.id = i.proposer_id JOIN users u ON u.id = cc.user_id
        JOIN citizens pc ON pc.id = i.president_id JOIN users pu ON pu.id = pc.user_id
-       ORDER BY i.created_at DESC LIMIT 10`);
+       WHERE i.country_id = ? ORDER BY i.created_at DESC LIMIT 10`,
+      [countryId]);
     const myImpeachVotes = await sql('SELECT impeachment_id, vote FROM impeachment_votes WHERE citizen_id = ?', [c.id]);
     // Aturan yang berlaku saat ini (Tahap 5): angka negara hasil UU yang
-    // sudah disahkan — satu-satunya sumber kebenaran tarif/angka.
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    // sudah disahkan — satu-satunya sumber kebenaran tarif/angka. Tanpa
+    // negara: pajak 0%, upah ×1, perjalanan 1 tiket.
     res.json({
       totalSeats: 60, filledSeats: Number(seats.n), majority: 31, isMp,
+      parliamentOpen: par.open, parliamentOpensAt: par.opensAt,
+      country: countrySummary(country),
       laws, myVotes: Object.fromEntries(myVotes.map((v) => [v.law_id, v.vote])),
       budgets, myBudgetVotes: Object.fromEntries(myBudgetVotes.map((v) => [v.budget_id, v.vote])),
       impeachments, myImpeachVotes: Object.fromEntries(myImpeachVotes.map((v) => [v.impeachment_id, v.vote])),
       effects: {
-        taxIncome: Number(country.tax_income), adminPayMult: Number(country.admin_pay_mult),
-        travelTickets: Number(country.travel_tickets),
-        budgetKind: budgetActive(country), budgetUntil: Number(country.budget_until) || 0,
-        mobilizationUntil: Number(country.mobilization_until) || 0,
+        taxIncome: country ? Number(country.tax_income) : 0, adminPayMult: country ? Number(country.admin_pay_mult) : 1,
+        travelTickets: country ? Number(country.travel_tickets) : 1,
+        budgetKind: budgetActive(country), budgetUntil: Number(country?.budget_until) || 0,
+        mobilizationUntil: Number(country?.mobilization_until) || 0,
       },
     });
   }));
@@ -355,31 +631,37 @@ export function registerCivic(app) {
   app.post('/api/parliament/law', authRequired, citizenRequired, r(async (req, res) => {
     const { title, content, kind, value } = req.body || {};
     const c = req.citizen;
+    // Parlemen terkunci sampai dibuka (2 Des 2026).
+    const par = await parliamentStatus();
+    if (!par.open) return res.status(403).json({ error: parliamentLockedError(par.opensAt) });
+    const country = await getMyCountry({ one }, c);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara — dirikan negara atau gabung lewat unifikasi dulu.' });
     if (c.level < 5) return res.status(400).json({ error: 'Mengusulkan UU butuh Level 5.' });
     if (!title || title.length < 5 || title.length > 120) return res.status(400).json({ error: 'Judul UU 5–120 karakter.' });
     if (!content || content.length < 10) return res.status(400).json({ error: 'Isi UU minimal 10 karakter.' });
     // Jenis UU (Tahap 5, BUG-9): 'general' = UU umum tanpa efek angka;
-    // jenis lain wajib punya nilai dalam rentang yang diizinkan.
+    // jenis lain wajib punya nilai dalam rentang yang diizinkan. Jenis
+    // 'ideology'/'system' (redesain dunia): nilai = indeks daftar
+    // (ideologi 0–3, sistem 0–3).
     const lawKind = LAW_KINDS[kind] ? kind : 'general';
     let lawValue = null;
     if (lawKind !== 'general') {
       lawValue = Number(value);
       const def = LAW_KINDS[lawKind];
       if (!Number.isFinite(lawValue) || lawValue < def.min || lawValue > def.max
-        || (lawKind === 'travel' && !Number.isInteger(lawValue))) {
+        || (['travel', 'ideology', 'system'].includes(lawKind) && !Number.isInteger(lawValue))) {
         return res.status(400).json({ error: `${def.label}: nilai ${def.min}–${def.max}.` });
       }
     }
     // Menteri Ekonomi mengusulkan UU gratis (wewenang jabatan) — warga lain
     // membayar biaya notaris 5 emas seperti sebelumnya.
-    const country = await one('SELECT * FROM country WHERE id = 1');
     const free = ministerRole(country, c.id) === 'economy';
     // Atomik: kunci baris warga + potong 5 emas bersyarat di dalam tx.
     const lawId = await tx(async (t) => {
       await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
       const law = await t.run(
-        'INSERT INTO laws (proposer_id, title, content, kind, value, status, ends_at, created_at) VALUES (?,?,?,?,?,\'voting\',?,?) RETURNING id',
-        [c.id, title, content, lawKind, lawValue, Date.now() + 7 * 24 * 60 * 60 * 1000, Date.now()]);
+        'INSERT INTO laws (proposer_id, title, content, kind, value, status, ends_at, country_id, created_at) VALUES (?,?,?,?,?,\'voting\',?,?,?) RETURNING id',
+        [c.id, title, content, lawKind, lawValue, Date.now() + 7 * 24 * 60 * 60 * 1000, country.id, Date.now()]);
       if (free) {
         await t.run('UPDATE citizens SET laws_proposed = laws_proposed + 1 WHERE id = ?', [c.id]);
       } else {
@@ -395,11 +677,14 @@ export function registerCivic(app) {
   app.post('/api/parliament/vote', authRequired, citizenRequired, r(async (req, res) => {
     const { law_id, vote } = req.body || {};
     if (!['yes', 'abstain', 'no'].includes(vote)) return res.status(400).json({ error: 'Pilihan suara tidak dikenal.' });
+    const par = await parliamentStatus();
+    if (!par.open) return res.status(403).json({ error: parliamentLockedError(par.opensAt) });
     const c = req.citizen;
-    const myParty = c.party_id ? await one('SELECT seats FROM parties WHERE id = ?', [c.party_id]) : null;
-    if (!myParty || myParty.seats <= 0) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa memilih. Partaimu belum punya kursi.' });
+    if (!await isMpCitizen(c)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa memilih. Partaimu belum punya kursi.' });
     const law = await one("SELECT * FROM laws WHERE id = ? AND status = 'voting' AND ends_at > ?", [law_id, Date.now()]);
     if (!law) return res.status(404).json({ error: 'UU tidak ditemukan / voting sudah ditutup.' });
+    const myCountry = await getMyCountry({ one }, c);
+    if (!myCountry || law.country_id !== myCountry.id) return res.status(403).json({ error: 'UU ini bukan dari negaramu.' });
     // Atomik: INSERT ... ON CONFLICT DO NOTHING + hitung suara di dalam tx —
     // dua vote paralel hanya satu yang terhitung.
     const col = vote === 'yes' ? 'yes' : vote === 'abstain' ? 'abstain' : 'no';
@@ -418,23 +703,30 @@ export function registerCivic(app) {
   // berikutnya — penutupannya di tick.js §4c. Satu pemakzulan aktif
   // dalam satu waktu. Presiden tidak bisa memakzulkan dirinya sendiri.
   app.post('/api/parliament/impeach', authRequired, citizenRequired, r(async (req, res) => {
+    const par = await parliamentStatus();
+    if (!par.open) return res.status(403).json({ error: parliamentLockedError(par.opensAt) });
     if (!await isMpCitizen(req.citizen)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa mengusulkan pemakzulan.' });
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    const country = await getMyCountry({ one }, req.citizen);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara.' });
     if (!country.president_id) return res.status(400).json({ error: 'Tidak ada presiden yang menjabat.' });
     if (country.president_id === req.citizen.id) return res.status(400).json({ error: 'Presiden tidak bisa memakzulkan dirinya sendiri.' });
-    const active = await one("SELECT id FROM impeachments WHERE status = 'voting' AND ends_at > ?", [Date.now()]);
+    const active = await one("SELECT id FROM impeachments WHERE country_id = ? AND status = 'voting' AND ends_at > ?", [country.id, Date.now()]);
     if (active) return res.status(400).json({ error: 'Sudah ada pemakzulan yang sedang divoting.' });
-    const imp = await run('INSERT INTO impeachments (president_id, proposer_id, status, ends_at, created_at) VALUES (?,?,\'voting\',?,?) RETURNING id',
-      [country.president_id, req.citizen.id, Date.now() + BUDGET_VOTE_DAYS * 24 * 60 * 60 * 1000, Date.now()]);
+    const imp = await run('INSERT INTO impeachments (president_id, proposer_id, status, ends_at, country_id, created_at) VALUES (?,?,\'voting\',?,?,?) RETURNING id',
+      [country.president_id, req.citizen.id, Date.now() + BUDGET_VOTE_DAYS * 24 * 60 * 60 * 1000, country.id, Date.now()]);
     res.json({ ok: true, impeachmentId: imp.id });
   }));
 
   app.post('/api/parliament/impeach/:id/vote', authRequired, citizenRequired, r(async (req, res) => {
     const { vote } = req.body || {};
     if (!['yes', 'no'].includes(vote)) return res.status(400).json({ error: 'Pilihan suara tidak dikenal.' });
+    const par = await parliamentStatus();
+    if (!par.open) return res.status(403).json({ error: parliamentLockedError(par.opensAt) });
     if (!await isMpCitizen(req.citizen)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa memilih pemakzulan.' });
     const imp = await one("SELECT * FROM impeachments WHERE id = ? AND status = 'voting' AND ends_at > ?", [req.params.id, Date.now()]);
     if (!imp) return res.status(404).json({ error: 'Pemakzulan tidak ditemukan / voting sudah ditutup.' });
+    const myCountry = await getMyCountry({ one }, req.citizen);
+    if (!myCountry || imp.country_id !== myCountry.id) return res.status(403).json({ error: 'Pemakzulan ini bukan dari negaramu.' });
     const col = vote === 'yes' ? 'yes' : 'no';
     await tx(async (t) => {
       const ins = await t.run('INSERT INTO impeachment_votes (impeachment_id, citizen_id, vote) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING impeachment_id', [imp.id, req.citizen.id, vote]);
@@ -445,8 +737,15 @@ export function registerCivic(app) {
   }));
 
   // ---------- PEMILU ----------
+  // Pemilu per NEGARA (redesain dunia): warga hanya melihat + memilih di
+  // pemilu negaranya sendiri. Parlemen dipilih rakyat (vote Level 5 + 3
+  // hari jadi warga); presiden dipilih rakyat — KECUALI di sistem
+  // Parlementer, presiden dipilih hanya oleh anggota parlemen.
   app.get('/api/elections', authRequired, citizenRequired, r(async (req, res) => {
-    const current = await sql('SELECT * FROM elections ORDER BY created_at DESC LIMIT 5');
+    const myCountry = await getMyCountry({ one }, req.citizen);
+    const current = myCountry
+      ? await sql('SELECT * FROM elections WHERE country_id = ? ORDER BY created_at DESC LIMIT 5', [myCountry.id])
+      : [];
     const out = [];
     for (const e of current) {
       const cands = await sql(
@@ -459,18 +758,55 @@ export function registerCivic(app) {
       out.push({ ...e, candidates: cands, myVote: myVote || null, winner: winner?.username || null });
     }
     const canVote = req.citizen.level >= 5 && (Date.now() - req.citizen.created_at) >= 3 * 24 * 60 * 60 * 1000;
-    res.json({ elections: out, canVote });
+    res.json({ elections: out, canVote, country: countrySummary(myCountry) });
   }));
 
-  app.post('/api/elections/:id/register', authRequired, citizenRequired, r(async (req, res) => {
+  // Nominasi calon presiden — ATURAN PEMILIK: calon HARUS lewat partai,
+  // kepala partai yang menominasikan (TIDAK ada daftar sendiri). Kepala
+  // partai boleh menominasikan dirinya sendiri ATAU anggota partainya
+  // (mekanismenya nominasi oleh kepala, bukan pendaftaran oleh anggota).
+  // Satu kandidat per partai per pemilu. Calon harus warga negara yang sama.
+  app.post('/api/elections/:id/nominate', authRequired, citizenRequired, r(async (req, res) => {
+    const { citizen_id } = req.body || {};
     const e = await one("SELECT * FROM elections WHERE id = ? AND status = 'open' AND type = 'president'", [req.params.id]);
     if (!e) return res.status(404).json({ error: 'Pemilu presiden yang sedang dibuka tidak ditemukan.' });
     const c = req.citizen;
-    if (!c.party_id) return res.status(400).json({ error: 'Hanya ketua partai yang bisa mencalonkan diri.' });
+    if (!c.party_id) return res.status(400).json({ error: 'Hanya kepala partai yang bisa menominasikan calon presiden.' });
     const party = await one('SELECT * FROM parties WHERE id = ?', [c.party_id]);
-    if (party.leader_id !== c.id) return res.status(400).json({ error: 'Hanya ketua partai yang bisa mencalonkan diri.' });
-    const existing = await one('SELECT * FROM election_candidates WHERE election_id = ? AND citizen_id = ?', [e.id, c.id]);
-    if (existing) return res.status(400).json({ error: 'Kamu sudah terdaftar sebagai kandidat.' });
+    if (!party || party.leader_id !== c.id) return res.status(400).json({ error: 'Hanya kepala partai yang bisa menominasikan calon presiden.' });
+    const nominee = await one('SELECT * FROM citizens WHERE id = ?', [citizen_id]);
+    if (!nominee) return res.status(404).json({ error: 'Calon tidak ditemukan.' });
+    if (nominee.party_id !== party.id) return res.status(400).json({ error: 'Calon harus anggota partaimu.' });
+    const nomineeCountry = await getMyCountry({ one }, nominee);
+    const myCountry = await getMyCountry({ one }, c);
+    if (!myCountry || !nomineeCountry || nomineeCountry.id !== myCountry.id) return res.status(400).json({ error: 'Calon harus warga negara yang sama.' });
+    if (e.country_id !== myCountry.id) return res.status(400).json({ error: 'Pemilu ini bukan dari negaramu.' });
+    const existingParty = await one('SELECT * FROM election_candidates WHERE election_id = ? AND party_id = ?', [e.id, party.id]);
+    if (existingParty) return res.status(400).json({ error: 'Partaimu sudah mencalonkan seseorang di pemilu ini.' });
+    const existing = await one('SELECT * FROM election_candidates WHERE election_id = ? AND citizen_id = ?', [e.id, nominee.id]);
+    if (existing) return res.status(400).json({ error: 'Calon sudah terdaftar di pemilu ini.' });
+    await run('INSERT INTO election_candidates (election_id, citizen_id, party_id, votes) VALUES (?,?,?,0) RETURNING election_id', [e.id, nominee.id, party.id]);
+    await notify(nominee.id, 'POLITIK', 'Kamu dicalonkan jadi presiden', `${party.name} menominasikanmu sebagai calon presiden ${myCountry.name}.`);
+    res.json({ ok: true });
+  }));
+
+  // Daftarkan partai sebagai peserta pemilu parlemen (sebelumnya tidak ada
+  // jalur pendaftaran sama sekali — partai tidak pernah bisa menang kursi
+  // lewat pemilu). Satu partai = satu baris kandidat; suara untuk partai
+  // dihitung dari baris ini, kursi dibagi tick saat pemilu ditutup.
+  app.post('/api/elections/:id/register-party', authRequired, citizenRequired, r(async (req, res) => {
+    const e = await one("SELECT * FROM elections WHERE id = ? AND status = 'open' AND type = 'parliament'", [req.params.id]);
+    if (!e) return res.status(404).json({ error: 'Pemilu parlemen yang sedang dibuka tidak ditemukan.' });
+    const c = req.citizen;
+    if (!c.party_id) return res.status(400).json({ error: 'Hanya kepala partai yang bisa mendaftarkan partainya.' });
+    const party = await one('SELECT * FROM parties WHERE id = ?', [c.party_id]);
+    if (!party || party.leader_id !== c.id) return res.status(400).json({ error: 'Hanya kepala partai yang bisa mendaftarkan partainya.' });
+    const myCountry = await getMyCountry({ one }, c);
+    if (!myCountry || e.country_id !== myCountry.id) return res.status(400).json({ error: 'Pemilu ini bukan dari negaramu.' });
+    const existing = await one('SELECT * FROM election_candidates WHERE election_id = ? AND party_id = ?', [e.id, party.id]);
+    if (existing) return res.status(400).json({ error: 'Partaimu sudah terdaftar di pemilu ini.' });
+    // Baris kandidat parlemen memakai citizen_id = kepala partai sebagai
+    // penanda (suara dihitung per partai, bukan per orang).
     await run('INSERT INTO election_candidates (election_id, citizen_id, party_id, votes) VALUES (?,?,?,0) RETURNING election_id', [e.id, c.id, party.id]);
     res.json({ ok: true });
   }));
@@ -482,6 +818,12 @@ export function registerCivic(app) {
     const c = req.citizen;
     if (c.level < 5) return res.status(400).json({ error: 'Hak pilih mulai Level 5.' });
     if (Date.now() - c.created_at < 3 * 24 * 60 * 60 * 1000) return res.status(400).json({ error: 'Warga baru bisa memilih setelah 3 hari menjadi warga.' });
+    const myCountry = await getMyCountry({ one }, c);
+    if (!myCountry || e.country_id !== myCountry.id) return res.status(403).json({ error: 'Pemilu ini bukan dari negaramu.' });
+    // Sistem Parlementer: pemilu presiden hanya dipilih anggota parlemen.
+    if (e.type === 'president' && myCountry.system === 'parlementer' && !await isMpCitizen(c)) {
+      return res.status(403).json({ error: 'Di sistem Parlementer, presiden dipilih hanya oleh anggota parlemen.' });
+    }
     const cand = await one('SELECT * FROM election_candidates WHERE election_id = ? AND citizen_id = ?', [e.id, candidate_id]);
     if (!cand) return res.status(404).json({ error: 'Kandidat tidak ditemukan.' });
     // Atomik: INSERT ... ON CONFLICT DO NOTHING + hitung suara di dalam tx.
@@ -518,10 +860,11 @@ export function registerCivic(app) {
     const totals = await one('SELECT COUNT(*) AS attacks, COALESCE(SUM(damage),0) AS damage FROM war_attacks WHERE war_id = ?', [war.id]);
     const atFront = req.citizen.region_id === war.region_id;
     // Bonus Tahap 5 yang sedang berlaku untuk pemanggil (untuk ditampilkan
-    // jujur di halaman perang: anggaran perang / mobilisasi / pakta).
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    // jujur di halaman perang: anggaran perang / mobilisasi / pakta /
+    // ideologi Nasionalisme). Tanpa negara, hanya pakta yang bisa berlaku.
+    const country = await getMyCountry({ one }, req.citizen);
     const bonus = await warDamageBonus({ one }, req.citizen.id, country);
-    res.json({ war, fighters, feed, totals, atFront, myRegion: req.citizen.region_id, bonuses: bonus.labels, mobilizationActive: Number(country.mobilization_until) > Date.now(), budgetWarActive: budgetActive(country) === 'war' });
+    res.json({ war, fighters, feed, totals, atFront, myRegion: req.citizen.region_id, bonuses: bonus.labels, mobilizationActive: Number(country?.mobilization_until) > Date.now(), budgetWarActive: budgetActive(country) === 'war' });
   }));
 
   app.post('/api/wars/:id/attack', authRequired, citizenRequired, r(async (req, res) => {
@@ -537,9 +880,10 @@ export function registerCivic(app) {
     // Bonus konvoi (Tahap 3, BUG-7): Pos Militer aktif -> kerusakan +10%.
     const buildings = await convoyBuildings(c.id);
     if (buildings.has('military')) damage = warDamageWithBonus(damage);
-    // Bonus Tahap 5: anggaran perang, mobilisasi, pakta pertahanan.
-    // Dihitung SEBELUM tx (hanya baca; nilai dipakai di dalam tx apa adanya).
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    // Bonus Tahap 5: anggaran perang, mobilisasi, pakta pertahanan,
+    // ideologi Nasionalisme. Dihitung SEBELUM tx (hanya baca; nilai dipakai
+    // di dalam tx apa adanya).
+    const country = await getMyCountry({ one }, c);
     const bonus = await warDamageBonus({ one }, c.id, country);
     const appliedBonuses = [];
     if (buildings.has('military')) appliedBonuses.push('Pos Militer +10%');
@@ -790,18 +1134,51 @@ export function registerCivic(app) {
   }));
 
   // ---------- CHAT ----------
+  // Ruang 'negara' DIHAPUS (redesain dunia — tidak ada lagi satu negara):
+  // diganti ruang WILAYAH (region_<id>) — tiap wilayah punya obrolan
+  // sendiri, hanya warga wilayah itu yang bisa membaca + menulis.
   function roomTitle(room) {
     if (room === 'global') return 'OBROLAN GLOBAL';
     if (room === 'indonesia') return 'OBROLAN INDONESIA';
-    if (room === 'negara') return 'OBROLAN NEGARA';
+    if (room.startsWith('region_')) return 'OBROLAN WILAYAH';
     if (room === 'parliament') return 'RUANG SIDANG';
     if (room.startsWith('war_')) return 'PERTEMPURAN';
     if (room.startsWith('party_')) return 'OBROLAN PARTAI';
     return 'OBROLAN';
   }
+  // Validasi ruang: global/indonesia bebas; region_<id> hanya wilayah
+  // sendiri; parliament hanya bila parlemen sudah dibuka; war_<id> harus
+  // perang yang ada; party_<id> hanya partai sendiri. Ruang lain → 404.
+  async function validateRoom(room, citizen) {
+    if (room === 'global' || room === 'indonesia') return null;
+    if (room.startsWith('region_')) {
+      const id = Number(room.slice(7));
+      if (!Number.isInteger(id) || id !== citizen.region_id) return 'Kamu hanya bisa masuk obrolan wilayahmu sendiri.';
+      const reg = await one('SELECT id FROM regions WHERE id = ?', [id]);
+      if (!reg) return 'Wilayah tidak ditemukan.';
+      return null;
+    }
+    if (room === 'parliament') {
+      const par = await parliamentStatus();
+      if (!par.open) return parliamentLockedError(par.opensAt);
+      return null;
+    }
+    if (room.startsWith('war_')) {
+      const war = await one('SELECT id FROM wars WHERE id = ?', [room.slice(4)]);
+      if (!war) return 'Front perang tidak ditemukan.';
+      return null;
+    }
+    if (room.startsWith('party_')) {
+      if (citizen.party_id !== Number(room.slice(6))) return 'Kamu bukan anggota partai ini.';
+      return null;
+    }
+    return 'Ruang tidak dikenal.';
+  }
 
   app.get('/api/chat/:room', authRequired, citizenRequired, r(async (req, res) => {
     const room = req.params.room;
+    const roomErr = await validateRoom(room, req.citizen);
+    if (roomErr) return res.status(404).json({ error: roomErr });
     const since = Number(req.query.since || 0);
     // BUG-11 (Tahap 3): pesan dari warga yang diblokir disaring DI SQL,
     // bukan di JS setelah LIMIT 100 — sebelumnya daftar 100 pesan bisa
@@ -868,24 +1245,18 @@ export function registerCivic(app) {
 
   app.post('/api/chat/:room', authRequired, citizenRequired, r(async (req, res) => {
     const room = req.params.room;
+    const roomErr = await validateRoom(room, req.citizen);
+    if (roomErr) return res.status(404).json({ error: roomErr });
     const { content, article_id } = req.body || {};
     const text = (content || '').trim();
     if (!text || text.length > 500) return res.status(400).json({ error: 'Pesan 1–500 karakter.' });
     const c = req.citizen;
-    // Ruang sidang: hanya anggota parlemen / menteri / presiden.
+    // Ruang sidang: hanya anggota parlemen / menteri / presiden NEGARANYA.
     if (room === 'parliament') {
-      const myParty = c.party_id ? await one('SELECT seats FROM parties WHERE id = ?', [c.party_id]) : null;
-      const country = await one('SELECT * FROM country WHERE id = 1');
-      const isOfficial = (myParty && myParty.seats > 0)
-        || [country.president_id, country.minister_economy, country.minister_foreign, country.minister_home, country.minister_defense].includes(c.id);
+      const country = await getMyCountry({ one }, c);
+      const isOfficial = await isMpCitizen(c)
+        || (country && [country.president_id, country.minister_economy, country.minister_foreign, country.minister_home, country.minister_defense].includes(c.id));
       if (!isOfficial) return res.status(403).json({ error: 'Ruang Sidang hanya untuk anggota parlemen, menteri, dan presiden.' });
-    }
-    if (room.startsWith('war_')) {
-      const war = await one('SELECT * FROM wars WHERE id = ?', [room.slice(4)]);
-      if (!war) return res.status(404).json({ error: 'Front perang tidak ditemukan.' });
-    }
-    if (room.startsWith('party_')) {
-      if (c.party_id !== Number(room.slice(6))) return res.status(403).json({ error: 'Kamu bukan anggota partai ini.' });
     }
     // Anti-spam atomik: kunci baris warga, cek jeda 5 detik dari nilai segar,
     // lalu simpan pesan + update last_chat_at di dalam tx yang sama.
@@ -976,7 +1347,7 @@ export function registerCivic(app) {
        FROM org_pacts p JOIN organizations oa ON oa.id = p.org_a_id JOIN organizations ob ON ob.id = p.org_b_id
        WHERE p.status = 'active' OR p.org_a_id = ? OR p.org_b_id = ? ORDER BY p.created_at DESC`,
       [myOrgId, myOrgId]);
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    const country = await getMyCountry({ one }, req.citizen);
     res.json({ organizations: rows, myOrgId: mine?.org_id || null, pacts, myMinisterRole: ministerRole(country, req.citizen.id) });
   }));
 
@@ -1034,7 +1405,7 @@ export function registerCivic(app) {
     const target = await one('SELECT * FROM organizations WHERE id = ?', [target_org_id]);
     if (!target) return res.status(404).json({ error: 'Organisasi tujuan tidak ditemukan.' });
     if (o.id === target.id) return res.status(400).json({ error: 'Tidak bisa berpakta dengan organisasi sendiri.' });
-    const country = await one('SELECT * FROM country WHERE id = 1');
+    const country = await getMyCountry({ one }, req.citizen);
     const isLeader = o.leader_id === req.citizen.id;
     const isForeignMinister = ministerRole(country, req.citizen.id) === 'foreign';
     if (!isLeader && !isForeignMinister) return res.status(403).json({ error: 'Hanya ketua organisasi atau Menteri Luar Negeri yang bisa mengusulkan pakta.' });

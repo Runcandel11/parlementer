@@ -335,9 +335,11 @@ async function main() {
     // 14) Tahap 5: halaman Parlemen (UU berjenis + panel aturan berlaku),
     // halaman Organisasi (panel pakta), dan format waktu chat dengan
     // timestamp STRING (simulasi BIGINT Postgres → "Invalid Date").
-    window.eval("ME = { user: { id: 1, username: 'warga_tes', publicId: 'PL-000099', is_banned: false }, citizen: { id: 1, username: 'warga_tes', energy: 100, gold: 500, usd: 500, xp: 0, level: 5 }, region: { name: 'Jakarta' }, xpNext: 10, unread: 0, unreadDm: 0 }");
+    window.eval("ME = { user: { id: 1, username: 'warga_tes', publicId: 'PL-000099', is_banned: false }, citizen: { id: 1, username: 'warga_tes', energy: 100, gold: 500, usd: 500, xp: 0, level: 5 }, region: { id: 1, name: 'Jakarta' }, xpNext: 10, unread: 0, unreadDm: 0 }");
     window.api = async (path) => {
       if (path === '/api/parliament') return {
+        parliamentOpen: true, parliamentOpensAt: Date.now() - 86400000,
+        country: { id: 1, name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' },
         filledSeats: 31, majority: 31, isMp: true,
         laws: [{ id: 1, title: 'UU Pajak 4 Persen', proposer_name: 'warga_tes', status: 'executed', content: 'Pajak menjadi 4 persen.', kind: 'tax_income', value: 4, effect_applied: 1, yes: 31, abstain: 0, no: 0, ends_at: Date.now() }],
         myVotes: {},
@@ -356,6 +358,8 @@ async function main() {
     const lawKind = document.querySelector('#law-kind');
     check('Parlemen: form UU punya pemilih jenis (tax_income/admin_pay/travel)',
       !!lawKind && [...lawKind.options].some((o) => o.value === 'tax_income') && [...lawKind.options].some((o) => o.value === 'admin_pay') && [...lawKind.options].some((o) => o.value === 'travel'));
+    check('Parlemen: form UU punya jenis ideologi + sistem (redesain dunia)',
+      !!lawKind && [...lawKind.options].some((o) => o.value === 'ideology') && [...lawKind.options].some((o) => o.value === 'system'));
     check('Parlemen: UU pajak tampil dengan jenis + efek diterapkan', parlText.includes('UU Pajak 4 Persen') && parlText.includes('efek diterapkan'));
     // Jenis UU mengubah tampilan input nilai (umum: sembunyi; pajak: tampil).
     lawKind.value = 'tax_income';
@@ -364,6 +368,23 @@ async function main() {
     lawKind.value = 'general';
     lawKind.dispatchEvent(new window.Event('change', { bubbles: true }));
     check('Parlemen: pilih UU umum menyembunyikan input nilai', document.querySelector('#law-value-wrap').style.display === 'none');
+    // Parlemen terkunci (redesain dunia): mock parlemen belum dibuka →
+    // countdown + penjelasan tampil, tanpa form UU.
+    window.api = async (path) => {
+      if (path === '/api/parliament') return {
+        parliamentOpen: false, parliamentOpensAt: Date.now() + 2 * 86400000,
+        country: null, filledSeats: 0, majority: 31, isMp: false,
+        laws: [], myVotes: {}, budgets: [], myBudgetVotes: {},
+        impeachments: [], myImpeachVotes: {},
+        effects: { taxIncome: 0, adminPayMult: 1, travelTickets: 1, budgetKind: null, budgetUntil: 0, mobilizationUntil: 0 },
+      };
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/parliament';
+    window.eval('route()');
+    await sleep(300);
+    const parlLocked = document.querySelector('#page').textContent;
+    check('Parlemen terkunci: countdown + penjelasan tampil (tanpa form UU)', parlLocked.includes('PARLEMEN DIBUKA') && parlLocked.includes('2 Desember 2026') && !document.querySelector('#law-kind'), parlLocked.slice(0, 120));
 
     window.api = async (path) => {
       if (path === '/api/orgs') return {
@@ -478,7 +499,7 @@ async function main() {
     const meRevamp = {
       user: { id: 1, username: 'warga_tes', publicId: 'PL-000099', is_banned: false },
       citizen: { id: 1, user_id: 1, username: 'warga_tes', energy: 100, energyCap: 100, gold: 500, usd: 500, xp: 0, level: 1, fatigue: 0, energy_spent_today: 0, bread_today: 0, last_claim_date: '2000-01-01', attr_str: 0, attr_edu: 0, attr_eco: 0, isPremium: false },
-      region: { name: 'Jakarta' }, party: null, job: null, activeWars: [],
+      region: { id: 1, name: 'Jakarta' }, party: null, job: null, activeWars: [],
       votingLaws: [
         { id: 1, title: 'UU Tes 1', yes: 1, abstain: 0, no: 0, ends_at: Date.now() + 75 * 60000 + 30000 },
         { id: 2, title: 'UU Tes 2', yes: 0, abstain: 0, no: 0, ends_at: Date.now() + 200 * 60000 },
@@ -557,7 +578,7 @@ async function main() {
     window.eval('route()');
     await sleep(300);
     const dashText = document.querySelector('#page').textContent;
-    check('Dashboard: hero profil tampil (nama + Republik Indonesia + Jakarta)', !!document.querySelector('.profile-hero-name') && dashText.includes('Republik Indonesia') && dashText.includes('Jakarta'));
+    check('Dashboard: hero profil tampil (nama + Wilayah Merdeka + Jakarta)', !!document.querySelector('.profile-hero-name') && dashText.includes('Wilayah Merdeka') && dashText.includes('Jakarta'));
     check('Dashboard: blok LEVEL tampil (angka emas + XP)', dashText.includes('LEVEL') && dashText.includes('0 / 5 XP'));
     check('Dashboard: blok ENERGI tampil (100/100 + teks penuh)', dashText.includes('ENERGI') && dashText.includes('100/100') && dashText.includes('Penuh — gunakan untuk bekerja'));
     check('Dashboard: blok KELELAHAN tampil (ambang 10.000/15.000)', dashText.includes('KELELAHAN') && dashText.includes('10.000 ×0.75') && dashText.includes('15.000 ×0.5'));
@@ -648,7 +669,7 @@ async function main() {
     window.location.hash = '#/profile';
     window.eval('route()');
     await sleep(300);
-    check('Profil: hero tampil (nama + Republik Indonesia + Jakarta)', !!document.querySelector('.profile-hero-name') && document.querySelector('.profile-hero-name').textContent.includes('warga_tes') && document.querySelector('#page').textContent.includes('Republik Indonesia') && document.querySelector('#page').textContent.includes('Jakarta'));
+    check('Profil: hero tampil (nama + Wilayah Merdeka + Jakarta)', !!document.querySelector('.profile-hero-name') && document.querySelector('.profile-hero-name').textContent.includes('warga_tes') && document.querySelector('#page').textContent.includes('Wilayah Merdeka') && document.querySelector('#page').textContent.includes('Jakarta'));
     // Foto profil (Masalah 1): tombol Ubah Foto muncul di profil sendiri
     // (user_id sama dengan ME) dan TIDAK muncul di profil orang lain.
     // Perbandingan memakai user_id, bukan username — nama tampil huruf
@@ -668,10 +689,10 @@ async function main() {
     // ruangan — sebelumnya highlight selalu menempel di GLOBAL karena `room`
     // baru diubah setelah tab dirender. Uji tiap tab: pill + judul + isi.
     window.api = async (path) => {
-      const m = path.match(/^\/api\/chat\/(global|indonesia|negara)/);
+      const m = path.match(/^\/api\/chat\/(global|indonesia|region_\d+)/);
       if (m) {
         const room = m[1];
-        const titles = { global: 'OBROLAN GLOBAL', indonesia: 'OBROLAN INDONESIA', negara: 'OBROLAN NEGARA' };
+        const titles = { global: 'OBROLAN GLOBAL', indonesia: 'OBROLAN INDONESIA', region_1: 'OBROLAN WILAYAH' };
         return { room, title: titles[room], messages: [{ id: 1, citizen_id: 1, username: 'warga_tes', avatar: null, content: `Pesan tes ruangan ${room} tiga kata`, created_at: Date.now(), isPremium: false, party_tag: null, article_id: null }] };
       }
       throw new Error('api tak terduga: ' + path);
@@ -689,7 +710,7 @@ async function main() {
     };
     await chatRoomCheck('#/chat', 'GLOBAL', 'OBROLAN GLOBAL', 'global');
     await chatRoomCheck('#/chat/indonesia', 'INDONESIA', 'OBROLAN INDONESIA', 'indonesia');
-    await chatRoomCheck('#/chat/negara', 'NEGARA', 'OBROLAN NEGARA', 'negara');
+    await chatRoomCheck('#/chat/wilayah', 'WILAYAH', 'OBROLAN WILAYAH', 'region_1');
 
     // 18) Bug koran dobel (laporan pemain Vincent): tombol Dirikan Koran
     // nonaktif + loading saat request berjalan; tombol Bubarkan ada untuk
@@ -761,8 +782,9 @@ async function main() {
       ogRes.status === 200 && (ogRes.headers.get('content-type') || '').includes('image/jpeg'), `status=${ogRes.status} type=${ogRes.headers.get('content-type')}`);
     // Bug chat: ruangan ditentukan di awal ROUTES.chat; tidak ada lagi
     // pengubahan `room` setelah tab dirender (penyebab pill nyangkut di GLOBAL).
-    check('app.js: ruangan chat ditentukan di awal + tidak ada lagi ubah room setelah render',
-      js4.includes("if (sub === 'indonesia') { room = 'indonesia';") && !js4.includes("if (sub === 'indonesia' || sub === 'negara') { room = sub; }"));
+    // Room 'negara' dihapus (redesain dunia) — diganti 'wilayah' (region_<id>).
+    check('app.js: ruangan chat ditentukan di awal + tidak ada lagi ubah room setelah render + cabang wilayah ada',
+      js4.includes("if (sub === 'indonesia') { room = 'indonesia';") && !js4.includes("if (sub === 'indonesia' || sub === 'negara') { room = sub; }") && js4.includes("else if (sub === 'wilayah') { room = 'region_' + ME.region.id;"));
     // Bug koran dobel: tombol loading + Bubarkan di client, penjaga + DELETE di server.
     check('app.js: tombol Dirikan Koran nonaktif + loading (MENDIRIKAN) + tombol Bubarkan (data-dissolve)',
       js4.includes('MENDIRIKAN…') && js4.includes('data-dissolve') && js4.includes("method: 'DELETE'"));

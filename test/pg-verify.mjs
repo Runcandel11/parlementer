@@ -233,7 +233,7 @@ async function main() {
   // steady state hanya baca penanda (tanpa lock/DDL); migrasi penuh hanya
   // bila penanda dihapus / versi lama.
   const ver = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Penanda versi skema = 9', ver.rows[0]?.value === '9', `value=${ver.rows[0]?.value}`);
+  check('Penanda versi skema = 10', ver.rows[0]?.value === '10', `value=${ver.rows[0]?.value}`);
   const t9a = Date.now();
   await Promise.all([initDb(), initDb(), initDb(), initDb(), initDb()]);
   const t9b = Date.now() - t9a;
@@ -252,6 +252,55 @@ async function main() {
   // Semua CHECK harus tervalidasi (ADD ... NOT VALID + VALIDATE).
   const unvalidated = await pool.query("SELECT conname FROM pg_constraint WHERE contype = 'c' AND conname LIKE 'ck_%' AND NOT convalidated");
   check('Semua CHECK tervalidasi (tidak ada yang NOT VALID)', unvalidated.rowCount === 0, unvalidated.rows.map((r) => r.conname).join(',') || '0');
+
+  console.log('\n[10] Redesain dunia — migrasi v10 + pembubaran RI');
+  // Fresh initDb (dari dropAll di awal) TIDAK membuat negara apa pun.
+  const noCountry = await pool.query('SELECT COUNT(*) AS n FROM country');
+  check('Fresh initDb: 0 negara (dunia terpecah)', Number(noCountry.rows[0].n) === 0, `n=${noCountry.rows[0].n}`);
+  const parOpens = await pool.query("SELECT value FROM db_meta WHERE key = 'parliament_opens_at'");
+  check('Seed db_meta parliament_opens_at = 2 Des 2026', parOpens.rows[0]?.value === '1796144400000', `value=${parOpens.rows[0]?.value}`);
+  const r10tables = await pool.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('party_seats', 'country_joins', 'country_join_votes')");
+  check('3 tabel baru redesain ada', r10tables.rowCount === 3, `n=${r10tables.rowCount}`);
+  const r10cols = await pool.query("SELECT table_name, column_name FROM information_schema.columns WHERE (table_name = 'country' AND column_name IN ('system', 'founder_id')) OR (table_name = 'regions' AND column_name = 'country_id') OR (table_name = 'laws' AND column_name = 'country_id')");
+  check('Kolom baru redesain ada (country.system/founder_id, regions.country_id, laws.country_id)', r10cols.rowCount === 4, `n=${r10cols.rowCount}`);
+  const r10checks = await pool.query("SELECT conname FROM pg_constraint WHERE contype = 'c' AND conname IN ('ck_country_ideology', 'ck_country_system')");
+  check('CHECK ideologi + sistem terpasang', r10checks.rowCount === 2, `n=${r10checks.rowCount}`);
+  // Migrasi kolom/tabel baru: hapus, initDb mengembalikannya.
+  await pool.query('ALTER TABLE country DROP COLUMN system');
+  await pool.query('ALTER TABLE country DROP COLUMN founder_id');
+  await pool.query('ALTER TABLE regions DROP COLUMN country_id');
+  await pool.query('ALTER TABLE laws DROP COLUMN country_id');
+  await pool.query('DROP TABLE IF EXISTS party_seats, country_joins, country_join_votes CASCADE');
+  await resetVersion();
+  await initDb();
+  const r10cols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE (table_name = 'country' AND column_name IN ('system', 'founder_id')) OR (table_name = 'regions' AND column_name = 'country_id') OR (table_name = 'laws' AND column_name = 'country_id')");
+  check('Migrasi: kolom redesain ditambah kembali', Number(r10cols2.rows[0].n) === 4, `n=${r10cols2.rows[0].n}`);
+  const r10tables2 = await pool.query("SELECT COUNT(*) AS n FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('party_seats', 'country_joins', 'country_join_votes')");
+  check('Migrasi: 3 tabel redesain dibuat kembali', Number(r10tables2.rows[0].n) === 3, `n=${r10tables2.rows[0].n}`);
+  // Pembubaran RI: fabrikasi state v9 (negara id=1 + wilayah + UU voting +
+  // pemilu terjadwal), lalu initDb harus membubarkannya.
+  await pool.query("INSERT INTO users (id, email, username, pass_hash, created_at) VALUES (999002, 'ri@test.local', 'warga_ri', 'x', 0)");
+  await pool.query("INSERT INTO citizens (id, user_id, region_id, home_region_id, created_at) VALUES (999002, 999002, 1, 1, 0)");
+  await pool.query("INSERT INTO country (id, name, ideology, system, capital, founded, treasury, treasury_usd, tax_income, tax_production, tax_import, tax_export) VALUES (1, 'Republik Indonesia', 'Konservatisme', 'presidensial', 'Jakarta', '2026-09-23', 100, 50, 2, 1, 2, 2)");
+  await pool.query("UPDATE regions SET country = 'Republik Indonesia', country_id = 1 WHERE id IN (1,2,3)");
+  await pool.query("INSERT INTO laws (proposer_id, title, content, kind, status, ends_at, created_at) VALUES (999002, 'UU Lama RI', 'Isi UU lama.', 'general', 'voting', 9999999999999, 0)");
+  await pool.query("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president', 'scheduled', 9999999999999, 9999999999999, 1, 0)");
+  const riBefore = await pool.query("SELECT COUNT(*) AS n FROM country WHERE name = 'Republik Indonesia'");
+  check('Setup: RI ter-fabrikasi (id=1, kas 100 emas + 50 USD)', Number(riBefore.rows[0].n) === 1);
+  await resetVersion();
+  await initDb();
+  const riAfter = await pool.query('SELECT COUNT(*) AS n FROM country');
+  check('Migrasi: baris negara RI hilang (dibubarkan)', Number(riAfter.rows[0].n) === 0, `n=${riAfter.rows[0].n}`);
+  const regsAfter = await pool.query("SELECT COUNT(*) AS n FROM regions WHERE country <> '' OR country_id IS NOT NULL");
+  check("Migrasi: semua wilayah kembali merdeka (country='' + country_id NULL)", Number(regsAfter.rows[0].n) === 0, `n=${regsAfter.rows[0].n}`);
+  const lawAfter = await pool.query("SELECT status FROM laws WHERE title = 'UU Lama RI'");
+  check("Migrasi: UU voting era RI jadi 'failed'", lawAfter.rows[0]?.status === 'failed', `status=${lawAfter.rows[0]?.status}`);
+  const elAfter = await pool.query("SELECT status FROM elections WHERE country_id = 1 AND type = 'president'");
+  check("Migrasi: pemilu terjadwal era RI jadi 'closed'", elAfter.rows[0]?.status === 'closed', `status=${elAfter.rows[0]?.status}`);
+  const archive = await pool.query("SELECT kind, currency, amount FROM treasury_tx WHERE kind = 'pembubaran' ORDER BY created_at");
+  check('Migrasi: kas RI diarsip sebagai treasury_tx pembubaran (−100 emas, −50 USD)', archive.rows.length === 2 && archive.rows.some((r) => r.currency === 'gold' && Number(r.amount) === -100) && archive.rows.some((r) => r.currency === 'usd' && Number(r.amount) === -50), JSON.stringify(archive.rows));
+  const ver10 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
+  check('Versi skema setelah migrasi = 10', ver10.rows[0]?.value === '10', `value=${ver10.rows[0]?.value}`);
 
   await pool.end();
   console.log(`\n[pg-verify] SELESAI: ${passed} lolos, ${failed} gagal`);

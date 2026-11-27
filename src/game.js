@@ -222,6 +222,76 @@ export const CONVOY_BUILDINGS = [
   { type: 'military', name: 'Pos Militer', desc: '+10% kerusakan perang' },
 ];
 
+// --- Redesain dunia (27 Nov 2026): tanpa negara awal + parlemen 2 Des ---
+// Dunia mulai TERPECAH: semua wilayah merdeka (tidak bernegara). Warga yang
+// membentuk negara; wilayah bisa bergabung (unifikasi) lewat voting warga
+// wilayah itu. Parlemen sebagai fitur dibuka 2 Desember 2026 00:00 WIB —
+// tanggal buka disimpan di db_meta ('parliament_opens_at') supaya bisa
+// diubah admin tanpa deploy; konstanta ini hanya nilai SEED-nya.
+export const PARLIAMENT_OPENS_AT_DEFAULT = Date.parse('2026-12-02T00:00:00+07:00');
+export function parliamentOpen(now = Date.now(), opensAt = PARLIAMENT_OPENS_AT_DEFAULT) { return now >= opensAt; }
+// Format sisa waktu sampai parlemen dibuka, gaya "4 hari 11 jam 30 mnt".
+export function parliamentCountdownText(now = Date.now(), opensAt = PARLIAMENT_OPENS_AT_DEFAULT) {
+  const ms = Math.max(0, opensAt - now);
+  const m = Math.floor(ms / 60000);
+  const d = Math.floor(m / 1440);
+  const h = Math.floor((m % 1440) / 60);
+  const mm = m % 60;
+  if (d > 0) return `${d} hari ${h} jam ${mm} mnt`;
+  if (h > 0) return `${h} jam ${mm} mnt`;
+  return `${mm} mnt`;
+}
+
+// --- Ideologi negara (dipilih presiden ATAU lewat UU jenis 'ideology') ---
+// Efeknya NYATA (bukan teks): klaim harian, upah ADMIN, pajak, kerusakan
+// perang. Konservatisme netral (baseline). Daftar ini satu-satunya sumber
+// kebenaran — dipakai server (pajak/upah/klaim/perang) + halaman Negara.
+export const COUNTRY_IDEOLOGIES = [
+  { id: 'Konservatisme', label: 'Konservatisme', desc: 'Netral — tanpa efek angka.', claimBonus: 0, adminPayMult: 1, taxDelta: 0, warDamageMult: 1 },
+  { id: 'Sosialisme', label: 'Sosialisme', desc: 'Pasokan harian +2 emas; upah lowongan ADMIN +10%.', claimBonus: 2, adminPayMult: 1.1, taxDelta: 0, warDamageMult: 1 },
+  { id: 'Liberalisme', label: 'Liberalisme', desc: 'Pajak penghasilan −1 poin (minimal 0%).', claimBonus: 0, adminPayMult: 1, taxDelta: -1, warDamageMult: 1 },
+  { id: 'Nasionalisme', label: 'Nasionalisme', desc: 'Kerusakan perang +10% untuk semua warga negara.', claimBonus: 0, adminPayMult: 1, taxDelta: 0, warDamageMult: 1.1 },
+];
+export function ideologyDef(id) {
+  return COUNTRY_IDEOLOGIES.find((x) => x.id === id) || COUNTRY_IDEOLOGIES[0];
+}
+
+// --- Sistem pemerintahan (dipilih presiden ATAU lewat UU jenis 'system') ---
+// Efeknya TATA KELOLA (bukan sekadar label):
+// - presidensial: presiden dipilih seluruh warga negara; mengangkat menteri.
+// - parlementer: presiden dipilih HANYA oleh anggota parlemen.
+// - imperial: presiden bergelar Kaisar; TIDAK ada pemilu presiden otomatis —
+//   menjabat sampai dimakzulkan (bila kosong, pemilu pengisi kekosongan
+//   dijadwalkan sekali).
+// - diktator: presiden bergelar Diktator; tanpa pemilu otomatis; presiden
+//   bisa mengubah pajak penghasilan langsung 1–5% tanpa parlemen.
+export const GOVERNMENT_SYSTEMS = [
+  { id: 'presidensial', label: 'Presidensial', desc: 'Presiden dipilih seluruh warga negara; mengangkat menteri.', presidentTitle: 'Presiden', autoPresidentElection: true },
+  { id: 'parlementer', label: 'Parlementer', desc: 'Presiden dipilih hanya oleh anggota parlemen.', presidentTitle: 'Presiden', autoPresidentElection: true },
+  { id: 'imperial', label: 'Imperial', desc: 'Presiden bergelar Kaisar; tanpa pemilu otomatis — menjabat sampai dimakzulkan.', presidentTitle: 'Kaisar', autoPresidentElection: false },
+  { id: 'diktator', label: 'Diktator', desc: 'Presiden bergelar Diktator; tanpa pemilu otomatis; presiden bisa mengubah pajak langsung (1–5%).', presidentTitle: 'Diktator', autoPresidentElection: false },
+];
+export function systemDef(id) {
+  return GOVERNMENT_SYSTEMS.find((x) => x.id === id) || GOVERNMENT_SYSTEMS[0];
+}
+
+// --- Mendirikan negara + unifikasi wilayah ---
+// Pendiri: Level 10 + 100 emas; wilayah pendiri harus merdeka (belum
+// bernegara) dan menjadi ibu kota + wilayah pertama. Unifikasi: warga
+// wilayah merdeka (Level 5) mengusulkan wilayahnya bergabung ke sebuah
+// negara; warga wilayah itu voting 3 hari; lolos bila YA > TIDAK dan YA
+// minimal 3 (supaya satu orang tidak bisa menyeret satu wilayah).
+export const COUNTRY_FORM_MIN_LEVEL = 10;
+export const COUNTRY_FORM_COST_GOLD = 100;
+export const COUNTRY_JOIN_MIN_LEVEL = 5;
+export const COUNTRY_JOIN_VOTE_DAYS = 3;
+export const COUNTRY_JOIN_MIN_YES = 3;
+// Jadwal pemilu pertama sebuah negara baru: presiden 7 hari setelah
+// didirikan; parlemen paling cepat saat parlemen dibuka (2 Des 2026),
+// atau 3 hari setelah didirikan bila negara itu baru dibentuk sesudahnya.
+export const PRESIDENT_ELECTION_DELAY_DAYS = 7;
+export const PARLIAMENT_ELECTION_DELAY_DAYS = 3;
+
 // --- Undang-undang bermuatan mekanik (Tahap 5 — BUG-9) ---
 // Sebelum Tahap 5, UU yang disahkan hanya berubah status jadi 'executed'
 // tanpa efek apa pun (teater). Sekarang tiap UU punya JENIS + NILAI, dan
@@ -234,6 +304,14 @@ export const LAW_KINDS = {
   tax_income: { label: 'Ubah Pajak Penghasilan', hint: 'Tarif baru 1–5% (saat ini lihat halaman Negara). Berlaku untuk penjualan pasar + gaji.', min: 1, max: 5 },
   admin_pay: { label: 'Ubah Upah Lowongan ADMIN', hint: 'Upah baru 80–120% dari upah dasar (100% = normal). Berlaku untuk semua lowongan ADMIN.', min: 80, max: 120 },
   travel: { label: 'Ubah Biaya Perjalanan', hint: 'Tiket yang dibutuhkan per perjalanan: 1 atau 2.', min: 1, max: 2 },
+  // Redesain dunia: ideologi/sistem bisa diubah parlemen lewat UU (nilai =
+  // indeks daftar: ideologi 0=Konservatisme, 1=Sosialisme, 2=Liberalisme,
+  // 3=Nasionalisme; sistem 0=Presidensial, 1=Parlementer, 2=Imperial,
+  // 3=Diktator) ATAU langsung oleh presiden (lihat /api/country/ideology
+  // dan /api/country/system). Presiden tetap bisa mengubah langsung walau
+  // UU jenis ini juga tersedia — sesuai perintah pemilik.
+  ideology: { label: 'Ubah Ideologi Negara', hint: 'Ideologi baru (angka): 0=Konservatisme, 1=Sosialisme, 2=Liberalisme, 3=Nasionalisme.', min: 0, max: 3 },
+  system: { label: 'Ubah Sistem Pemerintahan', hint: 'Sistem baru (angka): 0=Presidensial, 1=Parlementer, 2=Imperial, 3=Diktator.', min: 0, max: 3 },
   general: { label: 'UU Umum (tanpa efek angka)', hint: 'Pernyataan/aturan umum — tidak mengubah angka game.', min: null, max: null },
 };
 // Kalimat efek untuk notifikasi + arsip UU (dipakai tick saat UU disahkan).
@@ -241,6 +319,8 @@ export function lawEffectText(kind, value) {
   if (kind === 'tax_income') return `Pajak penghasilan kini ${value}%.`;
   if (kind === 'admin_pay') return `Upah lowongan ADMIN kini ${value}% dari upah dasar.`;
   if (kind === 'travel') return `Perjalanan kini butuh ${value} Tiket.`;
+  if (kind === 'ideology') return `Ideologi negara kini ${COUNTRY_IDEOLOGIES[Math.round(Number(value))]?.label || value}.`;
+  if (kind === 'system') return `Sistem pemerintahan kini ${GOVERNMENT_SYSTEMS[Math.round(Number(value))]?.label || value}.`;
   return 'UU umum — tidak mengubah angka game.';
 }
 

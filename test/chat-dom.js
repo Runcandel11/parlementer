@@ -226,6 +226,47 @@ async function main() {
     await sleep(600);
     check('editor artikel: input sampul + tombol sisipkan gambar tampil', !!document.querySelector('#art-cover-file') && !!document.querySelector('#btn-art-inline'));
 
+    // [G] Redesain dunia: tab WILAYAH (bukan NEGARA) + room region_<id>.
+    window.location.hash = '#/chat';
+    window.route();
+    await sleep(800);
+    const tabLabels = [...document.querySelectorAll('.chat-tabs .tab')].map((t) => t.textContent.trim());
+    check('tab chat: WILAYAH tampil (ganti NEGARA)', tabLabels.includes('WILAYAH'), tabLabels.join(','));
+    check('tab chat: NEGARA sudah tidak ada', !tabLabels.includes('NEGARA'), tabLabels.join(','));
+    const dbG = new DatabaseSync(DB_PATH);
+    const myRegionId = me.citizen.region_id;
+    const myRoom = 'region_' + myRegionId;
+    dbG.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)').run(citizenId, myRoom, 'pesan wilayah satu', Date.now() - 1000);
+    dbG.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)').run(citizenId, myRoom, 'pesan wilayah dua', Date.now());
+    dbG.close();
+    // Navigasi via hash SAJA (tanpa window.route() langsung — hashchange
+    // sudah memicu route; memanggil route() dua kali bersamaan membuat
+    // renderChatRoom pertama menempel di #chat-list yang sudah ditimpa
+    // eksekusi kedua sehingga daftar tampak kosong).
+    window.location.hash = '#/chat/wilayah';
+    await sleep(1200);
+    if (!document.querySelectorAll('#chat-list .msg').length) {
+      await window.renderChatRoom(myRoom);
+      await sleep(500);
+    }
+    const wilayahTitle = document.querySelector('.chat-title')?.textContent || '';
+    check('halaman chat wilayah: judul OBROLAN WILAYAH', /OBROLAN WILAYAH/.test(wilayahTitle), wilayahTitle);
+    const wilayahMsgs = [...document.querySelectorAll('#chat-list .msg')].map((m) => m.textContent);
+    check('room wilayah sendiri menampilkan pesannya', wilayahMsgs.some((t) => t.includes('pesan wilayah satu')) && wilayahMsgs.some((t) => t.includes('pesan wilayah dua')), `n=${wilayahMsgs.length}`);
+    const activeTab = document.querySelector('.chat-tabs .tab.active')?.textContent.trim();
+    check('tab WILAYAH aktif di room wilayah', activeTab === 'WILAYAH', `aktif=${activeTab}`);
+    const regionsG = await (await jarFetch(BASE + '/api/regions')).json();
+    const otherRegion = (regionsG.regions || []).find((x) => x.id !== myRegionId);
+    const getOther = await jarFetch(BASE + '/api/chat/region_' + otherRegion.id);
+    check('baca room wilayah orang lain ditolak (404)', getOther.status === 404, `status=${getOther.status}`);
+    const postOther = await jarFetch(BASE + '/api/chat/region_' + otherRegion.id, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'pesan ke wilayah orang lain tes' }),
+    });
+    check('kirim ke room wilayah orang lain ditolak (404)', postOther.status === 404, `status=${postOther.status}`);
+    const getNegara = await jarFetch(BASE + '/api/chat/negara');
+    check("room 'negara' lama ditolak (404)", getNegara.status === 404, `status=${getNegara.status}`);
+
     dom.window.close();
     console.log(`\n[chat-dom] SELESAI: ${passed} lolos, ${failed} gagal`);
     process.exitCode = failed ? 1 : 0;

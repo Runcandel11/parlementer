@@ -8,6 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { PARLIAMENT_OPENS_AT_DEFAULT } from './game.js';
 
 // Email yang menjadi admin otomatis (satu-satunya admin; tidak ada endpoint
 // promosi admin). Dibandingkan case-insensitive (email selalu disimpan lowercase).
@@ -316,10 +317,47 @@ CREATE TABLE IF NOT EXISTS citizens (
   missions TEXT NOT NULL DEFAULT '{}',
   created_at BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS country (
+  id ${id},
+  name TEXT NOT NULL,
+  -- Ideologi + sistem pemerintahan (redesain dunia 27 Nov 2026): tiap
+  -- negara punya keduanya; dipilih presiden ATAU lewat UU. CHECK menjaga
+  -- nilainya tetap dalam daftar game.js (COUNTRY_IDEOLOGIES /
+  -- GOVERNMENT_SYSTEMS). founder_id = pendiri negara (bukan otomatis
+  -- presiden — presiden dipilih lewat pemilu + nominasi kepala partai).
+  ideology TEXT NOT NULL DEFAULT 'Konservatisme' CHECK (ideology IN ('Konservatisme','Sosialisme','Liberalisme','Nasionalisme')),
+  system TEXT NOT NULL DEFAULT 'presidensial' CHECK (system IN ('presidensial','parlementer','imperial','diktator')),
+  founder_id INTEGER,
+  capital TEXT NOT NULL DEFAULT 'Jakarta',
+  founded TEXT NOT NULL DEFAULT '2026-09-23',
+  treasury REAL NOT NULL DEFAULT 0,
+  treasury_usd REAL NOT NULL DEFAULT 0,
+  tax_income REAL NOT NULL DEFAULT 2 CHECK (tax_income >= 0 AND tax_income <= 10),
+  tax_production REAL NOT NULL DEFAULT 1,
+  tax_import REAL NOT NULL DEFAULT 2,
+  tax_export REAL NOT NULL DEFAULT 2,
+  president_id INTEGER,
+  minister_economy INTEGER,
+  minister_foreign INTEGER,
+  minister_home INTEGER,
+  minister_defense INTEGER,
+  admin_pay_mult REAL NOT NULL DEFAULT 1 CHECK (admin_pay_mult >= 0.5 AND admin_pay_mult <= 2),
+  travel_tickets INTEGER NOT NULL DEFAULT 1 CHECK (travel_tickets IN (1, 2)),
+  mobilization_until BIGINT NOT NULL DEFAULT 0,
+  budget_kind TEXT NOT NULL DEFAULT '',
+  budget_until BIGINT NOT NULL DEFAULT 0,
+  holiday_at BIGINT NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS regions (
   id ${id},
   name TEXT NOT NULL,
-  country TEXT NOT NULL DEFAULT 'Republik Indonesia',
+  -- Kolom warisan (dulu nama negara wilayah ini). Sejak redesain dunia
+  -- 27 Nov 2026 wilayah TIDAK punya negara di awal: nilainya '' dan TIDAK
+  -- DIBACA kode mana pun — keanggotaan negara ada di country_id (NULL =
+  -- wilayah merdeka). Kolom dipertahankan supaya migrasi database lama
+  -- tidak butuh rebuild tabel; jangan dipakai lagi.
+  country TEXT NOT NULL DEFAULT '',
+  country_id INTEGER REFERENCES country(id),
   type TEXT NOT NULL DEFAULT 'Daratan',
   city_score INTEGER NOT NULL DEFAULT 7,
   capacity INTEGER NOT NULL DEFAULT 100,
@@ -390,6 +428,9 @@ CREATE TABLE IF NOT EXISTS treasury_tx (
   currency TEXT NOT NULL DEFAULT 'usd',
   amount REAL NOT NULL,
   note TEXT NOT NULL DEFAULT '',
+  -- Kas negara yang bersangkutan (redesain dunia): NULL = era negara
+  -- tunggal lama (sebelum ada banyak negara).
+  country_id INTEGER,
   created_at BIGINT NOT NULL
 );
 -- Tanda pasar (Tahap 4): heuristik deteksi harga di luar batas wajar +
@@ -463,30 +504,6 @@ CREATE TABLE IF NOT EXISTS companies (
   resource TEXT NOT NULL DEFAULT '',
   created_at BIGINT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS country (
-  id ${id},
-  name TEXT NOT NULL,
-  ideology TEXT NOT NULL DEFAULT 'Konservatisme',
-  capital TEXT NOT NULL DEFAULT 'Jakarta',
-  founded TEXT NOT NULL DEFAULT '2026-09-23',
-  treasury REAL NOT NULL DEFAULT 0,
-  treasury_usd REAL NOT NULL DEFAULT 0,
-  tax_income REAL NOT NULL DEFAULT 2 CHECK (tax_income >= 0 AND tax_income <= 10),
-  tax_production REAL NOT NULL DEFAULT 1,
-  tax_import REAL NOT NULL DEFAULT 2,
-  tax_export REAL NOT NULL DEFAULT 2,
-  president_id INTEGER,
-  minister_economy INTEGER,
-  minister_foreign INTEGER,
-  minister_home INTEGER,
-  minister_defense INTEGER,
-  admin_pay_mult REAL NOT NULL DEFAULT 1 CHECK (admin_pay_mult >= 0.5 AND admin_pay_mult <= 2),
-  travel_tickets INTEGER NOT NULL DEFAULT 1 CHECK (travel_tickets IN (1, 2)),
-  mobilization_until BIGINT NOT NULL DEFAULT 0,
-  budget_kind TEXT NOT NULL DEFAULT '',
-  budget_until BIGINT NOT NULL DEFAULT 0,
-  holiday_at BIGINT NOT NULL DEFAULT 0
-);
 CREATE TABLE IF NOT EXISTS parties (
   id ${id},
   name TEXT NOT NULL,
@@ -504,6 +521,36 @@ CREATE TABLE IF NOT EXISTS party_members (
   joined_at BIGINT NOT NULL,
   UNIQUE(party_id, citizen_id)
 );
+-- Kursi parlemen PER NEGARA (redesain dunia): satu partai bisa punya kursi
+-- di parlemen negara A dan 0 kursi di negara B. parties.seats (kolom lama,
+-- satu angka global) tidak lagi dipakai — dipertahankan supaya migrasi
+-- database lama tidak butuh rebuild tabel.
+CREATE TABLE IF NOT EXISTS party_seats (
+  party_id INTEGER NOT NULL REFERENCES parties(id),
+  country_id INTEGER NOT NULL REFERENCES country(id),
+  seats INTEGER NOT NULL DEFAULT 0 CHECK (seats >= 0),
+  UNIQUE(party_id, country_id)
+);
+-- Usulan unifikasi wilayah (redesain dunia): warga wilayah merdeka
+-- mengusulkan wilayahnya bergabung ke sebuah negara; warga wilayah itu
+-- voting 3 hari. status: 'voting' | 'passed' | 'failed'.
+CREATE TABLE IF NOT EXISTS country_joins (
+  id ${id},
+  country_id INTEGER NOT NULL REFERENCES country(id),
+  region_id INTEGER NOT NULL REFERENCES regions(id),
+  proposer_id INTEGER NOT NULL REFERENCES citizens(id),
+  yes INTEGER NOT NULL DEFAULT 0 CHECK (yes >= 0),
+  no INTEGER NOT NULL DEFAULT 0 CHECK (no >= 0),
+  status TEXT NOT NULL DEFAULT 'voting' CHECK (status IN ('voting','passed','failed')),
+  ends_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS country_join_votes (
+  join_id INTEGER NOT NULL REFERENCES country_joins(id),
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  vote TEXT NOT NULL,
+  UNIQUE(join_id, citizen_id)
+);
 CREATE TABLE IF NOT EXISTS laws (
   id ${id},
   proposer_id INTEGER NOT NULL REFERENCES citizens(id),
@@ -517,6 +564,9 @@ CREATE TABLE IF NOT EXISTS laws (
   abstain INTEGER NOT NULL DEFAULT 0,
   no INTEGER NOT NULL DEFAULT 0,
   ends_at BIGINT NOT NULL,
+  -- Negara yang UU ini berlaku (redesain dunia). NULL = UU era negara
+  -- tunggal lama (sudah ditutup migrasi, hanya arsip).
+  country_id INTEGER,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS law_votes (
@@ -537,6 +587,7 @@ CREATE TABLE IF NOT EXISTS budgets (
   yes INTEGER NOT NULL DEFAULT 0,
   no INTEGER NOT NULL DEFAULT 0,
   ends_at BIGINT NOT NULL,
+  country_id INTEGER,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS budget_votes (
@@ -556,6 +607,7 @@ CREATE TABLE IF NOT EXISTS impeachments (
   yes INTEGER NOT NULL DEFAULT 0,
   no INTEGER NOT NULL DEFAULT 0,
   ends_at BIGINT NOT NULL,
+  country_id INTEGER,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS impeachment_votes (
@@ -571,6 +623,9 @@ CREATE TABLE IF NOT EXISTS elections (
   opens_at BIGINT NOT NULL,
   closes_at BIGINT NOT NULL,
   winner_id INTEGER,
+  -- Negara yang pemilu ini (redesain dunia). NULL = pemilu era negara
+  -- tunggal lama (sudah ditutup migrasi, hanya arsip).
+  country_id INTEGER,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS election_candidates (
@@ -591,7 +646,9 @@ CREATE TABLE IF NOT EXISTS wars (
   name TEXT NOT NULL,
   region_id INTEGER NOT NULL REFERENCES regions(id),
   attacker_label TEXT NOT NULL,
-  defender_label TEXT NOT NULL DEFAULT 'Republik Indonesia',
+  -- Pembela: nama negara pemilik wilayah, atau 'Pembela <Wilayah>' bila
+  -- wilayah merdeka. Diisi saat perang dimulai (bukan default negara).
+  defender_label TEXT NOT NULL DEFAULT '',
   score_a INTEGER NOT NULL DEFAULT 0 CHECK (score_a >= 0),
   score_d INTEGER NOT NULL DEFAULT 0 CHECK (score_d >= 0),
   status TEXT NOT NULL DEFAULT 'active',
@@ -769,6 +826,11 @@ CREATE INDEX IF NOT EXISTS idx_announcement_reads_citizen ON announcement_reads(
 CREATE INDEX IF NOT EXISTS idx_convoys_citizen ON convoys(citizen_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_elections_status ON elections(status);
 CREATE INDEX IF NOT EXISTS idx_laws_status ON laws(status, ends_at);
+-- Indeks country_id TIDAK di sini: kolomnya ditambah migrasi
+-- migrateWorldRedesign (DB lama belum punya kolomnya saat schema() jalan —
+-- CREATE INDEX di sini akan menggagalkan initDb). Indeks itu dibuat di
+-- migrasi, setelah ADD COLUMN (pola yang sama seperti
+-- idx_citizens_last_seen di migrateOnlineColumns).
 CREATE INDEX IF NOT EXISTS idx_appeals_user ON appeals(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_referral_pending_newcomer ON referral_pending(newcomer_id, status);
 CREATE INDEX IF NOT EXISTS idx_referral_pending_referrer ON referral_pending(referrer_id, status, paid_day);
@@ -921,6 +983,7 @@ export async function initDb() {
     await migrateOnlineColumns(t);
     await migrateTrainCooldownColumns(t);
     await migrateArticleImageColumns(t);
+    await migrateWorldRedesign(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -974,7 +1037,7 @@ async function runDataFixups() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -991,7 +1054,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1180,6 +1243,83 @@ async function migrateTrainCooldownColumns(t) {
   await addCol('citizens', 'train_eco_at', 'BIGINT NOT NULL DEFAULT 0');
 }
 
+// Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di
+// db_meta supaya bisa diubah tanpa deploy; nilai awal = 2 Des 2026 00:00
+// WIB (PARLIAMENT_OPENS_AT_DEFAULT di game.js). Dipakai gate parlemen +
+// penjadwalan pemilu parlemen pertama tiap negara.
+export async function getParliamentOpensAt() {
+  try {
+    const row = await one("SELECT value FROM db_meta WHERE key = 'parliament_opens_at'");
+    const v = Number(row?.value);
+    return Number.isFinite(v) && v > 0 ? v : PARLIAMENT_OPENS_AT_DEFAULT;
+  } catch {
+    return PARLIAMENT_OPENS_AT_DEFAULT;
+  }
+}
+
+// Redesain dunia (27 Nov 2026): TIDAK ADA lagi negara awal. Migrasi ini
+// MEMBUBARKAN Republik Indonesia di database lama:
+//  - baris country id=1 dihapus (kasnya diarsipkan dulu ke treasury_tx
+//    sebagai baris 'pembubaran' bernilai negatif, supaya jejaknya ada);
+//  - semua wilayah kembali merdeka (regions.country = '', country_id NULL);
+//  - politik yang masih berjalan (UU/anggaran/pemakzulan/pemilu milik
+//    negara yang dibubarkan) ditutup sebagai gagal — tidak bisa dilanjutkan
+//    tanpa negara.
+// Idempotent: kolom yang sudah ada tidak disentuh; baris country yang
+// sudah tidak ada tidak dihapus dua kali; database BARU (v10) tidak pernah
+// punya baris country dari seed, jadi migrasi ini no-op di sana.
+async function migrateWorldRedesign(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('country', 'system', "TEXT NOT NULL DEFAULT 'presidensial'");
+  await addCol('country', 'founder_id', 'INTEGER');
+  await addCol('regions', 'country_id', 'INTEGER REFERENCES country(id)');
+  await addCol('laws', 'country_id', 'INTEGER');
+  await addCol('budgets', 'country_id', 'INTEGER');
+  await addCol('impeachments', 'country_id', 'INTEGER');
+  await addCol('elections', 'country_id', 'INTEGER');
+  await addCol('treasury_tx', 'country_id', 'INTEGER');
+  // Indeks dibuat DI SINI (setelah ADD COLUMN), bukan hanya di schema():
+  // schema() jalan SEBELUM migrasi, dan database lama belum punya kolom
+  // ini — indeks di schema() akan menggagalkan initDb (pola yang sama
+  // seperti migrateOnlineColumns).
+  await t.exec('CREATE INDEX IF NOT EXISTS idx_party_seats_country ON party_seats(country_id)');
+  await t.exec('CREATE INDEX IF NOT EXISTS idx_country_joins_region ON country_joins(region_id, status)');
+  await t.exec('CREATE INDEX IF NOT EXISTS idx_regions_country ON regions(country_id)');
+  await t.exec('CREATE INDEX IF NOT EXISTS idx_elections_country ON elections(country_id)');
+  await t.exec('CREATE INDEX IF NOT EXISTS idx_laws_country ON laws(country_id)');
+  await t.exec('CREATE INDEX IF NOT EXISTS idx_treasury_tx_country ON treasury_tx(country_id)');
+  // Pembubaran Republik Indonesia. URUTAN PENTING (Postgres menegakkan
+  // FK): wilayah dilepas DULU (country='' + country_id=NULL) sebelum baris
+  // negara dihapus — sebaliknya DELETE gagal 23503 bila ada wilayah yang
+  // masih merujuk negara itu.
+  await t.run("UPDATE regions SET country = '', country_id = NULL");
+  const old = await t.one('SELECT * FROM country WHERE id = 1');
+  if (old) {
+    const gold = Number(old.treasury) || 0;
+    const usd = Number(old.treasury_usd) || 0;
+    if (gold > 0) {
+      await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES ('pembubaran','gold',?,?,?) RETURNING id",
+        [-gold, `Pembubaran Republik Indonesia — kas ${gold} emas dihapus (negara dibubarkan, dunia kembali terpecah).`, Date.now()]);
+    }
+    if (usd > 0) {
+      await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES ('pembubaran','usd',?,?,?) RETURNING id",
+        [-usd, 'Pembubaran Republik Indonesia — kas Rupiah dihapus (negara dibubarkan, dunia kembali terpecah).', Date.now()]);
+    }
+    await t.run('DELETE FROM country WHERE id = 1');
+  }
+  await t.run("UPDATE laws SET status = 'failed' WHERE status = 'voting'");
+  await t.run("UPDATE budgets SET status = 'failed' WHERE status = 'voting'");
+  await t.run("UPDATE impeachments SET status = 'failed' WHERE status = 'voting'");
+  await t.run("UPDATE elections SET status = 'closed' WHERE status IN ('scheduled','open')");
+}
+
 // Migrasikan kolom gambar artikel (sampul + thumbnail) untuk database
 // yang sudah ada: articles.cover / cover_sm (data URL gambar, NULL =
 // artikel lama tanpa sampul). Idempotent: kolom yang sudah ada tidak
@@ -1236,6 +1376,8 @@ const CHECK_CONSTRAINTS = [
   ['country', 'ck_country_tax_income_range', 'tax_income >= 0 AND tax_income <= 10'],
   ['country', 'ck_country_admin_pay_mult_range', 'admin_pay_mult >= 0.5 AND admin_pay_mult <= 2'],
   ['country', 'ck_country_travel_tickets', 'travel_tickets IN (1, 2)'],
+  ['country', 'ck_country_ideology', "ideology IN ('Konservatisme','Sosialisme','Liberalisme','Nasionalisme')"],
+  ['country', 'ck_country_system', "system IN ('presidensial','parlementer','imperial','diktator')"],
   ['budgets', 'ck_budgets_amount_range', 'amount >= 50 AND amount <= 500'],
 ];
 // Tambahkan CHECK saldo/qty ke database Postgres yang sudah ada (Neon live).
@@ -1298,11 +1440,12 @@ async function seed(t = { one, run }) {
         [c.name, c.category, c.usd, c.gold]);
     }
   }
-  const countryCount = await t.one('SELECT COUNT(*) AS c FROM country');
-  if (Number(countryCount.c) === 0) {
-    await t.run(`INSERT INTO country (name, ideology, capital, founded, treasury, tax_income, tax_production, tax_import, tax_export)
-      VALUES ('Republik Indonesia','Konservatisme','Jakarta','2026-09-23',0,2,1,2,2) RETURNING id`);
-  }
+  // Negara: TIDAK ADA yang di-seed (redesain dunia 27 Nov 2026) — dunia
+  // mulai terpecah; negara hanya terbentuk dari aksi pemain (pendirian /
+  // unifikasi). Baris country di database LAMA sudah dibubarkan migrasi
+  // (migrateWorldRedesign).
+  await t.run("INSERT INTO db_meta (key, value) VALUES ('parliament_opens_at', ?) ON CONFLICT(key) DO NOTHING",
+    [String(PARLIAMENT_OPENS_AT_DEFAULT)]);
   const jobCount = await t.one('SELECT COUNT(*) AS c FROM jobs WHERE is_admin = 1');
   if (Number(jobCount.c) === 0) {
     for (const j of ADMIN_JOBS) {

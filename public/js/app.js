@@ -323,7 +323,7 @@ function showAuth() {
         username: f.username.value.trim(), ref: f.ref.value.trim() || undefined,
         admin_code: f.admin_code.value.trim() || undefined,
       });
-      toast('Selamat datang! Kamu sekarang warga Republik Indonesia.');
+      toast('Selamat datang! Dunia ini masih terpecah — dirikan negaramu sendiri.');
       showApp();
     } catch (ex) { err.textContent = ex.message; err.hidden = false; }
   };
@@ -480,7 +480,7 @@ function renderHUD() {
   if (!ME) return;
   const c = ME.citizen;
   $('#hud-name').textContent = c.username + (c.isPremium ? ' ◆' : '');
-  $('#hud-region').textContent = (ME.region?.name || '') + ' · Republik Indonesia';
+  $('#hud-region').textContent = (ME.region?.name || '') + ' · ' + (ME.region?.country_name || ME.country?.name || 'Wilayah Merdeka');
   $('#hud-usd').textContent = fmtRp(c.usd);
   $('#hud-gold').textContent = fmt(c.gold);
   $('#hud-xp').textContent = c.xp + '/' + ME.xpNext;
@@ -508,6 +508,16 @@ function renderHUD() {
       banner.innerHTML = `<b>${laws.length} undang-undang sedang dibahas</b> · sisa ${fmtRemaining(nearest ? nearest - Date.now() : 0)}`;
     } else banner.hidden = true;
   }
+  // Countdown parlemen (redesain dunia): tampil di ATAS sampai parlemen
+  // dibuka 2 Des 2026. Diperbarui tiap refresh /api/me (30 detik).
+  const pcd = $('#parliament-countdown');
+  if (pcd) {
+    if (ME.parliamentOpen) pcd.hidden = true;
+    else {
+      pcd.hidden = false;
+      pcd.innerHTML = `<b>🏛️ Parlemen dibuka ${fmtCountdown(Number(ME.parliamentOpensAt) - Date.now())} lagi</b> · 2 Des 2026`;
+    }
+  }
   // Tombol peti pasokan harian (rombak UI): di bawah hamburger; berdenyut
   // emas + badge 1 bila pasokan hari ini belum diambil.
   const crate = $('#btn-crate');
@@ -529,6 +539,18 @@ const fmtRemaining = (ms) => {
   const m = Math.floor(ms / 60000);
   if (m < 60) return m + ' mnt';
   return Math.floor(m / 60) + 'j ' + (m % 60) + ' mnt';
+};
+
+// Sisa waktu sampai parlemen dibuka, gaya "4 hari 11 jam 30 mnt".
+const fmtCountdown = (ms) => {
+  if (ms == null || ms <= 0) return 'sebentar lagi';
+  const m = Math.floor(ms / 60000);
+  const d = Math.floor(m / 1440);
+  const h = Math.floor((m % 1440) / 60);
+  const mm = m % 60;
+  if (d > 0) return `${d} hari ${h} jam ${mm} mnt`;
+  if (h > 0) return `${h} jam ${mm} mnt`;
+  return `${mm} mnt`;
 };
 
 // Sisa jeda latihan, gaya "7 mnt" / "45 dtk" (bulat ke atas supaya tombol
@@ -760,7 +782,7 @@ ROUTES.dashboard = async () => {
     <div class="profile-hero">
       <a class="profile-hero-name" data-goto="#/profile" title="Lihat profilmu">${esc(c.username)}</a>
       <div class="profile-hero-sub">
-        <span><span class="dot-red">■</span> Republik Indonesia</span>
+        <span><span class="dot-red">■</span> ${esc(ME.region?.country_name || ME.country?.name || 'Wilayah Merdeka')}</span>
         <span><span class="muted">📍</span> ${esc(ME.region?.name || '')}</span>
       </div>
     </div>
@@ -1062,7 +1084,7 @@ ROUTES.profile = async (username) => {
   <div class="profile-hero">
     <div class="profile-hero-name">${esc(pr.username)}${pr.isPremium ? ' ◆' : ''}</div>
     <div class="profile-hero-sub">
-      <span><span class="dot-red">■</span> Republik Indonesia</span>
+      <span><span class="dot-red">■</span> ${esc(pr.country_name || 'Wilayah Merdeka')}</span>
       <span><span class="muted">📍</span> ${esc(pr.region_name)}</span>
     </div>
   </div>
@@ -1080,7 +1102,7 @@ ROUTES.profile = async (username) => {
       </div>` : ''}
     </div>
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(pr.publicId)}</b></span></div>
-    <div class="kv"><span class="k">Kewarganegaraan</span><span class="v">Republik Indonesia</span></div>
+    <div class="kv"><span class="k">Kewarganegaraan</span><span class="v">${esc(pr.country_name || 'Wilayah Merdeka')}</span></div>
     <div class="kv"><span class="k">Daerah asal</span><span class="v">${esc(pr.region_name)}</span></div>
     <div class="kv"><span class="k">Partai</span><span class="v">${pr.party ? esc(pr.party.name) + ' [' + esc(pr.party.tag) + ']' : '—'}</span></div>
     <div class="kv"><span class="k">Bergabung</span><span class="v">${fmtDate(pr.created_at)}</span></div>
@@ -1595,7 +1617,7 @@ function marketPage(scope) {
     const curLabel = scope === 'global' ? 'emas' : 'Rp';
     const priceInputUsd = (input) => scope === 'global' ? Number(input.value) : rpToUsd(Number(input.value));
     $('#page').innerHTML = page(scope === 'global' ? 'PASAR GLOBAL' : 'PASAR',
-      scope === 'global' ? 'Perdagangan antarnegara dalam EMAS · pajak impor 2%' : 'Republik Indonesia — barang diperdagangkan dalam Rupiah', `
+      scope === 'global' ? 'Perdagangan antarnegara dalam EMAS · pajak impor 2%' : 'Pasar lokal — barang diperdagangkan dalam Rupiah', `
     <div class="stat-grid">
       <div class="stat-cell"><div class="stat-label">📋 Penawaran Terbuka</div><div class="stat-num">${fmt(data.stats.offers)}</div><div class="stat-sub">di 15 komoditas</div></div>
       <div class="stat-cell"><div class="stat-label">📈 Transaksi · 24J</div><div class="stat-num">${fmt(data.stats.tx)}</div><div class="stat-sub">${fmt(data.stats.units)} unit berpindah tangan</div></div>
@@ -1972,7 +1994,7 @@ ROUTES.companies = async () => {
 // ---------- PETA & WILAYAH ----------
 ROUTES.map = async () => {
   const data = await api('/api/regions');
-  $('#page').innerHTML = page('PETA DUNIA', 'Republik Indonesia — 17 wilayah. Klik wilayah untuk detail dan bepergian.', `
+  $('#page').innerHTML = page('PETA DUNIA', '17 wilayah merdeka. Klik wilayah untuk detail dan bepergian.', `
   <div class="panel"><h3>🔍 CARI WILAYAH</h3>
     <input id="region-search" placeholder="Cari wilayah...">
   </div>
@@ -1981,6 +2003,7 @@ ROUTES.map = async () => {
     <div class="card region-card" data-name="${esc(r.name.toLowerCase())}">
       <div class="panel-head"><h4>${esc(r.name)}</h4><span class="chip">${esc(r.type)} · Skor ${r.city_score}/10</span></div>
       <p class="muted small">${r.population} warga · ${r.companies} perusahaan · Pemberontakan ${r.rebellion}/5${r.resource_bonus ? ' · Bonus: ' + esc(r.resource_bonus) : ''}</p>
+      <p class="muted small">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Wilayah Merdeka'}</p>
       <div class="row"><button class="btn-gold btn-sm" data-goto="#/regions/${r.id}">Lihat Wilayah</button>
       ${r.id === data.mine ? '<span class="chip teal">📍 KAMU DI SINI</span>' : `<button class="btn-ghost btn-sm" data-travel="${r.id}">Bepergian (1 🎫)</button>`}</div>
     </div>`).join('')}
@@ -1999,7 +2022,7 @@ ROUTES.regions = async (id) => {
   if (id) {
     const d = await api('/api/regions/' + id);
     const r = d.region;
-    $('#page').innerHTML = page(esc(r.name).toUpperCase(), `${esc(r.type)} · Republik Indonesia`, `
+    $('#page').innerHTML = page(esc(r.name).toUpperCase(), `${esc(r.type)} · ${r.country_name ? esc(r.country_name) : 'Wilayah Merdeka'}`, `
     <div class="stat-grid">
       <div class="stat-cell"><div class="stat-label">🏙️ Skor Kota</div><div class="stat-num">${r.city_score}<span style="font-size:18px;color:var(--muted)">/10</span></div></div>
       <div class="stat-cell"><div class="stat-label">👥 Warga</div><div class="stat-num">${fmt(r.population)}</div></div>
@@ -2015,7 +2038,8 @@ ROUTES.regions = async (id) => {
       <div class="kv"><span class="k">Kapasitas wilayah</span><span class="v">${r.capacity}% ${d.home ? '· Ini wilayah asalmu' : ''}</span></div>
     </div>
     <div class="panel"><h3>⚖️ POLITIK</h3>
-      <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${d.taxIncome ?? 2}%</span></div>
+      <div class="kv"><span class="k">Negara</span><span class="v">${r.country_name ? esc(r.country_name) : 'Wilayah Merdeka'}</span></div>
+      <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${d.taxIncome ?? 0}%${r.country_name ? '' : ' · wilayah merdeka tidak memungut pajak'}</span></div>
       <div class="kv"><span class="k">Pajak produksi</span><span class="v">1%</span></div>
       <div class="kv"><span class="k">Pajak impor / ekspor</span><span class="v">2% / 2%</span></div>
       <div class="kv"><span class="k">Perbatasan</span><span class="v">Terbuka</span></div>
@@ -2046,22 +2070,57 @@ ROUTES.regions = async (id) => {
 };
 
 // ---------- NEGARA ----------
+// Dua keadaan (redesain dunia 27 Nov 2026): bernegara (tampilkan negaraku
+// + ideologi/sistem + wewenang presiden) atau wilayah merdeka (daftar semua
+// negara + form dirikan negara + usulan unifikasi untuk wilayahku).
 ROUTES.country = async () => {
   const d = await api('/api/country');
-  const c = d.country;
-  $('#page').innerHTML = page('REPUBLIK INDONESIA', 'Demokrasi · Konservatisme (+25% pemulihan) · Ibu kota Jakarta', `
+  const c = d.countryFull;
+  const rules = d.formationRules || { minLevel: 10, costGold: 100, joinMinLevel: 5, joinVoteDays: 3, joinMinYes: 3 };
+  const ideLabel = (id) => (d.ideologies || []).find((x) => x.id === id) || { id, label: id, desc: '' };
+  const sysLabel = (id) => (d.systems || []).find((x) => x.id === id) || { id, label: id, desc: '' };
+  const myCountryRow = c ? d.countries.find((x) => x.id === c.id) : null;
+  const title = c ? esc(c.name).toUpperCase() : 'BELUM BERNEGARA';
+  const sub = c
+    ? `${sysLabel(c.system).label} · ${ideLabel(c.ideology).label} · Ibu kota ${esc(c.capital)}`
+    : 'Dunia masih terpecah — wilayahmu merdeka. Dirikan negaramu sendiri atau gabung lewat unifikasi.';
+  const body = c ? `
   <div class="stat-grid">
-    <div class="stat-cell"><div class="stat-label">👥 Warga</div><div class="stat-num">${fmt(d.citizens)}</div></div>
-    <div class="stat-cell"><div class="stat-label">🗺️ Wilayah</div><div class="stat-num">${fmt(d.regions)}</div></div>
-    <div class="stat-cell"><div class="stat-label">🚩 Partai</div><div class="stat-num">${fmt(d.parties)}</div></div>
-    <div class="stat-cell"><div class="stat-label">🏛️ Kursi Parlemen</div><div class="stat-num">${d.seats}<span style="font-size:18px;color:var(--muted)">/60</span></div></div>
+    <div class="stat-cell"><div class="stat-label">👥 Warga</div><div class="stat-num">${fmt(myCountryRow?.citizen_count ?? 0)}</div></div>
+    <div class="stat-cell"><div class="stat-label">🗺️ Wilayah</div><div class="stat-num">${fmt(d.memberRegions.length)}</div></div>
+    <div class="stat-cell"><div class="stat-label">🌍 Negara di Dunia</div><div class="stat-num">${fmt(d.countries.length)}</div></div>
+    <div class="stat-cell"><div class="stat-label">💰 Kas Negara</div><div class="stat-num">${fmt(c.treasury)}</div><div class="stat-sub">emas</div></div>
+  </div>
+  <div class="panel"><h3>🏳️ IDENTITAS NEGARA</h3>
+    <div class="kv"><span class="k">Ideologi</span><span class="v">${esc(ideLabel(c.ideology).label)}</span></div>
+    <p class="muted small">${esc(ideLabel(c.ideology).desc)}</p>
+    <div class="kv"><span class="k">Sistem pemerintahan</span><span class="v">${esc(sysLabel(c.system).label)}</span></div>
+    <p class="muted small">${esc(sysLabel(c.system).desc)}</p>
+    <div class="kv"><span class="k">Ibu kota</span><span class="v">${esc(c.capital)}</span></div>
+    <div class="kv"><span class="k">Didirikan</span><span class="v">${esc(c.founded)}</span></div>
+    <div class="kv"><span class="k">Wilayah anggota</span><span class="v">${d.memberRegions.map((r) => esc(r.name)).join(', ') || '—'}</span></div>
   </div>
   <div class="panel"><h3>👑 PEMERINTAHAN</h3>
-    <div class="kv"><span class="k">Presiden</span><span class="v">${esc(d.president)}</span></div>
+    <div class="kv"><span class="k">${esc(d.presidentTitle)}</span><span class="v">${esc(d.president)}</span></div>
     <div class="kv"><span class="k">Menteri Ekonomi</span><span class="v">${esc(d.ministers.economy)}</span></div>
     <div class="kv"><span class="k">Menteri Luar Negeri</span><span class="v">${esc(d.ministers.foreign)}</span></div>
     <div class="kv"><span class="k">Menteri Dalam Negeri</span><span class="v">${esc(d.ministers.home)}</span></div>
     <div class="kv"><span class="k">Menteri Pertahanan</span><span class="v">${esc(d.ministers.defense)}</span></div>
+    ${d.isPresident ? `
+    <h3 style="margin-top:12px">⚖️ WEWENANG PRESIDEN</h3>
+    <label>IDEOLOGI NEGARA<select id="country-ideology">
+      ${d.ideologies.map((x) => `<option value="${esc(x.id)}" ${x.id === c.ideology ? 'selected' : ''}>${esc(x.label)} — ${esc(x.desc)}</option>`).join('')}
+    </select></label>
+    <button class="btn-gold btn-sm" id="btn-set-ideology">UBAH IDEOLOGI</button>
+    <label style="margin-top:10px">SISTEM PEMERINTAHAN<select id="country-system">
+      ${d.systems.map((x) => `<option value="${esc(x.id)}" ${x.id === c.system ? 'selected' : ''}>${esc(x.label)} — ${esc(x.desc)}</option>`).join('')}
+    </select></label>
+    <button class="btn-gold btn-sm" id="btn-set-system">UBAH SISTEM</button>
+    ${c.system === 'diktator' ? `
+    <label style="margin-top:10px">PAJAK PENGHASILAN (1–5%)<input id="country-tax" type="number" value="${c.tax_income}" min="1" max="5"></label>
+    <button class="btn-gold btn-sm" id="btn-set-tax">UBAH PAJAK</button>
+    <p class="muted small">Sebagai Diktator, kamu bisa mengubah pajak langsung tanpa parlemen.</p>` : '<p class="muted small">Pajak diubah lewat UU parlemen (atau pindah ke sistem Diktator untuk mengubah langsung).</p>'}
+    <p class="muted small">Ideologi &amp; sistem juga bisa diubah lewat UU yang disahkan parlemen.</p>` : ''}
   </div>
   <div class="panel"><h3>💰 KAS NEGARA</h3>
     <div class="kv"><span class="k">Kas negara</span><span class="v gold-text">${fmt(c.treasury)} emas</span></div>
@@ -2097,11 +2156,42 @@ ROUTES.country = async () => {
       <button class="btn-gold" id="btn-holiday">TETAPKAN HARI LIBUR</button>` : ''}
     ${!d.myMinisterRole ? '<p class="muted small">Kamu bukan menteri. Wewenang ini hanya untuk Menteri Ekonomi, Pertahanan, dan Dalam Negeri.</p>' : ''}
   </div>
-  <div class="panel"><h3>🔥 PEMBERONTAKAN IBU KOTA</h3>
-    <p class="muted small">Dukungan ibu kota: ${d.capitalRebellion}/5 · Dukung: 100 emas hangus.</p>
-    <button class="btn-gold btn-sm" data-goto="#/regions/2">Buka Jakarta</button>
+  ${d.wars.length ? `<div class="panel"><h3>⚔️ PERANG AKTIF</h3>${d.wars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}</div>` : ''}` : `
+  <div class="panel"><h3>🕊️ WILAYAHMU MERDEKA</h3>
+    <p>Kamu tinggal di <b>${esc(d.myRegion?.name || '')}</b> — wilayah ini belum bernegara. Kamu bisa mendirikan negara sendiri (wilayahmu jadi ibu kota) atau mengusulkan wilayahmu bergabung dengan negara yang sudah ada.</p>
+    <div class="kv"><span class="k">Wilayahmu</span><span class="v">${esc(d.myRegion?.name || '')} · ${esc(d.myRegion?.type || '')}</span></div>
+    <div class="kv"><span class="k">Levelmu</span><span class="v">${ME.citizen.level} (butuh Level ${rules.minLevel} untuk mendirikan negara)</span></div>
+    <div class="kv"><span class="k">Emasmu</span><span class="v">${fmt(ME.citizen.gold)} (butuh ${rules.costGold} emas)</span></div>
   </div>
-  ${d.wars.length ? `<div class="panel"><h3>⚔️ PERANG AKTIF</h3>${d.wars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}</div>` : ''}`);
+  ${d.countries.length ? `<div class="panel"><h3>🏳️ NEGARA-NEGARA YANG ADA</h3>
+    ${d.countries.map((n) => `<div class="card"><div class="panel-head"><h4>${esc(n.name)}</h4><span class="chip">${esc(ideLabel(n.ideology).label)} · ${esc(sysLabel(n.system).label)}</span></div>
+      <p class="muted small">Ibu kota ${esc(n.capital)} · ${n.region_count} wilayah · ${n.citizen_count} warga · ${esc(n.president_title)}: ${esc(n.president_name || 'Kosong')}</p>
+      <button class="btn-gold btn-sm" data-join-country="${n.id}">USULKAN ${esc(d.myRegion?.name || 'WILAYAHMU')} BERGABUNG</button></div>`).join('')}
+    <p class="muted small">Unifikasi: usulanmu divoting warga wilayahmu selama ${rules.joinVoteDays} hari. Lolos bila YA &gt; TIDAK dan YA minimal ${rules.joinMinYes} suara.</p>
+  </div>` : '<div class="panel"><h3>🏳️ NEGARA-NEGARA YANG ADA</h3><p class="muted">Belum ada negara sama sekali. Jadilah pendiri negara pertama!</p></div>'}
+  ${d.openJoins.length ? `<div class="panel"><h3>🗳️ USULAN UNIFIKASI UNTUK WILAYAHMU</h3>
+    ${d.openJoins.map((j) => {
+      const myVote = d.myJoinVotes[j.id];
+      return `<div class="card"><h4>Bergabung dengan ${esc(j.country_name)}</h4>
+      <p class="muted small">Berakhir ${fmtDate(j.ends_at)} · Ya ${j.yes} · Tidak ${j.no}</p>
+      ${myVote ? `<p class="teal-text small">✓ Kamu memilih: ${myVote === 'yes' ? 'Ya' : 'Tidak'}</p>`
+        : `<div class="row"><button class="btn-gold btn-sm" data-jvote="${j.id}|yes">YA</button><button class="btn-danger btn-sm" data-jvote="${j.id}|no">TIDAK</button></div>`}</div>`;
+    }).join('')}
+  </div>` : ''}
+  <div class="panel"><h3>🏴 DIRIKAN NEGARA</h3>
+    <p class="muted small">Syarat: Level ${rules.minLevel} + ${rules.costGold} emas. Wilayahmu (${esc(d.myRegion?.name || '')}) jadi ibu kota + wilayah pertama. Pendiri BUKAN otomatis presiden — presiden dipilih lewat pemilu (calon lewat kepala partai). Pemilu presiden pertama 7 hari setelah didirikan; pemilu parlemen paling cepat saat parlemen dibuka (2 Des 2026).</p>
+    <label>NAMA NEGARA<input id="country-name" placeholder="cth: Federasi Nusantara"></label>
+    <label>IDEOLOGI<select id="country-ideology-new">
+      ${d.ideologies.map((x) => `<option value="${esc(x.id)}">${esc(x.label)} — ${esc(x.desc)}</option>`).join('')}
+    </select></label>
+    <label>SISTEM PEMERINTAHAN<select id="country-system-new">
+      ${d.systems.map((x) => `<option value="${esc(x.id)}">${esc(x.label)} — ${esc(x.desc)}</option>`).join('')}
+    </select></label>
+    <button class="btn-gold" id="btn-found-country">DIRIKAN NEGARA · ${rules.costGold} EMAS</button>
+  </div>`;
+  // page() mengembalikan <h2> judul + sub + body — judul/sub dihitung di
+  // atas supaya kedua keadaan (bernegara / merdeka) memakai pola yang sama.
+  $('#page').innerHTML = page(title, sub, body);
   $('#btn-budget')?.addEventListener('click', async () => {
     try { await post('/api/country/budget', { kind: $('#budget-kind').value, amount: Number($('#budget-amount').value) }); toast('Anggaran diusulkan! Voting parlemen 3 hari.'); route(); }
     catch (e) { toast(e.message); }
@@ -2116,6 +2206,36 @@ ROUTES.country = async () => {
     try { await post('/api/country/holiday', {}); toast('Hari libur ditetapkan!'); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   });
+  $('#btn-set-ideology')?.addEventListener('click', async () => {
+    if (!confirm('Ubah ideologi negara? Efeknya langsung berlaku.')) return;
+    try { await post('/api/country/ideology', { ideology: $('#country-ideology').value }); toast('Ideologi negara diubah.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-set-system')?.addEventListener('click', async () => {
+    if (!confirm('Ubah sistem pemerintahan? Cara presiden dipilih bisa berubah.')) return;
+    try { await post('/api/country/system', { system: $('#country-system').value }); toast('Sistem pemerintahan diubah.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-set-tax')?.addEventListener('click', async () => {
+    try { await post('/api/country/tax', { tax: Number($('#country-tax').value) }); toast('Pajak diubah.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-found-country')?.addEventListener('click', async () => {
+    if (!confirm(`Dirikan negara baru dengan ibu kota ${d.myRegion?.name || ''}? Biaya ${rules.costGold} emas.`)) return;
+    try {
+      await post('/api/countries', { name: $('#country-name').value.trim(), ideology: $('#country-ideology-new').value, system: $('#country-system-new').value });
+      toast('Negaramu berdiri!'); await refreshMe(); route();
+    } catch (e) { toast(e.message); }
+  });
+  $$('[data-join-country]').forEach((b) => b.onclick = async () => {
+    try { await post(`/api/countries/${b.dataset.joinCountry}/join`); toast('Usulan unifikasi dibuat! Voting warga wilayahmu 3 hari.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-jvote]').forEach((b) => b.onclick = async () => {
+    const [id, vote] = b.dataset.jvote.split('|');
+    try { await post(`/api/countries/joins/${id}/vote`, { vote }); toast('Suaramu tercatat.'); route(); }
+    catch (e) { toast(e.message); }
+  });
 };
 
 // ---------- STATISTIK ----------
@@ -2126,7 +2246,7 @@ ROUTES.stats = async () => {
   <div class="stat-grid">
     <div class="stat-cell"><div class="stat-label">👥 Populasi Dunia</div><div class="stat-num">${fmt(world.population)}</div><div class="stat-sub">Hari ${world.day}</div></div>
     <div class="stat-cell"><div class="stat-label">🟢 Online Sekarang</div><div class="stat-num">${fmt(world.onlineCount ?? 0)}</div><div class="stat-sub">aktif 5 menit terakhir</div></div>
-    <div class="stat-cell"><div class="stat-label">🗺️ Wilayah</div><div class="stat-num">${fmt(world.regions)}</div><div class="stat-sub">1 negara merdeka</div></div>
+    <div class="stat-cell"><div class="stat-label">🗺️ Wilayah</div><div class="stat-num">${fmt(world.regions)}</div><div class="stat-sub">${fmt(world.countries)} negara</div></div>
     <div class="stat-cell"><div class="stat-label">📰 Artikel / 7 hari</div><div class="stat-num">${fmt(press.articles7d)}</div><div class="stat-sub">dari ${fmt(press.journalists7d)} jurnalis</div></div>
     <div class="stat-cell"><div class="stat-label">👁️ Dibaca / 7 hari</div><div class="stat-num">${fmt(press.reads7d)}</div><div class="stat-sub">${fmt(press.reactions7d)} reaksi</div></div>
   </div>
@@ -2160,7 +2280,7 @@ ROUTES.contracts = async () => {
 // ---------- PARTAI ----------
 ROUTES.parties = async () => {
   const data = await api('/api/parties');
-  $('#page').innerHTML = page('PARTAI-PARTAI REPUBLIK INDONESIA', 'Bergabunglah dengan salah satu partai — atau dirikan partaimu sendiri dan bawa ke parlemen.', `
+  $('#page').innerHTML = page('PARTAI-PARTAI', 'Bergabunglah dengan salah satu partai — atau dirikan partaimu sendiri dan bawa ke parlemen.', `
   <div class="panel"><h3>🚩 PARTAIMU</h3>
     ${data.mine ? `
       <div class="kv"><span class="k">${esc(data.mine.name)} [${esc(data.mine.tag)}]</span><span class="v">${esc(data.mine.ideology)} · ${data.mine.seats} kursi</span></div>
@@ -2182,10 +2302,14 @@ ROUTES.parties = async () => {
       : '<p class="muted">Belum ada partai. Jadilah pendiri pertama!</p>'}
   </div>
   <div class="panel"><h3>🏛️ POLITIK NEGARA</h3>
-    <div class="kv"><span class="k">Rezim</span><span class="v">Demokrasi</span></div>
-    <div class="kv"><span class="k">Presiden</span><span class="v">Lihat di halaman Negara</span></div>
+    ${ME.country ? `
+    <div class="kv"><span class="k">Negaramu</span><span class="v">${esc(ME.country.name)}</span></div>
+    <div class="kv"><span class="k">Sistem</span><span class="v">${esc(ME.country.system)}</span></div>
+    <div class="kv"><span class="k">Ideologi</span><span class="v">${esc(ME.country.ideology)}</span></div>
     <div class="kv"><span class="k">Parlemen</span><span class="v">60 kursi</span></div>
-    <div class="kv"><span class="k">Pemilu</span><span class="v">Lihat di halaman Pemilu</span></div>
+    <div class="kv"><span class="k">Pemilu</span><span class="v">Lihat di halaman Pemilu</span></div>`
+    : `<p class="muted">Kamu belum bernegara — kursimu di parlemen baru ada setelah wilayahmu bergabung dengan sebuah negara.</p>
+    <button class="btn-gold btn-sm" data-goto="#/country">Buka Halaman Negara</button>`}
   </div>`);
   $('#btn-new-party')?.addEventListener('click', () => {
     $('#party-form').innerHTML = `
@@ -2222,23 +2346,34 @@ ROUTES.parties = async () => {
 // ---------- PARLEMEN ----------
 ROUTES.parliament = async () => {
   const d = await api('/api/parliament');
+  // Parlemen TERKUNCI sampai dibuka 2 Des 2026 (redesain dunia): tampilkan
+  // countdown + penjelasan, bukan daftar UU kosong.
+  if (!d.parliamentOpen) {
+    $('#page').innerHTML = page('PARLEMEN', 'Parlemen belum dibuka.', `
+    <div class="panel"><div class="empty"><div class="big-ico">🏛️</div>
+    <h3>PARLEMEN DIBUKA ${fmtCountdown(Number(d.parliamentOpensAt) - Date.now()).toUpperCase()} LAGI</h3>
+    <p class="muted">Parlemen dibuka <b>2 Desember 2026</b>. Sampai saat itu, UU, anggaran, dan pemakzulan terkunci — tapi kamu sudah bisa mendirikan negara, membentuk partai, dan bersiap untuk pemilu parlemen pertama.</p>
+    <div class="row" style="justify-content:center"><button class="btn-gold" data-goto="#/country">Lihat Negaramu</button><button class="btn-ghost" data-goto="#/parties">Lihat Partai</button></div></div></div>`);
+    return;
+  }
   const seatColors = ['#3b82f6', '#f59e0b', '#ef4444', '#10b981', '#a855f7', '#ec4899', '#14b8a6', '#eab308'];
   const dots = [];
   for (let i = 0; i < d.totalSeats; i++) {
     dots.push(`<span class="seat-dot" style="background:${i < d.filledSeats ? seatColors[i % seatColors.length] : '#26324a'}"></span>`);
   }
-  const LAW_KIND_LABEL = { tax_income: 'Pajak Penghasilan', admin_pay: 'Upah ADMIN', travel: 'Biaya Perjalanan', general: 'UU Umum' };
+  const LAW_KIND_LABEL = { tax_income: 'Pajak Penghasilan', admin_pay: 'Upah ADMIN', travel: 'Biaya Perjalanan', ideology: 'Ideologi Negara', system: 'Sistem Pemerintahan', general: 'UU Umum' };
   const BUDGET_LABEL = { claim: 'Pasokan Harian +2 Emas', train: 'Latihan 10% Lebih Murah', war: 'Dana Perang (+10% Kerusakan)' };
   const eff = d.effects || { taxIncome: 2, adminPayMult: 1, travelTickets: 1, budgetKind: null, budgetUntil: 0, mobilizationUntil: 0 };
-  $('#page').innerHTML = page('PARLEMEN', 'Demokrasi · 60 kursi · Mayoritas 31', `
+  const countryName = d.country ? esc(d.country.name) : 'Belum bernegara';
+  $('#page').innerHTML = page('PARLEMEN', `${countryName} · 60 kursi · Mayoritas 31`, `
   <div class="tabs">
     <button class="tab active">🏛️ Dewan</button>
     <button class="tab" data-goto="#/country">💼 Kabinet</button>
     <button class="tab" data-goto="#/chat/parliament">💬 Ruang Sidang</button>
   </div>
   <div class="stat-grid">
-    <div class="stat-cell"><div class="stat-label">🏛️ Rezim</div><div class="stat-num" style="font-size:24px">Demokrasi</div></div>
-    <div class="stat-cell"><div class="stat-label">👑 Presiden</div><div class="stat-num" style="font-size:20px">Lihat Negara</div></div>
+    <div class="stat-cell"><div class="stat-label">🏛️ Negaramu</div><div class="stat-num" style="font-size:20px">${countryName}</div></div>
+    <div class="stat-cell"><div class="stat-label">👑 ${d.country ? esc(d.country.system === 'imperial' ? 'Kaisar' : d.country.system === 'diktator' ? 'Diktator' : 'Presiden') : 'Presiden'}</div><div class="stat-num" style="font-size:20px">Lihat Negara</div></div>
     <div class="stat-cell"><div class="stat-label">💺 Kursi Terisi</div><div class="stat-num gold">${d.filledSeats}<span style="font-size:18px;color:var(--muted)">/60</span></div><div class="stat-sub">${d.filledSeats >= 60 ? 'parlemen penuh' : 'kursi kosong menunggu pemilu'}</div></div>
     <div class="stat-cell"><div class="stat-label">🗳️ Pemilu</div><div class="stat-num" style="font-size:20px">Lihat Pemilu</div></div>
   </div>
@@ -2264,6 +2399,8 @@ ROUTES.parliament = async () => {
       <option value="tax_income">Ubah Pajak Penghasilan (1–5%)</option>
       <option value="admin_pay">Ubah Upah Lowongan ADMIN (80–120%)</option>
       <option value="travel">Ubah Biaya Perjalanan (1–2 Tiket)</option>
+      <option value="ideology">Ubah Ideologi Negara (0–3)</option>
+      <option value="system">Ubah Sistem Pemerintahan (0–3)</option>
     </select></label>
     <label id="law-value-wrap" style="display:none">NILAI BARU<input id="law-value" type="number" placeholder="cth: 4"></label>
     <p class="muted small" id="law-hint">UU umum: pernyataan/aturan tanpa mengubah angka game.</p>
@@ -2273,7 +2410,10 @@ ROUTES.parliament = async () => {
     ${d.laws.length ? d.laws.map((l) => {
       const total = l.yes + l.abstain + l.no;
       const myVote = d.myVotes[l.id];
-      const valTxt = l.value == null ? '' : l.kind === 'travel' ? ` → ${l.value} Tiket` : ` → ${l.value}%`;
+      const valTxt = l.value == null ? '' : l.kind === 'travel' ? ` → ${l.value} Tiket`
+        : l.kind === 'ideology' ? ` → ${['Konservatisme', 'Sosialisme', 'Liberalisme', 'Nasionalisme'][Math.round(l.value)] || l.value}`
+        : l.kind === 'system' ? ` → ${['Presidensial', 'Parlementer', 'Imperial', 'Diktator'][Math.round(l.value)] || l.value}`
+        : ` → ${l.value}%`;
       return `<div class="card"><h4>${esc(l.title)}</h4>
       <p class="muted small">Pengusul: ${esc(l.proposer_name)} · ${esc(l.status)} ${l.status === 'voting' ? '· berakhir ' + fmtDate(l.ends_at) : ''}</p>
       <p class="small">${esc(l.content)}</p>
@@ -2314,6 +2454,8 @@ ROUTES.parliament = async () => {
     tax_income: `Tarif pajak penghasilan baru 1–5% (saat ini ${eff.taxIncome}%).`,
     admin_pay: `Upah lowongan ADMIN baru 80–120% dari upah dasar (saat ini ${Math.round(eff.adminPayMult * 100)}%).`,
     travel: `Tiket per perjalanan: 1 atau 2 (saat ini ${eff.travelTickets}).`,
+    ideology: 'Ideologi baru (angka): 0=Konservatisme, 1=Sosialisme, 2=Liberalisme, 3=Nasionalisme.',
+    system: 'Sistem baru (angka): 0=Presidensial, 1=Parlementer, 2=Imperial, 3=Diktator.',
   };
   $('#law-kind').onchange = () => {
     const k = $('#law-kind').value;
@@ -2353,10 +2495,17 @@ ROUTES.parliament = async () => {
 
 // ---------- PEMILU ----------
 ROUTES.elections = async () => {
-  const d = await api('/api/elections');
+  const [d, parties] = await Promise.all([api('/api/elections'), api('/api/parties')]);
+  const myParty = parties.mine || null;
+  const isLeader = !!(myParty && myParty.leader_id === ME.citizen.id);
+  const countryName = d.country ? esc(d.country.name) : 'Belum bernegara';
   $('#page').innerHTML = page('PEMILU', 'Warga Level 5 yang sudah 3 hari menjadi warga bisa memilih.', `
-  <div class="panel"><h3>🇮🇩 NEGARAMU — REPUBLIK INDONESIA</h3>
-    <div class="kv"><span class="k">Rezim</span><span class="v"><span class="chip">DEMOKRASI</span></span></div>
+  <div class="panel"><h3>🇮🇩 NEGARAMU — ${countryName.toUpperCase()}</h3>
+    ${d.country ? `
+    <div class="kv"><span class="k">Sistem</span><span class="v"><span class="chip">${esc(d.country.system.toUpperCase())}</span></span></div>
+    <div class="kv"><span class="k">Ideologi</span><span class="v">${esc(d.country.ideology)}</span></div>
+    ${d.country.system === 'parlementer' ? '<p class="muted small">Di sistem Parlementer, presiden dipilih hanya oleh anggota parlemen.</p>' : ''}
+    ${['imperial', 'diktator'].includes(d.country.system) ? '<p class="muted small">Sistem ini tidak punya pemilu presiden otomatis — presiden menjabat sampai dimakzulkan.</p>' : ''}` : '<p class="muted">Kamu belum bernegara — tidak ada pemilu untukmu. Dirikan negara atau gabung lewat unifikasi dulu.</p>'}
     <div class="kv"><span class="k">Warga</span><span class="v">${fmt(ME.population)}</span></div>
     <div class="kv"><span class="k">Hak pilih</span><span class="v ${d.canVote ? 'teal-text' : 'red-text'}">${d.canVote ? 'Kamu bisa memilih ✓' : 'mulai level 5'}</span></div>
     <div class="kv"><span class="k">Parlemen</span><span class="v">60 kursi</span></div>
@@ -2369,7 +2518,16 @@ ROUTES.elections = async () => {
         <div class="kv"><span class="k">🧑 ${esc(c.username)} ${c.party_name ? '[' + esc(c.party_tag) + ']' : ''}</span>
         <span class="v">${c.votes} suara ${e.status === 'open' && !e.myVote ? `<button class="btn-gold btn-sm" data-evote="${e.id}|${c.citizen_id}">PILIH</button>` : ''}</span></div>`).join('')
         : '<p class="muted">Belum ada kandidat.</p>'}
-      ${e.status === 'open' && e.type === 'president' ? `<button class="btn-ghost btn-sm" data-register="${e.id}">Daftarkan Diriku (Ketua Partai)</button>` : ''}
+      ${e.status === 'open' && e.type === 'president' ? (isLeader ? `
+        <label style="margin-top:10px">NOMINASIKAN CALON PRESIDEN (KEPALA PARTAI)<select id="nominate-${e.id}">
+          ${(parties.members || []).map((m) => `<option value="${m.citizen_id}">${esc(m.username)}${m.role === 'leader' ? ' (ketua)' : ''}</option>`).join('')}
+        </select></label>
+        <button class="btn-gold btn-sm" data-nominate="${e.id}">NOMINASIKAN</button>
+        <p class="muted small">Calon presiden harus lewat partai — kepala partai yang menominasikan (satu kandidat per partai).</p>`
+        : '<p class="muted small">Calon presiden dicalonkan oleh kepala partai — bukan daftar sendiri.</p>') : ''}
+      ${e.status === 'open' && e.type === 'parliament' ? (isLeader ? `
+        <button class="btn-ghost btn-sm" data-register-party="${e.id}">DAFTARKAN PARTAIKU KE PEMILU PARLEMEN</button>`
+        : '<p class="muted small">Partai didaftarkan ke pemilu parlemen oleh ketuanya.</p>') : ''}
       ${e.myVote ? '<p class="teal-text small">✓ Kamu sudah memilih di pemilu ini.</p>' : ''}
     </div>`).join('') : emptyState('🗳️', 'Tidak ada pemilu', 'Pemilu presiden berikutnya dijadwalkan otomatis.')}
   `);
@@ -2378,8 +2536,14 @@ ROUTES.elections = async () => {
     try { await post(`/api/elections/${eid}/vote`, { candidate_id: Number(cid) }); toast('Suaramu tercatat!'); route(); }
     catch (e) { toast(e.message); }
   });
-  $$('[data-register]').forEach((b) => b.onclick = async () => {
-    try { await post(`/api/elections/${b.dataset.register}/register`); toast('Kamu terdaftar sebagai kandidat presiden!'); route(); }
+  $$('[data-nominate]').forEach((b) => b.onclick = async () => {
+    const eid = b.dataset.nominate;
+    const sel = $('#nominate-' + eid);
+    try { await post(`/api/elections/${eid}/nominate`, { citizen_id: Number(sel.value) }); toast('Calon dinominasikan!'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-register-party]').forEach((b) => b.onclick = async () => {
+    try { await post(`/api/elections/${b.dataset.registerParty}/register-party`); toast('Partaimu terdaftar di pemilu parlemen!'); route(); }
     catch (e) { toast(e.message); }
   });
 };
@@ -2431,7 +2595,7 @@ ROUTES.war = async (id) => {
   const data = await api('/api/wars');
   const active = data.wars.filter((w) => w.status === 'active');
   const ended = data.wars.filter((w) => w.status !== 'active');
-  $('#page').innerHTML = page('PERANG TANAH AIR', 'Front pemberontakan di wilayah Republik Indonesia.', `
+  $('#page').innerHTML = page('PERANG TANAH AIR', 'Front pemberontakan di wilayah-wilayah merdeka.', `
   ${active.length ? active.map((w) => `
     <div class="card"><h4>🔥 ${esc(w.name)}</h4>
     <p class="muted small">${esc(w.region_name)} · ${esc(w.attacker_label)} vs ${esc(w.defender_label)} · berakhir ${fmtDate(w.ends_at)}</p>
@@ -2676,7 +2840,7 @@ ROUTES.newspaper = async () => {
 };
 
 // ---------- CHAT ----------
-const CHAT_TABS = [['global', 'GLOBAL'], ['indonesia', 'INDONESIA'], ['negara', 'NEGARA']];
+const CHAT_TABS = [['global', 'GLOBAL'], ['indonesia', 'INDONESIA'], ['wilayah', 'WILAYAH']];
 // Status auto-scroll chat (Perbaikan 1 — laporan Orang_solo): auto-scroll
 // ke bawah HANYA bila pengguna sudah di dekat bawah (atau saat muat awal).
 // Bila sedang membaca pesan lama ke atas, posisi dipertahankan dan tombol
@@ -2798,13 +2962,14 @@ ROUTES.chat = async (sub) => {
   // baru diubah dari `sub` SETELAH tab dirender, jadi tab selalu dihitung
   // dari room='global'. Satu sumber kebenaran: ruangan + judul + sublabel
   // diturunkan dari `sub` DI AWAL, sebelum tab/judul/isi dirender. Judul
-  // mengikuti roomTitle() server (OBROLAN GLOBAL/INDONESIA/NEGARA, RUANG
-  // SIDANG, PERTEMPURAN).
+  // mengikuti roomTitle() server (OBROLAN GLOBAL/INDONESIA/WILAYAH, RUANG
+  // SIDANG, PERTEMPURAN). Ruang 'negara' dihapus (redesain dunia) —
+  // diganti 'wilayah' (region_<id wilayah sendiri>).
   let room = 'global';
   let title = 'OBROLAN GLOBAL';
   let subLabel = 'Kirim pesan ke dunia...';
   if (sub === 'indonesia') { room = 'indonesia'; title = 'OBROLAN INDONESIA'; subLabel = 'Kirim pesan ke seluruh Indonesia...'; }
-  else if (sub === 'negara') { room = 'negara'; title = 'OBROLAN NEGARA'; subLabel = 'Kirim pesan ke negaramu...'; }
+  else if (sub === 'wilayah') { room = 'region_' + ME.region.id; title = 'OBROLAN WILAYAH'; subLabel = 'Kirim pesan ke warga ' + (ME.region?.name || 'wilayahmu') + '...'; }
   else if (sub === 'parliament') { room = 'parliament'; title = 'RUANG SIDANG'; subLabel = 'Hanya anggota parlemen, menteri, dan presiden yang bisa menulis.'; }
   else if (sub && sub.startsWith('war_')) {
     room = sub;
@@ -2819,7 +2984,7 @@ ROUTES.chat = async (sub) => {
   }
   $('#page').innerHTML = page('', '', `
   <div class="chat-tabs">
-    ${CHAT_TABS.map(([r, label]) => `<button class="tab ${room === r ? 'active' : ''}" data-goto="#/chat${r === 'global' ? '' : '/' + r}">${label}</button>`).join('')}
+    ${CHAT_TABS.map(([r, label]) => `<button class="tab ${room === r || (r === 'wilayah' && room.startsWith('region_')) ? 'active' : ''}" data-goto="#/chat${r === 'global' ? '' : '/' + r}">${label}</button>`).join('')}
   </div>
   <h2 class="chat-title">${title}${room.startsWith('war_') ? '<span class="chat-live">● LANGSUNG</span>' : ''}</h2>
   <p class="page-sub">${esc(subLabel)}</p>

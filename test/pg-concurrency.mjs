@@ -98,6 +98,11 @@ async function main() {
     const B1 = await register('buyer1@conc.local', 'pembeli_satu');
     const B2 = await register('buyer2@conc.local', 'pembeli_dua');
     const sId = await citizenIdOf(S);
+    // Redesain dunia: S mendirikan negara (Level 10 + 100 emas) agar pajak
+    // penjual 2% berlaku — tanpa negara, pajak 0% dan penjual terima 90.
+    await pool.query('UPDATE citizens SET level = 10, gold = 200 WHERE id = $1', [sId]);
+    const found = await S.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
+    check('Penjual mendirikan Nusantara (negara pertama)', found.status === 200 && !!found.data.countryId, `status=${found.status} ${found.data.error || ''}`);
     const com = await pool.query("SELECT id FROM commodities WHERE name = 'Makanan'");
     await pool.query(
       'INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES ($1, $2, 1, 20) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = 20',
@@ -194,6 +199,9 @@ async function main() {
     const s2Id = await citizenIdOf(S2);
     const besiCom = await pool.query("SELECT id FROM commodities WHERE name = 'Besi Mentah'");
     const besiCid = besiCom.rows[0].id;
+    // Redesain dunia: pindahkan kedua penjual ke wilayah Nusantara agar
+    // pajak penjual 2% + kas negara bisa dicek.
+    await pool.query('UPDATE citizens SET region_id = (SELECT id FROM regions WHERE country_id = 1 LIMIT 1) WHERE id IN ($1, $2)', [s1Id, s2Id]);
     for (const sid of [s1Id, s2Id]) {
       await pool.query(
         'INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES ($1, $2, 1, 10) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = 10',
@@ -254,7 +262,12 @@ async function main() {
     const mId = await citizenIdOf(M);
     await pool.query("INSERT INTO parties (name, tag, ideology, leader_id, type, seats, created_at) VALUES ('Partai Race','PTR','Konservatif',$1,'open',31,$2)", [mId, Date.now()]);
     const partyRace = await pool.query("SELECT id FROM parties WHERE tag = 'PTR'");
-    await pool.query('UPDATE citizens SET party_id = $1, level = 5, gold = 500 WHERE id = $2', [partyRace.rows[0].id, mId]);
+    // Redesain dunia: kursi parlemen kini di party_seats per negara (bukan
+    // kolom parties.seats); M harus warga Nusantara; parlemen terkunci
+    // sampai 2 Des 2026 — buka untuk tes anggaran ini.
+    await pool.query('INSERT INTO party_seats (party_id, country_id, seats) VALUES ($1, 1, 31)', [partyRace.rows[0].id]);
+    await pool.query("UPDATE db_meta SET value = $1 WHERE key = 'parliament_opens_at'", [String(Date.now() - 1000)]);
+    await pool.query('UPDATE citizens SET party_id = $1, level = 5, gold = 500, region_id = (SELECT id FROM regions WHERE country_id = 1 LIMIT 1) WHERE id = $2', [partyRace.rows[0].id, mId]);
     await pool.query('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES ($1, $2, $3, $4)', [partyRace.rows[0].id, mId, 'leader', Date.now()]);
     await pool.query('UPDATE country SET minister_economy = $1, treasury = 1000 WHERE id = 1', [mId]);
     r = await M.post('/api/country/budget', { kind: 'claim', amount: 100 });

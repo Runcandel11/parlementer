@@ -158,6 +158,67 @@ async function main() {
   check('Pasar Global: 0 penawaran', r.data.stats.offers === 0);
   const makanan = r.data.commodities.find((c) => c.name === 'Makanan');
 
+  console.log('\n[6b] Redesain dunia — dunia terpecah, dirikan negara (Nusantara)');
+  // Dunia baru TANPA negara: 0 negara, semua wilayah merdeka, parlemen
+  // terkunci sampai 2 Des 2026 (countdown di HUD).
+  r = await A.get('/api/world');
+  check('Dunia baru: 0 negara', r.data.countries === 0, `countries=${r.data.countries}`);
+  r = await A.get('/api/regions');
+  check('Semua 17 wilayah merdeka (tanpa negara)', r.data.regions.every((x) => x.country_name == null && x.country_id == null), JSON.stringify(r.data.regions.map((x) => x.country_name)));
+  r = await A.get('/api/country');
+  check('A belum bernegara (country null)', r.data.country === null, JSON.stringify(r.data.country));
+  check('Halaman Negara menampilkan aturan pembentukan (Level 10 + 100 emas)', r.data.formationRules?.minLevel === 10 && r.data.formationRules?.costGold === 100, JSON.stringify(r.data.formationRules));
+  check('Halaman Negara menampilkan 4 ideologi + 4 sistem pemerintahan', (r.data.ideologies || []).length === 4 && (r.data.systems || []).length === 4, `ideologi=${(r.data.ideologies || []).length} sistem=${(r.data.systems || []).length}`);
+  r = await A.get('/api/parliament');
+  check('Parlemen terkunci (belum 2 Des 2026)', r.data.parliamentOpen === false && r.data.parliamentOpensAt === 1796144400000, `open=${r.data.parliamentOpen} opensAt=${r.data.parliamentOpensAt}`);
+  check('Tanpa negara: pajak 0%, upah ×1, perjalanan 1 tiket', r.data.effects?.taxIncome === 0 && r.data.effects?.adminPayMult === 1 && r.data.effects?.travelTickets === 1, JSON.stringify(r.data.effects));
+  r = await A.post('/api/parliament/law', { title: 'UU Tes Terkunci', content: 'Isi undang-undang tes.', kind: 'general' });
+  check('Usul UU sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  r = await A.post('/api/country/budget', { kind: 'claim', amount: 100 });
+  check('Usul anggaran sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  // Negatif pembentukan negara (A Level 1, emas ~54).
+  r = await A.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
+  check('Dirikan negara di Level 1 ditolak (butuh Level 10)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  const db6b = new DatabaseSync(DB_PATH);
+  const meA6b = (await A.get('/api/me')).data.citizen;
+  const goldA6b = meA6b.gold;
+  const regionA6b = (await A.get('/api/me')).data.region.name;
+  db6b.prepare('UPDATE citizens SET level = 10 WHERE id = ?').run(meA6b.id);
+  r = await A.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
+  check('Dirikan negara dengan emas <100 ditolak', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  db6b.prepare('UPDATE citizens SET gold = 200 WHERE id = ?').run(meA6b.id);
+  r = await A.post('/api/countries', { name: 'Nu', ideology: 'Konservatisme', system: 'presidensial' });
+  check('Nama negara <3 karakter ditolak', r.status === 400, `status=${r.status}`);
+  r = await A.post('/api/countries', { name: 'Nusantara', ideology: 'Anarkisme', system: 'presidensial' });
+  check('Ideologi tidak dikenal ditolak', r.status === 400, `status=${r.status}`);
+  r = await A.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'monarki' });
+  check('Sistem tidak dikenal ditolak', r.status === 400, `status=${r.status}`);
+  r = await A.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
+  check('A mendirikan Nusantara (Level 10 + 100 emas)', r.status === 200 && !!r.data.countryId, `status=${r.status} ${r.data.error || ''}`);
+  const nusantaraId = r.data.countryId;
+  check('Emas A berkurang 100 (200 → 100)', (await A.get('/api/me')).data.citizen.gold === 100);
+  r = await A.post('/api/countries', { name: 'Negara Kedua', ideology: 'Konservatisme', system: 'presidensial' });
+  check('Wilayah sudah bernegara tidak bisa mendirikan negara lagi', r.status === 400, `status=${r.status}`);
+  r = await A.get('/api/country');
+  check('A kini warga Nusantara', r.data.country?.name === 'Nusantara', JSON.stringify(r.data.country));
+  check('Ibu kota = wilayah A saat mendirikan', r.data.country?.capital === regionA6b, `capital=${r.data.country?.capital} wilayah=${regionA6b}`);
+  r = await A.get('/api/countries');
+  check('Dunia kini 1 negara', (r.data.countries || []).length === 1, `countries=${(r.data.countries || []).length}`);
+  r = await A.get('/api/regions');
+  const capRegion = r.data.regions.find((x) => x.name === regionA6b);
+  check('Wilayah ibu kota bernegara, 16 wilayah lain tetap merdeka', capRegion?.country_name === 'Nusantara' && r.data.regions.filter((x) => x.country_name == null).length === 16, `merdeka=${r.data.regions.filter((x) => x.country_name == null).length}`);
+  // Pemilu pertama terjadwal otomatis (DB): presiden +7 hari, parlemen
+  // paling cepat 2 Des 2026.
+  const elPres = db6b.prepare("SELECT * FROM elections WHERE country_id = ? AND type = 'president' AND status = 'scheduled'").get(nusantaraId);
+  const elParl = db6b.prepare("SELECT * FROM elections WHERE country_id = ? AND type = 'parliament' AND status = 'scheduled'").get(nusantaraId);
+  check('Pemilu presiden terjadwal +7 hari', !!elPres && Math.abs(elPres.opens_at - (Date.now() + 7 * 86400000)) < 60000, `opens_at=${elPres?.opens_at}`);
+  check('Pemilu parlemen terjadwal paling cepat 2 Des 2026', !!elParl && elParl.opens_at >= 1796144400000, `opens_at=${elParl?.opens_at}`);
+  check('Negara baru: presiden kosong (dipilih lewat pemilu)', db6b.prepare('SELECT president_id FROM country WHERE id = ?').get(nusantaraId).president_id === null);
+  // Kembalikan Level + emas A seperti sebelum [6b] agar [8]/[11] tidak
+  // berubah (Level 1, emas awal).
+  db6b.prepare('UPDATE citizens SET level = 1, gold = ? WHERE id = ?').run(goldA6b, meA6b.id);
+  db6b.close();
+
   console.log('\n[7] Pasar — aturan & transaksi jual/beli');
   r = await A.post('/api/market/sell', { scope: 'local', commodity_id: makanan.id, tier: 1, qty: 3, price: 9 });
   check('Jual < 10 unit ditolak (minimum penawaran)', r.status === 400, r.data.error || '');
@@ -169,6 +230,12 @@ async function main() {
   const comRow = db.prepare('SELECT id FROM commodities WHERE name = ?').get('Makanan');
   db.prepare('UPDATE inventory SET qty = qty + 17 WHERE citizen_id = ? AND commodity_id = ? AND tier = 1').run(meB.data.citizen.id, comRow.id);
   db.close();
+  // Redesain dunia: B lahir di wilayah acak (merdeka, pajak 0%) — pindah
+  // B ke wilayah A (Nusantara) agar pajak penjual 2% berlaku di bawah ini.
+  const db7 = new DatabaseSync(DB_PATH);
+  const regionA7 = (await A.get('/api/me')).data.citizen.region_id;
+  db7.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(regionA7, meB.data.citizen.id);
+  db7.close();
   r = await B.post('/api/market/sell', { scope: 'local', commodity_id: makanan.id, tier: 1, qty: 10, price: 9 });
   check('B memasang penawaran jual 10× Makanan @ 9 USD', r.status === 200 && !!r.data.offerId, `offerId=${r.data.offerId}`);
   const offerId = r.data.offerId;
@@ -256,25 +323,28 @@ async function main() {
   r = await A.post('/api/chat/unblock', { citizen_id: meB.data.citizen.id });
   check('A membuka blokir B', r.status === 200);
   // Perbaikan 4 (laporan Khalid): muat awal HARUS mengembalikan 100 pesan
-  // TERBARU, bukan 100 tertua. Isi room 'negara' (belum dipakai) dengan 120
-  // pesan, lalu muat awal harus berisi pesan #21..#120 (terbaru), dan
-  // polling dengan since=pesan terakhir tidak mengembalikan duplikat.
+  // TERBARU, bukan 100 tertua. Isi room wilayah A (region_<id> — room
+  // 'negara' dihapus pada redesain dunia) dengan 120 pesan, lalu muat awal
+  // harus berisi pesan #21..#120 (terbaru), dan polling dengan
+  // since=pesan terakhir tidak mengembalikan duplikat.
+  const wilayahA10 = (await A.get('/api/me')).data.citizen.region_id;
+  const roomA10 = 'region_' + wilayahA10;
   const dbNew = new DatabaseSync(DB_PATH);
   const chatBase2 = Date.now() - 60000;
   const insMsg = dbNew.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)');
-  for (let i = 1; i <= 120; i++) insMsg.run(meA.data.citizen.id, 'negara', 'pesan #' + i, chatBase2 + i * 1000);
+  for (let i = 1; i <= 120; i++) insMsg.run(meA.data.citizen.id, roomA10, 'pesan #' + i, chatBase2 + i * 1000);
   dbNew.close();
-  r = await A.get('/api/chat/negara');
+  r = await A.get('/api/chat/' + roomA10);
   check('Muat awal chat = 100 pesan TERBARU (bukan tertua)', r.data.messages.length === 100 && r.data.messages[0].content === 'pesan #21' && r.data.messages[99].content === 'pesan #120', `n=${r.data.messages.length} pertama=${r.data.messages[0]?.content} terakhir=${r.data.messages[99]?.content}`);
   check('Muat awal terurut kronologis (lama → baru)', r.data.messages.every((m, i, arr) => i === 0 || m.created_at >= arr[i - 1].created_at));
   const lastSeen = r.data.messages[99].created_at;
-  r = await A.get('/api/chat/negara?since=' + lastSeen);
+  r = await A.get('/api/chat/' + roomA10 + '?since=' + lastSeen);
   check('Polling dengan since=terakhir tidak mengembalikan duplikat (0 pesan)', r.data.messages.length === 0, `n=${r.data.messages.length}`);
   const dbNew2 = new DatabaseSync(DB_PATH);
   dbNew2.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)')
-    .run(meA.data.citizen.id, 'negara', 'pesan #121', lastSeen + 1000);
+    .run(meA.data.citizen.id, roomA10, 'pesan #121', lastSeen + 1000);
   dbNew2.close();
-  r = await A.get('/api/chat/negara?since=' + lastSeen);
+  r = await A.get('/api/chat/' + roomA10 + '?since=' + lastSeen);
   check('Polling mengembalikan hanya pesan yang benar-benar baru (#121)', r.data.messages.length === 1 && r.data.messages[0].content === 'pesan #121', `n=${r.data.messages.length}`);
 
   console.log('\n[11] Aturan dunia: partai, perang, pers, toko');
@@ -293,7 +363,7 @@ async function main() {
   r = await A.get('/api/elections');
   check('Pemilu terdaftar (dijadwalkan otomatis)', Array.isArray(r.data.elections));
   r = await A.get('/api/country');
-  check('Negara: Republik Indonesia', r.data.country?.name === 'Republik Indonesia' || r.data.name === 'Republik Indonesia');
+  check('A di Jakarta (merdeka): belum bernegara, tapi Nusantara terdaftar', r.data.country === null && (r.data.countries || []).length === 1 && r.data.countries[0].name === 'Nusantara', JSON.stringify(r.data.countries));
 
   console.log('\n[12] Daily tick — dunia maju 1 hari');
   // A masih login, energi 10 setelah makan. Mundurkan tanggal tick ke kemarin lewat DB tes.
@@ -860,6 +930,10 @@ async function main() {
   const besiId = market0.data.commodities.find((x) => x.name === 'Besi Mentah').id;
   const makananId = market0.data.commodities.find((x) => x.name === 'Makanan').id;
   const db4 = new DatabaseSync(DB_PATH);
+  // Redesain dunia: C/D lahir di wilayah acak (merdeka, pajak 0%) —
+  // pindah keduanya ke wilayah Nusantara (region 1, ibu kota) agar pajak
+  // penjual 2% + kas negara bisa dicek di [22c]/[22d] di bawah ini.
+  db4.prepare('UPDATE citizens SET region_id = 1 WHERE id IN (?,?)').run(cId, dId);
   const setInv = (citizenId, commodityId, qty) => db4.prepare(
     'INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = ?')
     .run(citizenId, commodityId, qty, qty);
@@ -925,6 +999,11 @@ async function main() {
   check('Batal order: sisa escrow 36 USD kembali (410 → 446)', r.status === 200 && eq(r.data.refund, 36) && (await C.get('/api/me')).data.citizen.usd === 446, `status=${r.status} ${JSON.stringify(r.data)}`);
 
   console.log('  [22d] Pajak pasar biasa masuk kas negara (BUG-8)');
+  // Redesain dunia: A di Jakarta (merdeka) — pindah A ke wilayah Nusantara
+  // (region 1, sama seperti B sejak [7]) agar kas negara bisa dibaca.
+  const db22d = new DatabaseSync(DB_PATH);
+  db22d.prepare("UPDATE citizens SET region_id = 1 WHERE id IN (SELECT c.id FROM citizens c JOIN users u ON u.id = c.user_id WHERE u.username IN ('warga_satu','warga_dua'))").run();
+  db22d.close();
   const treasury2 = (await A.get('/api/country')).data.country.treasury_usd;
   const usdA0 = (await A.get('/api/me')).data.citizen.usd;
   const usdB0 = (await B.get('/api/me')).data.citizen.usd;
@@ -1127,6 +1206,162 @@ async function main() {
   dbO.close();
 
 
+  console.log('\n[28] Redesain dunia — unifikasi, nominasi capres, ideologi/sistem (dijalankan SEBELUM [23] karena [23] butuh parlemen terbuka + negara 1)');
+  const db28 = new DatabaseSync(DB_PATH);
+  console.log('  [28a] Unifikasi wilayah (gabung Nusantara)');
+  const G = new Client();
+  G.extraHeaders = { 'X-Forwarded-For': '127.0.0.3' };
+  r = await G.post('/api/auth/register', { email: 'gabung@test.local', password: 'rahasia123', username: 'warga_gabung' });
+  check('G mendaftar (IP berbeda, lewati batas 20/IP)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  let gRegionId = (await G.get('/api/me')).data.citizen.region_id;
+  const gCitizenId = (await G.get('/api/me')).data.citizen.id;
+  if (gRegionId === 1) { gRegionId = 3; db28.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(3, gCitizenId); }
+  db28.prepare('UPDATE citizens SET level = 5 WHERE id = ?').run(gCitizenId);
+  r = await G.post('/api/countries/1/join', {});
+  check('G (Level 5, wilayah merdeka) mengusulkan wilayahnya gabung Nusantara', r.status === 200 && !!r.data.joinId, `status=${r.status} ${r.data.error || ''}`);
+  const joinId = r.data.joinId;
+  r = await G.post('/api/countries/1/join', {});
+  check('Usulan unifikasi kedua dari wilayah yang sama ditolak (400)', r.status === 400, `status=${r.status}`);
+  // Pindahkan C/D/E ke wilayah G agar bisa memilih; F dipindah menjauh
+  // agar tes 403 "bukan warga wilayah" deterministik.
+  db28.prepare('UPDATE citizens SET region_id = ? WHERE id IN (?,?,?)').run(gRegionId, cId, dId, eId);
+  const fAwayRegion = gRegionId === 5 ? 6 : 5;
+  db28.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(fAwayRegion, fId);
+  r = await C.post(`/api/countries/joins/${joinId}/vote`, { vote: 'yes' });
+  check('C (warga wilayah G) memilih YA', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await D.post(`/api/countries/joins/${joinId}/vote`, { vote: 'yes' });
+  check('D memilih YA', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await E.post(`/api/countries/joins/${joinId}/vote`, { vote: 'no' });
+  check('E memilih TIDAK', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await C.post(`/api/countries/joins/${joinId}/vote`, { vote: 'yes' });
+  check('Suara ganda ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await F.post(`/api/countries/joins/${joinId}/vote`, { vote: 'yes' });
+  check('Bukan warga wilayah tidak bisa memilih (403)', r.status === 403, `status=${r.status}`);
+  db28.prepare('UPDATE country_joins SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, joinId);
+  await forceTick(G);
+  const joinRow = db28.prepare('SELECT status, yes, no FROM country_joins WHERE id = ?').get(joinId);
+  check('Unifikasi lolos (3 YA incl. pengusul vs 1 TIDAK, minimal 3 YA)', joinRow.status === 'passed' && joinRow.yes === 3 && joinRow.no === 1, JSON.stringify(joinRow));
+  check('Wilayah G kini bagian Nusantara', db28.prepare('SELECT country_id FROM regions WHERE id = ?').get(gRegionId).country_id === nusantaraId, `country_id=${db28.prepare('SELECT country_id FROM regions WHERE id = ?').get(gRegionId).country_id}`);
+  // Nama negara duplikat (tak peka huruf) — H di wilayah merdeka lain.
+  const H = new Client();
+  H.extraHeaders = { 'X-Forwarded-For': '127.0.0.4' };
+  r = await H.post('/api/auth/register', { email: 'duplikat@test.local', password: 'rahasia123', username: 'warga_duplikat' });
+  check('H mendaftar (IP berbeda)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  let hRegionId = (await H.get('/api/me')).data.citizen.region_id;
+  const hCitizenId = (await H.get('/api/me')).data.citizen.id;
+  if (db28.prepare('SELECT country_id FROM regions WHERE id = ?').get(hRegionId).country_id) {
+    hRegionId = [4, 5, 6, 7].find((x) => x !== gRegionId);
+    db28.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(hRegionId, hCitizenId);
+  }
+  db28.prepare('UPDATE citizens SET level = 10, gold = 200 WHERE id = ?').run(hCitizenId);
+  r = await H.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
+  check('Nama negara duplikat ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await H.post('/api/countries', { name: 'NUSANTARA', ideology: 'Konservatisme', system: 'presidensial' });
+  check('Nama negara duplikat beda huruf besar/kecil ditolak (400)', r.status === 400, `status=${r.status}`);
+
+  console.log('  [28b] Nominasi capres lewat kepala partai + pemilu presiden');
+  db28.prepare("INSERT INTO parties (name, tag, ideology, leader_id, type, seats, created_at) VALUES ('Partai Nusantara','NUSA','Konservatif',?,'open',0,?)").run(1, Date.now());
+  const party1Id = db28.prepare("SELECT id FROM parties WHERE tag = 'NUSA'").get().id;
+  db28.prepare("INSERT INTO parties (name, tag, ideology, leader_id, type, seats, created_at) VALUES ('Partai Muda','MUDA','Progresif',?,'open',0,?)").run(cId, Date.now());
+  const party2Id = db28.prepare("SELECT id FROM parties WHERE tag = 'MUDA'").get().id;
+  db28.prepare('UPDATE citizens SET party_id = ? WHERE id = ?').run(party1Id, 1);
+  db28.prepare('UPDATE citizens SET party_id = ? WHERE id = ?').run(party1Id, 2);
+  db28.prepare('UPDATE citizens SET party_id = ? WHERE id = ?').run(party2Id, cId);
+  db28.prepare('UPDATE citizens SET party_id = ? WHERE id = ?').run(party2Id, dId);
+  db28.prepare('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?)').run(party1Id, 1, 'leader', Date.now());
+  db28.prepare('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?)').run(party1Id, 2, 'member', Date.now());
+  db28.prepare('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?)').run(party2Id, cId, 'leader', Date.now());
+  db28.prepare('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?)').run(party2Id, dId, 'member', Date.now());
+  db28.prepare('UPDATE citizens SET level = 5, created_at = ? WHERE id IN (1,2,?,?,?,?)').run(Date.now() - 4 * 86400000, cId, dId, eId, fId);
+  const presEl = db28.prepare("SELECT id FROM elections WHERE country_id = ? AND type = 'president' AND status = 'scheduled'").get(nusantaraId);
+  db28.prepare("UPDATE elections SET status = 'open', opens_at = ?, closes_at = ? WHERE id = ?").run(Date.now() - 3600000, Date.now() + 3600000, presEl.id);
+  r = await A.post(`/api/elections/${presEl.id}/register`, {});
+  check('Endpoint lama /register sudah tidak ada (404)', r.status === 404, `status=${r.status}`);
+  r = await C.post(`/api/elections/${presEl.id}/nominate`, { citizen_id: 2 });
+  check('Bukan ketua partai penominasi ditolak (C nominasi B)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post(`/api/elections/${presEl.id}/nominate`, { citizen_id: cId });
+  check('Ketua menominasikan non-anggota ditolak', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post(`/api/elections/${presEl.id}/nominate`, { citizen_id: 2 });
+  check('Ketua Partai Nusantara menominasikan B', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post(`/api/elections/${presEl.id}/nominate`, { citizen_id: 1 });
+  check('Satu partai satu calon (nominasi kedua ditolak)', r.status === 400, `status=${r.status}`);
+  r = await C.post(`/api/elections/${presEl.id}/nominate`, { citizen_id: cId });
+  check('Ketua partai boleh menominasikan dirinya sendiri', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post(`/api/elections/${presEl.id}/vote`, { candidate_id: 2 });
+  check('A memilih B', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await C.post(`/api/elections/${presEl.id}/vote`, { candidate_id: 2 });
+  check('C memilih B', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await D.post(`/api/elections/${presEl.id}/vote`, { candidate_id: 2 });
+  check('D memilih B', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  db28.prepare('UPDATE elections SET closes_at = ? WHERE id = ?').run(Date.now() - 1000, presEl.id);
+  await forceTick(A);
+  check('B terpilih jadi presiden Nusantara (3 suara vs 0)', db28.prepare('SELECT president_id FROM country WHERE id = ?').get(nusantaraId).president_id === 2, `president=${db28.prepare('SELECT president_id FROM country WHERE id = ?').get(nusantaraId).president_id}`);
+
+  console.log('  [28c] Pemilu parlemen + kursi per negara');
+  const parEl = db28.prepare("SELECT id FROM elections WHERE country_id = ? AND type = 'parliament' AND status = 'scheduled'").get(nusantaraId);
+  db28.prepare("UPDATE elections SET status = 'open', opens_at = ?, closes_at = ? WHERE id = ?").run(Date.now() - 3600000, Date.now() + 3600000, parEl.id);
+  r = await A.post(`/api/elections/${parEl.id}/register-party`, {});
+  check('Partai Nusantara terdaftar di pemilu parlemen', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await C.post(`/api/elections/${parEl.id}/register-party`, {});
+  check('Partai Muda terdaftar di pemilu parlemen', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post(`/api/elections/${parEl.id}/register-party`, {});
+  check('Pendaftaran partai ganda ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await A.post(`/api/elections/${parEl.id}/vote`, { candidate_id: 1 });
+  check('A memilih Partai Nusantara', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await C.post(`/api/elections/${parEl.id}/vote`, { candidate_id: cId });
+  check('C memilih Partai Muda', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await D.post(`/api/elections/${parEl.id}/vote`, { candidate_id: 1 });
+  check('D memilih Partai Nusantara', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  db28.prepare('UPDATE elections SET closes_at = ? WHERE id = ?').run(Date.now() - 1000, parEl.id);
+  await forceTick(A);
+  const seats1 = db28.prepare('SELECT seats FROM party_seats WHERE party_id = ? AND country_id = ?').get(party1Id, nusantaraId);
+  const seats2 = db28.prepare('SELECT seats FROM party_seats WHERE party_id = ? AND country_id = ?').get(party2Id, nusantaraId);
+  check('Partai Nusantara dapat 40 kursi (2/3 suara)', seats1?.seats === 40, `kursi=${seats1?.seats}`);
+  check('Partai Muda dapat 20 kursi (1/3 suara)', seats2?.seats === 20, `kursi=${seats2?.seats}`);
+
+  console.log('  [28d] Ideologi (klaim +7 Sosialisme) + sistem + pajak diktator');
+  db28.prepare("UPDATE citizens SET last_claim_date = '' WHERE id = ?").run(eId);
+  r = await E.post('/api/claim', {});
+  check('Klaim Konservatisme: +5 emas', r.status === 200 && r.data.reward.gold === 5, JSON.stringify(r.data));
+  r = await B.post('/api/country/ideology', { ideology: 'Sosialisme' });
+  check('Presiden B mengubah ideologi → Sosialisme', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/country/ideology', { ideology: 'Liberalisme' });
+  check('Bukan presiden tidak bisa mengubah ideologi (403)', r.status === 403, `status=${r.status}`);
+  db28.prepare('UPDATE citizens SET region_id = 1 WHERE id = ?').run(fId);
+  r = await F.post('/api/claim', {});
+  check('Klaim Sosialisme: +7 emas (5+2)', r.status === 200 && r.data.reward.gold === 7, JSON.stringify(r.data));
+  r = await B.post('/api/country/ideology', { ideology: 'Konservatisme' });
+  check('Ideologi dikembalikan ke Konservatisme (untuk [23])', r.status === 200 && db28.prepare('SELECT ideology FROM country WHERE id = ?').get(nusantaraId).ideology === 'Konservatisme', `ideologi=${db28.prepare('SELECT ideology FROM country WHERE id = ?').get(nusantaraId).ideology}`);
+  r = await B.post('/api/country/system', { system: 'parlementer' });
+  check('Presiden mengubah sistem → parlementer', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  // Pemilu presiden di sistem parlementer: hanya MP yang boleh memilih.
+  db28.prepare("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','open',?,?,?,?)").run(Date.now() - 1000, Date.now() + 3600000, nusantaraId, Date.now());
+  const presEl2 = db28.prepare("SELECT id FROM elections WHERE country_id = ? AND type = 'president' AND status = 'open' ORDER BY id DESC LIMIT 1").get(nusantaraId).id;
+  db28.prepare('INSERT INTO election_candidates (election_id, citizen_id, party_id, votes) VALUES (?,?,?,0)').run(presEl2, 2, party1Id);
+  r = await C.post(`/api/elections/${presEl2}/vote`, { candidate_id: 2 });
+  check('C (MP Partai Muda) boleh memilih presiden di sistem parlementer', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await E.post(`/api/elections/${presEl2}/vote`, { candidate_id: 2 });
+  check('E (bukan MP) tidak bisa memilih presiden di sistem parlementer (403)', r.status === 403, `status=${r.status} ${r.data.error || ''}`);
+  db28.prepare("UPDATE elections SET status = 'closed' WHERE id = ?").run(presEl2);
+  r = await B.post('/api/country/system', { system: 'diktator' });
+  check('Sistem → diktator', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await B.post('/api/country/tax', { tax: 3 });
+  check('Diktator mengatur pajak penghasilan 3%', r.status === 200 && db28.prepare('SELECT tax_income FROM country WHERE id = ?').get(nusantaraId).tax_income === 3, `tax=${db28.prepare('SELECT tax_income FROM country WHERE id = ?').get(nusantaraId).tax_income}`);
+  r = await B.post('/api/country/tax', { tax: 9 });
+  check('Pajak 9% ditolak (batas 1–5)', r.status === 400, `status=${r.status}`);
+  r = await B.post('/api/country/system', { system: 'presidensial' });
+  check('Sistem kembali presidensial', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  db28.prepare('UPDATE country SET tax_income = 2 WHERE id = ?').run(nusantaraId);
+  check('Pajak dikembalikan 2% (untuk [23])', db28.prepare('SELECT tax_income FROM country WHERE id = ?').get(nusantaraId).tax_income === 2);
+
+  console.log('  [28e] Buka parlemen (gate) untuk [23]');
+  db28.prepare("UPDATE db_meta SET value = ? WHERE key = 'parliament_opens_at'").run(String(Date.now() - 1000));
+  r = await C.get('/api/parliament');
+  check('Parlemen kini terbuka', r.data.parliamentOpen === true, `open=${r.data.parliamentOpen}`);
+  r = await C.post('/api/parliament/law', { title: 'UU Pembuka Tes', content: 'UU tes setelah parlemen dibuka.', kind: 'general' });
+  check('Usul UU setelah parlemen dibuka berhasil (bayar 5 emas)', r.status === 200 && !!r.data.lawId, `status=${r.status} ${r.data.error || ''}`);
+  db28.close();
+
   console.log('\n[23] Tahap 5 — Pemerintahan/Diplomasi + bug region + lag/Invalid Date');
   // Setup bersama: C = anggota parlemen (partai 31 kursi) + Menteri Ekonomi,
   // D = presiden + Menteri Pertahanan, E = Menteri Dalam Negeri,
@@ -1134,6 +1369,16 @@ async function main() {
   const db5 = new DatabaseSync(DB_PATH);
   db5.prepare("INSERT INTO parties (name, tag, ideology, leader_id, type, seats, created_at) VALUES ('Partai Tes Lima','PTL','Konservatif',?,'open',31,?)").run(cId, Date.now());
   const party5Id = db5.prepare("SELECT id FROM parties WHERE tag = 'PTL'").get().id;
+  // Redesain dunia: kursi parlemen kini di party_seats per negara (bukan
+  // kolom parties.seats) — PTL 31 kursi di negara 1; kursi partai [28]
+  // dihapus agar hanya PTL yang berkuasa. D/E/F dilepas dari partai [28]
+  // agar bukan MP (dibutuhkan [23c]/[23e]). Semua wilayah masuk negara 1
+  // agar perjalanan C di [23d] tetap di dalam negara (tiket 2).
+  db5.prepare('DELETE FROM party_seats WHERE country_id = 1').run();
+  db5.prepare('INSERT INTO party_seats (party_id, country_id, seats) VALUES (?,?,31)').run(party5Id, 1);
+  db5.prepare('UPDATE citizens SET party_id = NULL WHERE id IN (?,?,?)').run(dId, eId, fId);
+  db5.prepare('DELETE FROM party_members WHERE citizen_id IN (?,?,?)').run(dId, eId, fId);
+  db5.prepare('UPDATE regions SET country_id = 1').run();
   db5.prepare('UPDATE citizens SET party_id = ?, level = 5, gold = 500 WHERE id = ?').run(party5Id, cId);
   db5.prepare('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?)').run(party5Id, cId, 'leader', Date.now());
   db5.prepare('UPDATE citizens SET level = 5, gold = 500 WHERE id IN (?,?,?)').run(dId, eId, fId);

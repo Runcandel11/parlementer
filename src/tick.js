@@ -1,24 +1,38 @@
 // Daily tick Parlementer: dunia maju 1 hari tiap tengah malam.
 // Dipanggil otomatis saat ada request (cek tanggal) + interval 10 menit.
 // Aman di Render free (tanpa cron eksternal): tick jalan saat ada yang membuka game.
-import { sql, one, run } from './db.js';
-import { DAILY_PRODUCTION, FACTORY_INPUT, RETENTION, productionWithBonus, BUDGET_KINDS, BUDGET_DURATION_MS, lawEffectText } from './game.js';
+import { sql, one, run, getParliamentOpensAt } from './db.js';
+import { DAILY_PRODUCTION, FACTORY_INPUT, RETENTION, productionWithBonus, BUDGET_KINDS, BUDGET_DURATION_MS, lawEffectText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, systemDef, COUNTRY_JOIN_MIN_YES } from './game.js';
 
 function todayStr(d = new Date()) { return d.toISOString().slice(0, 10); }
 
+// Jadwalkan pemilu PER NEGARA (redesain dunia — dulu satu pasang pemilu
+// global). Dijalankan tiap tick + saat server siap (app.js ensureReady).
+// - Presiden: pemilu otomatis tiap 7 hari HANYA untuk sistem presidensial /
+//   parlementer. Imperial/diktator TIDAK punya pemilu otomatis — pemilu
+//   pengisi kekosongan dijadwalkan sekali bila jabatan presiden kosong.
+// - Parlemen: tiap 30 hari; pemilu pertama paling cepat saat parlemen
+//   dibuka (2 Des 2026 — dari db_meta, bukan hardcode tanggal).
+// Negara baru sudah membawa jadwal pemilu pertamanya dari pendirian
+// (POST /api/countries) — fungsi ini hanya mengisi bila belum ada.
 export async function ensureElections() {
   const now = Date.now();
-  const pres = await one("SELECT * FROM elections WHERE type = 'president' AND status IN ('scheduled','open') ORDER BY opens_at ASC");
-  if (!pres) {
-    const opens = now + 7 * 24 * 60 * 60 * 1000;
-    await run("INSERT INTO elections (type, status, opens_at, closes_at, created_at) VALUES ('president','scheduled',?,?,?) RETURNING id",
-      [opens, opens + 3 * 24 * 60 * 60 * 1000, now]);
-  }
-  const parl = await one("SELECT * FROM elections WHERE type = 'parliament' AND status IN ('scheduled','open') ORDER BY opens_at ASC");
-  if (!parl) {
-    const opens = now + 30 * 24 * 60 * 60 * 1000;
-    await run("INSERT INTO elections (type, status, opens_at, closes_at, created_at) VALUES ('parliament','scheduled',?,?,?) RETURNING id",
-      [opens, opens + 3 * 24 * 60 * 60 * 1000, now]);
+  const parOpensAt = await getParliamentOpensAt();
+  const countries = await sql('SELECT * FROM country');
+  for (const country of countries) {
+    const pres = await one("SELECT * FROM elections WHERE country_id = ? AND type = 'president' AND status IN ('scheduled','open') ORDER BY opens_at ASC", [country.id]);
+    const needsPresident = systemDef(country.system).autoPresidentElection || !country.president_id;
+    if (!pres && needsPresident) {
+      const opens = now + 7 * 24 * 60 * 60 * 1000;
+      await run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','scheduled',?,?,?,?) RETURNING id",
+        [opens, opens + 3 * 24 * 60 * 60 * 1000, country.id, now]);
+    }
+    const parl = await one("SELECT * FROM elections WHERE country_id = ? AND type = 'parliament' AND status IN ('scheduled','open') ORDER BY opens_at ASC", [country.id]);
+    if (!parl) {
+      const opens = Math.max(parOpensAt, now + 30 * 24 * 60 * 60 * 1000);
+      await run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('parliament','scheduled',?,?,?,?) RETURNING id",
+        [opens, opens + 3 * 24 * 60 * 60 * 1000, country.id, now]);
+    }
   }
 }
 
@@ -32,17 +46,25 @@ async function notifyAll(category, title, content = '') {
     [category, title, content, Date.now()]);
 }
 
-// Terapkan efek UU yang disahkan ke baris country (Tahap 5, BUG-9).
-// kind 'general' tidak mengubah angka apa pun. effect_applied = 1 menandai
-// UU sudah diterapkan (idempotent bila tick diulang).
+// Terapkan efek UU yang disahkan ke baris country MILIKNYA (Tahap 5,
+// BUG-9 + redesain dunia). kind 'general' tidak mengubah angka apa pun.
+// effect_applied = 1 menandai UU sudah diterapkan (idempotent bila tick
+// diulang). UU tanpa country_id (arsip era negara tunggal) dilewati.
 async function applyLawEffect(law) {
   const kind = law.kind || 'general';
+  if (!law.country_id) { await run('UPDATE laws SET effect_applied = 1 WHERE id = ?', [law.id]); return; }
   if (kind === 'tax_income') {
-    await run('UPDATE country SET tax_income = ? WHERE id = 1', [Number(law.value)]);
+    await run('UPDATE country SET tax_income = ? WHERE id = ?', [Number(law.value), law.country_id]);
   } else if (kind === 'admin_pay') {
-    await run('UPDATE country SET admin_pay_mult = ? WHERE id = 1', [Number(law.value) / 100]);
+    await run('UPDATE country SET admin_pay_mult = ? WHERE id = ?', [Number(law.value) / 100, law.country_id]);
   } else if (kind === 'travel') {
-    await run('UPDATE country SET travel_tickets = ? WHERE id = 1', [Number(law.value)]);
+    await run('UPDATE country SET travel_tickets = ? WHERE id = ?', [Number(law.value), law.country_id]);
+  } else if (kind === 'ideology') {
+    const ide = COUNTRY_IDEOLOGIES[Math.round(Number(law.value))];
+    if (ide) await run('UPDATE country SET ideology = ? WHERE id = ?', [ide.id, law.country_id]);
+  } else if (kind === 'system') {
+    const sys = GOVERNMENT_SYSTEMS[Math.round(Number(law.value))];
+    if (sys) await run('UPDATE country SET system = ? WHERE id = ?', [sys.id, law.country_id]);
   }
   await run('UPDATE laws SET effect_applied = 1 WHERE id = ?', [law.id]);
 }
@@ -122,34 +144,44 @@ export async function runDailyTick() {
   await run("UPDATE elections SET status = 'open' WHERE status = 'scheduled' AND opens_at <= ?", [now]);
   const closing = await sql("SELECT * FROM elections WHERE status = 'open' AND closes_at <= ?", [now]);
   for (const e of closing) {
-    const top = await sql('SELECT * FROM election_candidates WHERE election_id = ? ORDER BY votes DESC LIMIT 1', [e.id]);
+    // Pemilu tanpa negara (arsip era negara tunggal) ditutup tanpa efek.
+    if (!e.country_id) { await run("UPDATE elections SET status = 'closed' WHERE id = ?", [e.id]); continue; }
+    const country = await one('SELECT * FROM country WHERE id = ?', [e.country_id]);
+    if (!country) { await run("UPDATE elections SET status = 'closed' WHERE id = ?", [e.id]); continue; }
+    // Seri suara: pemenang = suara terbanyak, lalu citizen_id terkecil
+    // (deterministik — perbaikan audit BUG-13).
+    const top = await sql('SELECT * FROM election_candidates WHERE election_id = ? ORDER BY votes DESC, citizen_id ASC LIMIT 1', [e.id]);
     if (e.type === 'president') {
       if (top.length && top[0].votes > 0) {
         await run('UPDATE elections SET status = ?, winner_id = ? WHERE id = ?', ['closed', top[0].citizen_id, e.id]);
-        await run('UPDATE country SET president_id = ? WHERE id = 1', [top[0].citizen_id]);
-        await notify(top[0].citizen_id, 'POLITIK', 'Kamu terpilih jadi Presiden!', 'Selamat! Kamu memenangkan pemilu presiden Republik Indonesia.');
+        await run('UPDATE country SET president_id = ? WHERE id = ?', [top[0].citizen_id, country.id]);
+        await notify(top[0].citizen_id, 'POLITIK', `Kamu terpilih jadi ${systemDef(country.system).presidentTitle}!`, `Selamat! Kamu memenangkan pemilu ${systemDef(country.system).presidentTitle.toLowerCase()} ${country.name}.`);
       } else {
         await run("UPDATE elections SET status = 'closed' WHERE id = ?", [e.id]);
       }
     } else {
-      // Parlemen: kursi dibagi proporsional dari suara per partai.
+      // Parlemen: kursi dibagi proporsional dari suara per partai, disimpan
+      // PER NEGARA di party_seats (redesain dunia — bukan lagi kolom
+      // parties.seats yang satu angka untuk semua negara).
       const cands = await sql('SELECT * FROM election_candidates WHERE election_id = ?', [e.id]);
       const total = cands.reduce((s, c) => s + c.votes, 0);
-      await run('UPDATE parties SET seats = 0');
+      await run('DELETE FROM party_seats WHERE country_id = ?', [country.id]);
       if (total > 0) {
         let assigned = 0;
+        const seatsByParty = new Map();
         for (const cand of cands) {
+          if (!cand.party_id) continue;
           const seats = Math.round((cand.votes / total) * 60);
+          seatsByParty.set(cand.party_id, (seatsByParty.get(cand.party_id) || 0) + seats);
           assigned += seats;
-          if (cand.party_id) await run('UPDATE parties SET seats = ? WHERE id = ?', [seats, cand.party_id]);
         }
         // Koreksi pembulatan ke 60 kursi pada partai terbesar.
-        if (assigned !== 60 && cands.length) {
-          const biggest = [...cands].sort((a, b) => b.votes - a.votes)[0];
-          if (biggest.party_id) {
-            const cur = await one('SELECT seats FROM parties WHERE id = ?', [biggest.party_id]);
-            await run('UPDATE parties SET seats = ? WHERE id = ?', [Math.max(0, cur.seats + (60 - assigned)), biggest.party_id]);
-          }
+        if (assigned !== 60 && seatsByParty.size) {
+          const biggest = [...cands].sort((a, b) => b.votes - a.votes).find((c) => c.party_id);
+          if (biggest) seatsByParty.set(biggest.party_id, Math.max(0, (seatsByParty.get(biggest.party_id) || 0) + (60 - assigned)));
+        }
+        for (const [partyId, seats] of seatsByParty) {
+          await run('INSERT INTO party_seats (party_id, country_id, seats) VALUES (?,?,?) RETURNING party_id', [partyId, country.id, seats]);
         }
       }
       await run("UPDATE elections SET status = 'closed' WHERE id = ?", [e.id]);
@@ -178,18 +210,21 @@ export async function runDailyTick() {
   // Anggaran baru menggantikan anggaran yang sedang berlaku.
   const budgets = await sql("SELECT * FROM budgets WHERE status = 'voting' AND ends_at <= ?", [now]);
   for (const b of budgets) {
+    // Anggaran tanpa negara (arsip era negara tunggal) ditutup gagal.
+    if (!b.country_id) { await run("UPDATE budgets SET status = 'failed' WHERE id = ?", [b.id]); continue; }
     if (b.yes > b.no) {
-      const country = await one('SELECT * FROM country WHERE id = 1');
+      const country = await one('SELECT * FROM country WHERE id = ?', [b.country_id]);
+      if (!country) { await run("UPDATE budgets SET status = 'failed' WHERE id = ?", [b.id]); continue; }
       if (Number(country.treasury) < b.amount) {
         await run("UPDATE budgets SET status = 'failed' WHERE id = ?", [b.id]);
-        await notify(b.proposer_id, 'POLITIK', 'Anggaran gagal dicairkan', `"${BUDGET_KINDS[b.kind]?.label || b.kind}" lolos voting, tetapi kas negara tidak cukup (${b.amount} emas dibutuhkan).`);
+        await notify(b.proposer_id, 'POLITIK', 'Anggaran gagal dicairkan', `"${BUDGET_KINDS[b.kind]?.label || b.kind}" lolos voting, tetapi kas ${country.name} tidak cukup (${b.amount} emas dibutuhkan).`);
       } else {
-        await run('UPDATE country SET treasury = treasury - ?, budget_kind = ?, budget_until = ? WHERE id = 1',
-          [b.amount, b.kind, now + BUDGET_DURATION_MS]);
-        await run("INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES ('anggaran','gold',?,?,?) RETURNING id",
-          [-b.amount, `Anggaran disahkan: ${BUDGET_KINDS[b.kind]?.label || b.kind} (7 hari)`, now]);
+        await run('UPDATE country SET treasury = treasury - ?, budget_kind = ?, budget_until = ? WHERE id = ?',
+          [b.amount, b.kind, now + BUDGET_DURATION_MS, country.id]);
+        await run("INSERT INTO treasury_tx (kind, currency, amount, note, country_id, created_at) VALUES ('anggaran','gold',?,?,?,?) RETURNING id",
+          [-b.amount, `Anggaran disahkan: ${BUDGET_KINDS[b.kind]?.label || b.kind} (7 hari)`, country.id, now]);
         await run("UPDATE budgets SET status = 'passed' WHERE id = ?", [b.id]);
-        await notify(b.proposer_id, 'POLITIK', 'Anggaran disahkan', `"${BUDGET_KINDS[b.kind]?.label || b.kind}" lolos voting (${b.amount} emas dari kas negara) dan berlaku 7 hari.`);
+        await notify(b.proposer_id, 'POLITIK', 'Anggaran disahkan', `"${BUDGET_KINDS[b.kind]?.label || b.kind}" lolos voting (${b.amount} emas dari kas ${country.name}) dan berlaku 7 hari.`);
       }
     } else {
       await run("UPDATE budgets SET status = 'failed' WHERE id = ?", [b.id]);
@@ -202,14 +237,38 @@ export async function runDailyTick() {
   // diberitahu. Gagal = presiden tetap menjabat.
   const impeachments = await sql("SELECT * FROM impeachments WHERE status = 'voting' AND ends_at <= ?", [now]);
   for (const imp of impeachments) {
+    if (!imp.country_id) { await run("UPDATE impeachments SET status = 'failed' WHERE id = ?", [imp.id]); continue; }
+    const impCountry = await one('SELECT * FROM country WHERE id = ?', [imp.country_id]);
+    const title = impCountry ? systemDef(impCountry.system).presidentTitle : 'Presiden';
     if (imp.yes > imp.no) {
       await run("UPDATE impeachments SET status = 'passed' WHERE id = ?", [imp.id]);
-      await run('UPDATE country SET president_id = NULL WHERE id = 1 AND president_id = ?', [imp.president_id]);
-      await notify(imp.president_id, 'POLITIK', 'Kamu dimakzulkan', 'Parlemen meloloskan pemakzulan — kamu tidak lagi menjadi Presiden.');
-      await notifyAll('POLITIK', 'Presiden dimakzulkan', 'Parlemen meloloskan pemakzulan. Jabatan presiden kosong sampai pemilu berikutnya.');
+      await run('UPDATE country SET president_id = NULL WHERE id = ? AND president_id = ?', [imp.country_id, imp.president_id]);
+      await notify(imp.president_id, 'POLITIK', 'Kamu dimakzulkan', `Parlemen meloloskan pemakzulan — kamu tidak lagi menjadi ${title}.`);
+      await notifyAll('POLITIK', `${title} dimakzulkan`, `Parlemen meloloskan pemakzulan. Jabatan ${title.toLowerCase()} kosong sampai pemilu berikutnya.`);
     } else {
       await run("UPDATE impeachments SET status = 'failed' WHERE id = ?", [imp.id]);
-      await notify(imp.president_id, 'POLITIK', 'Pemakzulan gagal', 'Parlemen menolak pemakzulan terhadapmu — kamu tetap menjadi Presiden.');
+      await notify(imp.president_id, 'POLITIK', 'Pemakzulan gagal', `Parlemen menolak pemakzulan terhadapmu — kamu tetap menjadi ${title}.`);
+    }
+  }
+
+  // 4d) Unifikasi wilayah (redesain dunia): tutup voting yang berakhir.
+  // Lolos bila YA > TIDAK dan YA minimal 3 — wilayah bergabung ke negara
+  // tujuan (hanya bila wilayahnya masih merdeka saat ditutup). Gagal bila
+  // tidak memenuhi syarat. Warga wilayah itu diberitahu hasilnya.
+  const joins = await sql("SELECT * FROM country_joins WHERE status = 'voting' AND ends_at <= ?", [now]);
+  for (const j of joins) {
+    const country = await one('SELECT * FROM country WHERE id = ?', [j.country_id]);
+    const region = await one('SELECT * FROM regions WHERE id = ?', [j.region_id]);
+    const passed = country && region && !region.country_id && j.yes > j.no && j.yes >= COUNTRY_JOIN_MIN_YES;
+    if (passed) {
+      await run("UPDATE country_joins SET status = 'passed' WHERE id = ?", [j.id]);
+      await run('UPDATE regions SET country_id = ? WHERE id = ? AND country_id IS NULL', [j.country_id, j.region_id]);
+      await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) SELECT id, ?, ?, ?, ? FROM citizens WHERE region_id = ?',
+        ['POLITIK', `${region.name} bergabung dengan ${country.name}`, `Voting unifikasi lolos (${j.yes} YA vs ${j.no} TIDAK). ${region.name} kini bagian dari ${country.name}.`, now, j.region_id]);
+      await notify(j.proposer_id, 'POLITIK', 'Unifikasi berhasil', `${region.name} resmi bergabung dengan ${country.name}.`);
+    } else {
+      await run("UPDATE country_joins SET status = 'failed' WHERE id = ?", [j.id]);
+      await notify(j.proposer_id, 'POLITIK', 'Unifikasi gagal', `Voting unifikasi ${region?.name || 'wilayahmu'} ke ${country?.name || 'negara tujuan'} tidak lolos (${j.yes} YA vs ${j.no} TIDAK${j.yes < COUNTRY_JOIN_MIN_YES ? ` — butuh minimal ${COUNTRY_JOIN_MIN_YES} suara YA` : ''}).`);
     }
   }
 
@@ -221,7 +280,7 @@ export async function runDailyTick() {
     const fighters = await sql('SELECT DISTINCT citizen_id FROM war_attacks WHERE war_id = ?', [w.id]);
     for (const f of fighters) {
       await notify(f.citizen_id, 'PERANG', `Perang ${w.name} berakhir`,
-        winner === 'attacker' ? 'Pemberontak memenangkan wilayah ini.' : 'Republik Indonesia berhasil mempertahankan wilayah ini.');
+        winner === 'attacker' ? 'Pemberontak memenangkan wilayah ini.' : `${w.defender_label || 'Pembela'} berhasil mempertahankan wilayah ini.`);
     }
   }
 

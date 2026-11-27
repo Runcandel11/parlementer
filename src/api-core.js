@@ -1,16 +1,16 @@
 // API inti Parlementer: auth (email+password), dashboard, pekerjaan, perusahaan,
 // pasar, valas, peta, inventaris, konvoi, misi, kronik, pencapaian, notifikasi, profil, toko.
 import bcrypt from 'bcryptjs';
-import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings } from './db.js';
+import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings, getParliamentOpensAt } from './db.js';
 import {
   signToken, cookieOptions, COOKIE_NAME, authRequired, citizenRequired,
   loadCitizen, isValidEmail, isValidUsername, todayStr, publicId,
   getUserIdFromReq, bootstrapCodeMatches, fmtRp, parseImageDataUrl,
 } from './util.js';
 import { dbRateLimit } from './rate-limit.js';
-import { getCountryRow, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive } from './api-civic.js';
+import { getMyCountry, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary } from './api-civic.js';
 import {
-  WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT,
+  WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
   xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
   energyCapFor, DAILY_MISSIONS, CHRONICLE,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
@@ -154,13 +154,17 @@ export function registerCore(app) {
   const round2 = (n) => Math.round(n * 100) / 100;
   // Pajak pasar -> kas negara (BUG-8). Dipanggil DI DALAM tx yang sama
   // dengan transaksinya. amount dibulatkan ke 2 desimal; nol dilewati.
-  async function recordTreasury(t, currency, amount, note) {
+  // countryId = kas negara yang menerima (penjual untuk pajak lokal,
+  // pembeli untuk pajak impor global). NULL = tidak ada negara yang
+  // menerima (wilayah merdeka) — pajaknya tidak masuk kas mana pun.
+  async function recordTreasury(t, currency, amount, note, countryId = null) {
     const a = round2(amount);
     if (a <= 0) return;
+    if (!countryId) return;
     const col = currency === 'gold' ? 'treasury' : 'treasury_usd';
-    await t.run(`UPDATE country SET ${col} = ${col} + ? WHERE id = 1`, [a]);
-    await t.run('INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES (?,?,?,?,?) RETURNING id',
-      ['pajak_pasar', currency, a, note, Date.now()]);
+    await t.run(`UPDATE country SET ${col} = ${col} + ? WHERE id = ?`, [a, countryId]);
+    await t.run('INSERT INTO treasury_tx (kind, currency, amount, note, country_id, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
+      ['pajak_pasar', currency, a, note, countryId, Date.now()]);
   }
   // Batas harga wajar: median harga transaksi 14 hari terakhir untuk
   // komoditas+tier yang sama. Butuh ≥3 transaksi pembanding; pasar yang
@@ -270,7 +274,7 @@ export function registerCore(app) {
       // tetap merata tanpa hardcode jumlah. region_id dan home_region_id
       // diisi region acak yang sama. Fallback 1 hanya bila tabel regions
       // kosong (tidak pernah terjadi: seed selalu membuat 17 region).
-      const startRegion = await t.one('SELECT id FROM regions ORDER BY RANDOM() LIMIT 1');
+      const startRegion = await t.one('SELECT id, name FROM regions ORDER BY RANDOM() LIMIT 1');
       const startRegionId = startRegion ? startRegion.id : 1;
       const citizen = await t.run(
         `INSERT INTO citizens (user_id, level, xp, energy, energy_updated_at, gold, usd, region_id, home_region_id, created_at)
@@ -283,7 +287,7 @@ export function registerCore(app) {
       }
       await t.run('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?) RETURNING id',
         [citizen.id, 'SISTEM', 'Selamat datang di Parlementer!',
-          'Kamu warga baru Republik Indonesia. Ambil pasokan harianmu dan cari pekerjaan dari ADMIN untuk modal awal.', now]);
+          `Kamu lahir di ${startRegion?.name || 'Kepulauan Riau'}. Dunia ini masih terpecah — belum ada negara. Dirikan negaramu sendiri atau gabung lewat unifikasi. Ambil pasokan harianmu dan cari pekerjaan dari ADMIN untuk modal awal.`, now]);
       if (referredBy) {
         // Bonus TIDAK langsung cair — dicatat sebagai pending; cair saat
         // pendaftar mencapai Level 3 (lihat processReferralPayout).
@@ -369,7 +373,9 @@ export function registerCore(app) {
       try { await run('UPDATE citizens SET last_seen_at = ? WHERE id = ?', [Date.now(), c.id]); }
       catch (e) { console.error('[online] heartbeat gagal:', e.message); }
     }
-    const region = await one('SELECT * FROM regions WHERE id = ?', [c.region_id]);
+    const region = await one('SELECT r.*, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [c.region_id]);
+    const country = await getMyCountry({ one }, c);
+    const parliamentOpensAt = await getParliamentOpensAt();
     const party = c.party_id ? await one('SELECT id, name, tag FROM parties WHERE id = ?', [c.party_id]) : null;
     const job = c.job_id ? await one('SELECT j.*, co.name AS company_name FROM jobs j LEFT JOIN companies co ON co.id = j.company_id WHERE j.id = ?', [c.job_id]) : null;
     const unread = await one('SELECT COUNT(*) AS n FROM notifications WHERE citizen_id = ? AND is_read = 0', [c.id]);
@@ -380,7 +386,11 @@ export function registerCore(app) {
     const world = await one('SELECT * FROM world WHERE id = 1');
     const population = await one('SELECT COUNT(*) AS n FROM citizens');
     const activeWars = await sql("SELECT w.*, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active' ORDER BY w.created_at DESC");
-    const votingLaws = await sql("SELECT l.*, u.username AS proposer FROM laws l JOIN citizens c ON c.id = l.proposer_id JOIN users u ON u.id = c.user_id WHERE l.status = 'voting' AND l.ends_at > ? ORDER BY l.ends_at ASC", [Date.now()]);
+    // UU yang sedang divoting HANYA dari negaraku (redesain dunia).
+    // Tanpa negara: tidak ada UU yang bisa divoting.
+    const votingLaws = country
+      ? await sql("SELECT l.*, u.username AS proposer FROM laws l JOIN citizens c ON c.id = l.proposer_id JOIN users u ON u.id = c.user_id WHERE l.country_id = ? AND l.status = 'voting' AND l.ends_at > ? ORDER BY l.ends_at ASC", [country.id, Date.now()])
+      : [];
     const isPremium = c.premium_until > Date.now();
     // Batas energi & biaya latihan yang berlaku SAAT INI (Tahap 4):
     // 100 + 5×(level−1), +20 Premium, +10 Rumah Sakit Lapangan
@@ -391,7 +401,6 @@ export function registerCore(app) {
     const energyCap = energyCapFor(c.level, isPremium, buildings.has('health'));
     // Anggaran latihan (Tahap 5): bila anggaran 'train' sedang berlaku,
     // biaya latihan 10% lebih murah lagi (setelah diskon Sekolah Keliling).
-    const country = await getCountryRow({ one });
     const budgetTrain = budgetActive(country) === 'train';
     const trainCosts = {};
     for (const [key, col] of [['strength', 'attr_str'], ['strategy', 'attr_edu'], ['charisma', 'attr_eco']]) {
@@ -426,7 +435,11 @@ export function registerCore(app) {
       },
       citizen: { ...c, isPremium, energyCap, trainCosts, trainCooldowns },
       referral,
-      region, party, job,
+      region, country: countrySummary(country),
+      // Parlemen: status buka + tanggal buka (untuk countdown di HUD).
+      parliamentOpen: Date.now() >= parliamentOpensAt,
+      parliamentOpensAt,
+      party, job,
       unread: Number(unread.n) + Number(unreadAnn.n), unreadDm: Number(unreadDm.n),
       world, population: Number(population.n), onlineCount: await countOnline(),
       activeWars, votingLaws,
@@ -439,12 +452,15 @@ export function registerCore(app) {
     // Atomik: kunci baris warga + UPDATE bersyarat (last_claim_date <> hari
     // ini) + cek changes — dua request paralel, hanya satu yang berhasil.
     // Anggaran pasokan (Tahap 5): bila anggaran 'claim' sedang berlaku,
-    // klaim harian memberi +2 emas tambahan.
+    // klaim harian memberi +2 emas tambahan. Ideologi Sosialisme: +2 emas
+    // juga — TIDAK menumpuk dengan anggaran (maksimal +2 total).
     const locked = await tx(async (t) => {
       const row = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
       if (row.last_claim_date === today) throw Object.assign(new Error('Pasokan hari ini sudah diambil. Kembali besok.'), { status: 400 });
-      const country = await getCountryRow(t);
-      const bonus = budgetActive(country) === 'claim' ? 2 : 0;
+      const country = await getMyCountry(t, row);
+      const budgetBonus = budgetActive(country) === 'claim' ? 2 : 0;
+      const ideologyBonus = ideologyDef(country?.ideology).claimBonus;
+      const bonus = Math.max(budgetBonus, ideologyBonus);
       const upd = await t.run('UPDATE citizens SET gold = gold + ?, usd = usd + 50, last_claim_date = ? WHERE id = ? AND last_claim_date <> ?', [5 + bonus, today, req.citizen.id, today]);
       if (!upd.changes) throw Object.assign(new Error('Pasokan hari ini sudah diambil. Kembali besok.'), { status: 400 });
       return { row, bonus };
@@ -482,7 +498,7 @@ export function registerCore(app) {
       const buildings = await convoyBuildings(req.citizen.id, t);
       const baseCost = trainCost(row[col]);
       let cost = buildings.has('education') ? trainCostDiscounted(baseCost) : baseCost;
-      const country = await getCountryRow(t);
+      const country = await getMyCountry(t, row);
       if (budgetActive(country) === 'train') cost = Math.max(1, Math.round(cost * 0.9));
       const upd = await t.run(`UPDATE citizens SET gold = gold - ?, ${col} = ${col} + 1, ${trainCol} = ? WHERE id = ? AND gold >= ?`, [cost, now, req.citizen.id, cost]);
       if (!upd.changes) throw Object.assign(new Error(`Butuh ${cost} emas untuk latihan ini.`), { status: 400 });
@@ -701,7 +717,7 @@ export function registerCore(app) {
     let u = await one(q + 'u.username = ?', [req.params.username]);
     if (!u) u = await one(q + 'LOWER(u.username) = LOWER(?)', [req.params.username]);
     if (!u) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
-    const region = await one('SELECT name FROM regions WHERE id = ?', [u.region_id]);
+    const region = await one('SELECT r.name, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [u.region_id]);
     const party = u.party_id ? await one('SELECT name, tag FROM parties WHERE id = ?', [u.party_id]) : null;
     const companies = await sql('SELECT id, name, type FROM companies WHERE owner_id = ?', [u.id]);
     const articles = await sql('SELECT id, title, created_at FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT 5', [u.id]);
@@ -712,7 +728,7 @@ export function registerCore(app) {
       const paid = await one("SELECT COUNT(*) AS n FROM referral_pending WHERE referrer_id = ? AND status = 'paid'", [u.id]);
       referral = { code: u.referral_code, uses: Number(uses.n), goldEarned: Number(paid.n) * 100 };
     }
-    res.json({ profile: { ...u, publicId: publicId(u.id), referral_code: u.referral_code, referral, pass_hash: undefined, region_name: region?.name, party, companies, articles, isPremium: u.premium_until > Date.now() } });
+    res.json({ profile: { ...u, publicId: publicId(u.id), referral_code: u.referral_code, referral, pass_hash: undefined, region_name: region?.name, country_name: region?.country_name || null, party, companies, articles, isPremium: u.premium_until > Date.now() } });
   }));
   app.post('/api/profile/bio', authRequired, citizenRequired, r(async (req, res) => {
     const { bio } = req.body || {};
@@ -793,9 +809,11 @@ export function registerCore(app) {
       params);
     const stats = await one('SELECT COUNT(*) AS open, SUM(seats - seats_taken) AS seats, MAX(salary) AS best FROM jobs WHERE seats_taken < seats');
     // Upah ADMIN yang berlaku (Tahap 5): UU upah ADMIN mengubah jumlah
-    // bahan mentah per shift (pengali admin_pay_mult). Frontend menampilkan
-    // effectiveQty agar yang terlihat sama dengan yang diterima.
-    const adminPayMult = await getAdminPayMult({ one });
+    // bahan mentah per shift (pengali admin_pay_mult + ideologi Sosialisme
+    // ×1.1). Frontend menampilkan effectiveQty agar yang terlihat sama
+    // dengan yang diterima.
+    const myCountry = await getMyCountry({ one }, req.citizen);
+    const adminPayMult = getAdminPayMult({ one }, myCountry);
     const jobs = rows.map((j) => j.salary_type === 'goods'
       ? { ...j, effectiveQty: Math.max(1, Math.floor((j.pay_qty || 0) * adminPayMult)) }
       : j);
@@ -839,9 +857,11 @@ export function registerCore(app) {
     const job = await one('SELECT * FROM jobs WHERE id = ?', [c.job_id]);
     // Tarif pajak + pengali upah ADMIN yang berlaku (Tahap 5 — dari UU yang
     // disahkan, bukan hardcode). Gaji tetap dipotong tarif UU; lowongan
-    // ADMIN dibayar bahan mentah × pengali UU (tanpa pajak).
-    const taxRate = await getIncomeTaxRate({ one });
-    const adminPayMult = await getAdminPayMult({ one });
+    // ADMIN dibayar bahan mentah × pengali UU (tanpa pajak). Tarif/pengali
+    // mengikuti NEGARA pekerja (tanpa negara = pajak 0%, pengali ×1).
+    const myCountry = await getMyCountry({ one }, c);
+    const taxRate = getIncomeTaxRate({ one }, myCountry);
+    const adminPayMult = getAdminPayMult({ one }, myCountry);
     const { gross, net } = shiftSalary(job.salary, c.attr_eco, c.fatigue, taxRate);
     // Pengurang energi atomik (dipakai ketiga jenis gaji): kunci baris warga,
     // potong 100 energi hanya bila masih >= 100 (cek changes). Dua shift
@@ -997,10 +1017,10 @@ export function registerCore(app) {
       scope, commodities: coms.map((c) => ({ ...c, best: bestMap[c.id]?.best ?? null, offers: bestMap[c.id]?.n ?? 0 })),
       stats: { offers: Number(stats.offers), tx: Number(txStats.tx), units: Number(txStats.units), turnover: Number(txStats.turnover) },
       offers, mine, recentTx, buyOrders, myBuyOrders,
-      // Tarif pajak penghasilan yang berlaku saat ini (Tahap 5 — dari UU
-      // yang disahkan, bukan hardcode 2%). Nilai DB langsung (bukan
-      // tarif/100×100) agar eksak, tanpa galat floating point.
-      taxRate: Number((await getCountryRow({ one })).tax_income),
+      // Tarif pajak penghasilan yang berlaku untuk PEMANGGIL (Tahap 5 —
+      // dari UU negaranya, bukan hardcode 2%). Tanpa negara = 0%.
+      // Nilai efektif dalam persen (mis. Liberalisme: 2% − 1 = 1%).
+      taxRate: Math.round(getIncomeTaxRate({ one }, await getMyCountry({ one }, req.citizen)) * 100 * 100) / 100,
     });
   }));
 
@@ -1054,9 +1074,12 @@ export function registerCore(app) {
       const unitPrice = offer.price * (offer.scope === 'global' ? (1 + IMPORT_TAX) : 1);
       const total = unitPrice * q;
       // Tarif pajak penghasilan yang berlaku (Tahap 5 — dari UU yang
-      // disahkan). Perjanjian dagang aktif antara organisasi pembeli &
+      // disahkan). Tarif PENJUAL yang berlaku (pajak dipotong dari hasil
+      // jualnya). Perjanjian dagang aktif antara organisasi pembeli &
       // penjual memotong pajak setengah.
-      let taxRate = await getIncomeTaxRate(t);
+      const sellerCountry = await getMyCountry(t, seller);
+      const buyerCountry = await getMyCountry(t, buyer);
+      let taxRate = getIncomeTaxRate(t, sellerCountry);
       const pactDiscount = await hasTradePact(t, buyerId, sellerId);
       if (pactDiscount) taxRate *= TRADE_PACT_TAX_MULT;
       const sellerReceives = offer.price * q * (1 - taxRate);
@@ -1064,15 +1087,19 @@ export function registerCore(app) {
       if (!pay.changes) throw Object.assign(new Error(`Saldo ${currency === 'gold' ? 'emas' : 'Rupiah'} tidak cukup.`), { status: 400 });
       await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [sellerReceives, seller.id]);
       // Tahap 4 (BUG-8): pajak masuk kas negara, bukan menguap.
-      // Lokal (USD): pajak dari harga jual. Global (emas): pajak penjual
-      // + 2% pajak impor yang dibayar pembeli.
+      // Lokal (USD): pajak dari harga jual -> kas negara PENJUAL.
+      // Global (emas): pajak penjual -> kas negara penjual; 2% pajak impor
+      // yang dibayar pembeli -> kas negara PEMBELI. Tanpa negara di salah
+      // satu sisi, bagian itu tidak masuk kas mana pun.
       const gross = offer.price * q;
       if (offer.scope === 'global') {
-        await recordTreasury(t, 'gold', gross * taxRate + gross * IMPORT_TAX,
-          `Pajak penjualan ${q} unit (global)`);
+        await recordTreasury(t, 'gold', gross * taxRate,
+          `Pajak penjualan ${q} unit (global)`, sellerCountry?.id || null);
+        await recordTreasury(t, 'gold', gross * IMPORT_TAX,
+          `Pajak impor ${q} unit (global)`, buyerCountry?.id || null);
       } else {
         await recordTreasury(t, 'usd', gross * taxRate,
-          `Pajak penjualan ${q} unit (lokal)`);
+          `Pajak penjualan ${q} unit (lokal)`, sellerCountry?.id || null);
       }
       if (offer.qty === q) {
         const del = await t.run('DELETE FROM market_offers WHERE id = ? AND qty >= ?', [offer.id, q]);
@@ -1182,8 +1209,10 @@ export function registerCore(app) {
       const currency = order.scope === 'global' ? 'gold' : 'usd';
       const gross = order.price * q;
       // Tarif pajak penghasilan yang berlaku (Tahap 5 — dari UU yang
-      // disahkan) + diskon perjanjian dagang antar organisasi.
-      let taxRate = await getIncomeTaxRate(t);
+      // disahkan) + diskon perjanjian dagang antar organisasi. Tarif
+      // PENJUAL yang berlaku; pajak masuk kas negara penjual.
+      const sellerCountry = await getMyCountry(t, seller);
+      let taxRate = getIncomeTaxRate(t, sellerCountry);
       if (await hasTradePact(t, buyerId, sellerId)) taxRate *= TRADE_PACT_TAX_MULT;
       const sellerReceives = gross * (1 - taxRate);
       await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [sellerReceives, seller.id]);
@@ -1198,8 +1227,8 @@ export function registerCore(app) {
       await addItem(buyer.id, order.commodity_id, order.tier, q, t);
       await t.run('INSERT INTO market_tx (buyer_id, seller_id, scope, commodity_id, tier, qty, price_each, total, created_at) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id',
         [buyer.id, seller.id, order.scope, order.commodity_id, order.tier, q, order.price, gross, Date.now()]);
-      // Pajak -> kas negara (BUG-8), dengan tarif yang berlaku.
-      await recordTreasury(t, currency, gross * taxRate, `Pajak penjualan ${q} unit via order beli`);
+      // Pajak -> kas negara penjual (BUG-8), dengan tarif yang berlaku.
+      await recordTreasury(t, currency, gross * taxRate, `Pajak penjualan ${q} unit via order beli`, sellerCountry?.id || null);
       await t.run('UPDATE citizens SET purchases = purchases + 1 WHERE id = ?', [buyer.id]);
       await checkWashTrade(t, buyer.id, seller.id, order.commodity_id);
       return { total: gross, sellerReceives, currency, filled: order.qty_filled + q, qty: order.qty };
@@ -1344,28 +1373,30 @@ export function registerCore(app) {
   // ---------- PETA ----------
   app.get('/api/regions', authRequired, citizenRequired, r(async (req, res) => {
     const rows = await sql(
-      `SELECT r.*,
+      `SELECT r.*, c.name AS country_name,
         (SELECT COUNT(*) FROM citizens WHERE region_id = r.id) AS population,
         (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
         (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion
-       FROM regions r ORDER BY r.id`);
+       FROM regions r LEFT JOIN country c ON c.id = r.country_id ORDER BY r.id`);
     res.json({ regions: rows, mine: req.citizen.region_id });
   }));
 
   app.get('/api/regions/:id', authRequired, citizenRequired, r(async (req, res) => {
     const reg = await one(
-      `SELECT r.*,
+      `SELECT r.*, c.name AS country_name,
         (SELECT COUNT(*) FROM citizens WHERE region_id = r.id) AS population,
         (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
         (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion
-       FROM regions r WHERE r.id = ?`, [req.params.id]);
+       FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?`, [req.params.id]);
     if (!reg) return res.status(404).json({ error: 'Wilayah tidak ditemukan.' });
     const war = await one("SELECT * FROM wars WHERE region_id = ? AND status = 'active' ORDER BY created_at DESC", [reg.id]);
     const mySupport = await one('SELECT * FROM war_support WHERE region_id = ? AND citizen_id = ?', [reg.id, req.citizen.id]);
-    // Angka negara yang berlaku (Tahap 5): biaya perjalanan + tarif pajak
-    // — halaman wilayah menampilkannya dinamis, bukan hardcode.
-    const country = await getCountryRow({ one });
-    res.json({ region: reg, war, mySupport: !!mySupport, mine: req.citizen.region_id === reg.id, home: req.citizen.home_region_id === reg.id, travelTickets: Number(country.travel_tickets) || 1, taxIncome: Number(country.tax_income) });
+    // Angka yang berlaku (Tahap 5 + redesain dunia): pajak ditampilkan dari
+    // NEGARA WILAYAH INI (0% + keterangan merdeka bila tidak bernegara);
+    // biaya perjalanan dari NEGARA PEMANGGIL (1 atau 2 Tiket).
+    const regionCountry = reg.country_id ? await one('SELECT * FROM country WHERE id = ?', [reg.country_id]) : null;
+    const myCountry = await getMyCountry({ one }, req.citizen);
+    res.json({ region: reg, war, mySupport: !!mySupport, mine: req.citizen.region_id === reg.id, home: req.citizen.home_region_id === reg.id, travelTickets: getTravelTickets({ one }, myCountry), taxIncome: Math.round(getIncomeTaxRate({ one }, regionCountry) * 100 * 100) / 100, country: countrySummary(regionCountry) });
   }));
 
   app.post('/api/regions/travel', authRequired, citizenRequired, r(async (req, res) => {
@@ -1373,8 +1404,9 @@ export function registerCore(app) {
     const c = req.citizen;
     const target = await one('SELECT * FROM regions WHERE id = ?', [region_id]);
     if (!target) return res.status(404).json({ error: 'Wilayah tidak ditemukan.' });
-    // Biaya perjalanan dari UU yang berlaku (Tahap 5): 1 atau 2 Tiket.
-    const ticketsNeeded = await getTravelTickets({ one });
+    // Biaya perjalanan dari UU negara PEMANGGIL yang berlaku (Tahap 5):
+    // 1 atau 2 Tiket. Tanpa negara = 1 Tiket.
+    const ticketsNeeded = getTravelTickets({ one }, await getMyCountry({ one }, c));
     // Atomik: kunci baris warga, pakai tiket + pindah di dalam tx yang sama.
     await tx(async (t) => {
       const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
@@ -1418,9 +1450,13 @@ export function registerCore(app) {
       const count = await t.one('SELECT COUNT(*) AS n FROM war_support WHERE region_id = ?', [region_id]);
       let warStarted = false;
       if (Number(count.n) >= 5) {
+        // Pembela = nama negara pemilik wilayah, atau 'Pembela <Wilayah>'
+        // bila wilayah merdeka (redesain dunia — tidak ada lagi RI).
+        const ownerCountry = reg.country_id ? await t.one('SELECT name FROM country WHERE id = ?', [reg.country_id]) : null;
+        const defenderLabel = ownerCountry?.name || `Pembela ${reg.name}`;
         await t.run(
           `INSERT INTO wars (name, region_id, attacker_label, defender_label, ends_at, created_at) VALUES (?,?,?,?,?,?) RETURNING id`,
-          [`Pemberontakan ${reg.name}`, region_id, `Pemberontak ${reg.name}`, 'Republik Indonesia', Date.now() + 24 * 60 * 60 * 1000, Date.now()]);
+          [`Pemberontakan ${reg.name}`, region_id, `Pemberontak ${reg.name}`, defenderLabel, Date.now() + 24 * 60 * 60 * 1000, Date.now()]);
         await t.run('DELETE FROM war_support WHERE region_id = ?', [region_id]);
         warStarted = true;
       }
@@ -1487,7 +1523,8 @@ export function registerCore(app) {
     const world = await one('SELECT * FROM world WHERE id = 1');
     const population = await one('SELECT COUNT(*) AS n FROM citizens');
     const regions = await one('SELECT COUNT(*) AS n FROM regions');
-    worldCache = { day: world?.day || 1, population: Number(population.n), regions: Number(regions.n), countries: 1, onlineCount: await countOnline() };
+    const countries = await one('SELECT COUNT(*) AS n FROM country');
+    worldCache = { day: world?.day || 1, population: Number(population.n), regions: Number(regions.n), countries: Number(countries.n), onlineCount: await countOnline() };
     worldCacheAt = now;
     res.json(worldCache);
   }));
