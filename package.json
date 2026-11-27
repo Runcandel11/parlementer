@@ -30,7 +30,8 @@
     "test:landing-glass": "node test/landing-glass-dom.js",
     "test:photo-upload": "node test/photo-upload-dom.js",
     "test:profile-admin": "node test/profile-admin-dom.js",
-    "test:ssl": "node test/ssl-warning.mjs"
+    "test:ssl": "node test/ssl-warning.mjs",
+    "test:jobs-region": "node test/jobs-region-dom.js"
   },
   "type": "module",
   "version": "1.0.0"

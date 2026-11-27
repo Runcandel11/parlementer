@@ -5,8 +5,10 @@
 // update sedang v2.2.0 = landing + profil/ADMIN + kartu wilayah abu-abu +
 // perbaikan login (bcrypt pindah ke worker). Update kecil v2.2.1 =
 // perbaikan upload foto (terima file tanpa tipe MIME + pesan error jujur).
+// Update kecil v2.2.2 = Pekerjaan menurut lokasi (default hanya lowongan
+// wilayah sendiri; wilayah lain terpisah + tombol LIHAT WILAYAH).
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '2.2.1';
+export const VERSION = '2.2.2';
 
 export const WA_TOPUP_URL = 'https://wa.me/6285220743283';
 export const MINT_RATE = 10; // 1 emas dicetak jadi 10 USD

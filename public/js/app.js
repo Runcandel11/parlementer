@@ -2158,9 +2158,31 @@ async function doShift() {
 ROUTES.jobs = async () => {
   const data = await api('/api/jobs');
   const myJob = ME.job ? (data.jobs.find((j) => j.id === ME.job.id) || ME.job) : null;
+  // Pisahkan lowongan menurut lokasi pemain (28 Nov 2026): yang tampil
+  // default HANYA yang ada di wilayah pemain saat ini. Lowongan wilayah
+  // lain disembunyikan di balik tombol (bukan daftar panjang semua pabrik)
+  // dan TIDAK punya tombol LAMAR — tombolnya mengarah ke detail wilayah
+  // (di sana ada tombol travel), jadi tidak ada lagi klik yang berujung
+  // error 400 "tidak berada di wilayah ini".
+  const myRegionId = ME.citizen.region_id;
+  const myRegionName = ME.region?.name || '';
+  const localJobs = data.jobs.filter((j) => j.region_id === myRegionId);
+  const otherJobs = data.jobs.filter((j) => j.region_id !== myRegionId);
+  const jobCard = (j, local) => `
+      <div class="card" data-job-region="${j.region_id}">
+        <h4>${esc(j.title)} ${j.is_admin ? '<span class="chip">ADMIN</span>' : ''}</h4>
+        <p class="muted small">${esc(j.company_name || 'Pemerintah')} · ${esc(j.region_name)} · Level ${j.level_min}+ · ${j.is_admin ? 'Tanpa batas kursi' : `${j.workers}/${j.seats} kursi`}</p>
+        <p class="small">${esc(j.description || '')}</p>
+        <div class="kv"><span class="k">${j.salary_type === 'goods' ? 'Upah (bahan mentah)' : j.salary_type === 'share' ? 'Bagi hasil' : 'Gaji tetap'}</span><span class="v gold-text">${payLabel(j)}</span></div>
+        ${j.salary_type === 'goods' ? `<p class="muted small">Setara ~${fmtRp(j.salary)} / shift · jual bahannya di pasar untuk uang.</p>` : ''}
+        ${local
+          ? `<button class="btn-gold btn-sm" data-apply="${j.id}" ${ME.citizen.job_id === j.id ? 'disabled' : ''}>${ME.citizen.job_id === j.id ? '✓ Pekerjaanmu' : 'LAMAR'}</button>`
+          : `<p class="muted small">📍 Di ${esc(j.region_name)} — kamu harus berada di sana untuk melamar.</p>
+        <button class="btn-gold btn-sm" data-goto="#/regions/${j.region_id}">✈️ LIHAT WILAYAH</button>`}
+      </div>`;
   $('#page').innerHTML = page('KANTOR KETENAGAKERJAAN', 'Lowongan resmi ADMIN tersedia sebagai modal awal. Perusahaan warga juga bisa membuka lowongan.', `
   <div class="stat-grid">
-    <div class="stat-cell"><div class="stat-label">📋 Lowongan Terbuka</div><div class="stat-num">${fmt(data.jobs.length)}</div><div class="stat-sub">di seluruh negeri</div></div>
+    <div class="stat-cell"><div class="stat-label">📋 Lowongan di Wilayahmu</div><div class="stat-num">${fmt(localJobs.length)}</div><div class="stat-sub">di ${esc(myRegionName)} · ${fmt(data.jobs.length)} di seluruh negeri</div></div>
     <div class="stat-cell"><div class="stat-label">💺 Kursi Kosong</div><div class="stat-num">${fmt(data.stats.seats || 0)}</div><div class="stat-sub">siap diisi</div></div>
     <div class="stat-cell"><div class="stat-label">💰 Nilai Terbaik</div><div class="stat-num gold">${fmt(data.stats.best || 0)}</div><div class="stat-sub">nilai setara / shift</div></div>
     <div class="stat-cell"><div class="stat-label">🧑‍💼 Posisi Saat Ini</div><div class="stat-num" style="font-size:20px">${myJob ? esc(myJob.title) : 'Belum bekerja'}</div><div class="stat-sub">${myJob ? esc(myJob.company_name || 'ADMIN') : 'Lamar lowongan di bawah'}</div></div>
@@ -2170,22 +2192,25 @@ ROUTES.jobs = async () => {
     <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah sebanding dengan energi yang dipakai (50 energi → ~50% hadiah). ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan (tarif sesuai UU yang berlaku).'}</p>
     <div class="row"><button class="btn-gold" id="btn-shift" ${ME.citizen.energy <= 0 ? 'disabled' : ''}>KERJAKAN SATU GILIRAN (${Math.min(ME.citizen.energy, 100)} ⚡)</button>
     <button class="btn-ghost" id="btn-quit">Berhenti Kerja</button></div></div>` : ''}
-  <div class="panel"><h3>📋 PAPAN LOWONGAN</h3>
+  <div class="panel"><h3>📍 DI WILAYAHMU${myRegionName ? ' — ' + esc(myRegionName.toUpperCase()) : ''}</h3>
     ${data.adminPayMult && data.adminPayMult !== 1 ? `<p class="muted small">Upah ADMIN saat ini ${Math.round(data.adminPayMult * 100)}% dari upah dasar (UU yang berlaku).</p>` : ''}
-    ${data.jobs.length ? data.jobs.map((j) => `
-      <div class="card">
-        <h4>${esc(j.title)} ${j.is_admin ? '<span class="chip">ADMIN</span>' : ''}</h4>
-        <p class="muted small">${esc(j.company_name || 'Pemerintah')} · ${esc(j.region_name)} · Level ${j.level_min}+ · ${j.is_admin ? 'Tanpa batas kursi' : `${j.workers}/${j.seats} kursi`}</p>
-        <p class="small">${esc(j.description || '')}</p>
-        <div class="kv"><span class="k">${j.salary_type === 'goods' ? 'Upah (bahan mentah)' : j.salary_type === 'share' ? 'Bagi hasil' : 'Gaji tetap'}</span><span class="v gold-text">${payLabel(j)}</span></div>
-        ${j.salary_type === 'goods' ? `<p class="muted small">Setara ~${fmtRp(j.salary)} / shift · jual bahannya di pasar untuk uang.</p>` : ''}
-        <button class="btn-gold btn-sm" data-apply="${j.id}" ${ME.citizen.job_id === j.id ? 'disabled' : ''}>${ME.citizen.job_id === j.id ? '✓ Pekerjaanmu' : 'LAMAR'}</button>
-      </div>`).join('') : emptyState('💼', 'Belum ada lowongan', 'Lowongan ADMIN dan perusahaan warga akan muncul di sini.')}
+    ${localJobs.length ? `<div id="jobs-local-list">${localJobs.map((j) => jobCard(j, true)).join('')}</div>` : emptyState('💼', 'Belum ada lowongan di wilayahmu', 'Lowongan ADMIN dan perusahaan warga akan muncul di sini.')}
+  </div>
+  <div class="panel"><h3>🌍 WILAYAH LAIN</h3>
+    <p class="muted small">Lowongan di luar wilayahmu — kamu harus bepergian dulu ke wilayah itu sebelum bisa melamar.</p>
+    <button class="btn-ghost btn-sm" id="btn-jobs-other" type="button">🌍 Tampilkan lowongan wilayah lain (${fmt(otherJobs.length)})</button>
+    <div id="jobs-other-list" hidden>${otherJobs.map((j) => jobCard(j, false)).join('')}</div>
   </div>`);
   $('#btn-shift')?.addEventListener('click', doShift);
   $('#btn-quit')?.addEventListener('click', async () => {
     try { await post('/api/jobs/quit'); toast('Kamu berhenti bekerja.'); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
+  });
+  $('#btn-jobs-other')?.addEventListener('click', () => {
+    const list = $('#jobs-other-list');
+    const show = list.hidden;
+    list.hidden = !show;
+    $('#btn-jobs-other').textContent = show ? `🔽 Sembunyikan lowongan wilayah lain (${fmt(otherJobs.length)})` : `🌍 Tampilkan lowongan wilayah lain (${fmt(otherJobs.length)})`;
   });
   $$('[data-apply]').forEach((b) => b.onclick = async () => {
     try { await post('/api/jobs/apply', { job_id: Number(b.dataset.apply) }); toast('Lamaran diterima! Kamu resmi bekerja.'); await refreshMe(); route(); }
