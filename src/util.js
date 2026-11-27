@@ -34,11 +34,18 @@ export function readToken(req) {
 
 export async function loadCitizen(userId) {
   const c = await one(
-    `SELECT c.*, u.username, u.email, u.premium_until, u.is_admin
+    `SELECT c.*, u.username, u.email, u.premium_until, u.is_admin,
+       u.referral_code, u.is_banned, u.banned_reason, u.banned_at
      FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.user_id = ?`,
     [userId],
   );
   return c || null;
+}
+
+// ID publik pemain: PL- + nomor urut 6 digit dari id database (mis. PL-000001).
+// Stabil, unik, dan dipakai di tampilan publik — bukan email.
+export function publicId(userId) {
+  return 'PL-' + String(userId).padStart(6, '0');
 }
 
 export function authRequired(req, res, next) {

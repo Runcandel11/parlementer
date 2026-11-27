@@ -13,7 +13,10 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   palsu. Semua daftar mulai KOSONG (pasar 0 penawaran, 0 partai, 0 artikel,
   0 perang) dan hanya terisi oleh aksi pemain asli.
 - Satu-satunya pengecualian: **6 lowongan resmi ADMIN** di Pekerjaan sebagai
-  modal awal pemain baru.
+  modal awal pemain baru. **Lowongan ADMIN dibayar BAHAN MENTAH, bukan uang**
+  (jenis bahan sesuai pekerjaannya — Besi/Minyak/Kayu/Gandum/Kapas/Batu Bara
+  Mentah; jumlah per shift nilainya ≈ gaji lama ~48 USD). Pekerjaan dari
+  perusahaan pemain tetap dibayar seperti semula (USD tetap / bagi hasil).
 - Paket awal warga baru: **50 emas, 500 USD, 3 Makanan / 3 Senjata / 3 Tiket T1**.
 
 ## Fitur
@@ -30,7 +33,8 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   penawaran minimum 10 unit.
 - **Valas:** cetak 1 emas = 10 USD + penawaran antar warga (berlaku 72 jam,
   1 penawaran terbuka per arah).
-- **Pekerjaan:** lowongan ADMIN + lowongan perusahaan pemain (tetap / bagi hasil).
+- **Pekerjaan:** lowongan ADMIN (dibayar bahan mentah, lihat di atas) +
+  lowongan perusahaan pemain (tetap / bagi hasil).
 - **Perusahaan:** 4 jenis — Pabrik Sumber Daya 100 emas, Pabrik 100 emas,
   Industri Ringan 250 emas, Industri Berat 500 emas; produksi harian masuk
   inventaris pemilik.
@@ -47,6 +51,20 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   tautan artikel, laporkan (Pelecehan / Ujaran kebencian / Spam / Lainnya) &
   blokir. Chat mulai kosong.
 - **Pesan pribadi (DM), Organisasi, Kontrak, Konvoi, Notifikasi, Profil.**
+- **Akun Admin:** hanya `koboijuniorkhalid@gmail.com` yang bisa jadi admin
+  (otomatis saat daftar; migrasi `initDb` menandai akun yang sudah ada; tidak
+  ada endpoint promosi admin). Panel Admin: daftar pemain (cari nama/email/ID),
+  Ban/Unban (wajib alasan, login akun banned ditolak), beri Premium 1/3/6/12
+  bulan, Emas, USD, Barang (T1–T5), isi Energi — semua aksi tercatat di log
+  admin (`admin_actions`).
+- **Referral:** setiap pemain punya kode unik 8 karakter (tanpa 0/O/1/I/l);
+  daftar dengan kode valid → pemilik kode **+100 emas + 2 hari premium**,
+  pendaftar baru **+50 emas + 1 hari premium** (premium diperpanjang dari yang
+  masih aktif; tanpa batas). Form daftar ada field Kode Referral + link share
+  `?ref=CODE`. Profil menampilkan kode, link share, jumlah pemakai, dan total
+  emas referral.
+- **ID pemain:** setiap pemain punya ID publik `PL-000001` dst. (dari id
+  database), tampil di Profil dan panel Admin.
 - **Toko:** harga rupiah — Premium 1 bln Rp5.000, 3 bln Rp15.000, 6 bln Rp25.000,
   12 bln Rp45.000; Paket Pemula Rp15.000, Deluxe Rp50.000, Ultimate Rp100.000.
   Semua tombol beli mengarah ke WhatsApp https://wa.me/6285220743283
@@ -75,21 +93,36 @@ Variabel environment (lihat `.env.example`):
 ## Tes
 
 ```bash
-npm test          # e2e HTTP di SQLite (DB sekali pakai): 74 pemeriksaan
+npm test          # e2e HTTP di SQLite (DB sekali pakai): 123 pemeriksaan
 npm run test:pg   # jalur Postgres via pg-mem: 18 pemeriksaan
-npm run test:all  # keduanya
+npm run test:modal # DOM modal laporan (jsdom): 10 pemeriksaan
+npm run test:all  # ketiganya
 ```
 
-Hasil terakhir (27 Nov 2026): **e2e 74/74 lolos, pg-test 18/18 lolos.**
-Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+2 XP) → latih → lamar kerja
-ADMIN → shift (bruto 48, bersih 47,04 setelah pajak 2%) → pasar (jual/beli,
-pajak 2%) → makan → valas (cetak 1 emas = 10 USD) → perjalanan (1 Tiket) →
-chat + lapor + blokir → aturan dunia (partai Level 10, pasar 0) → daily tick
-(hari 1 → 2, energi pulih 100) → logout.
+Hasil terakhir (27 Nov 2026): **e2e 123/123 lolos, pg-test 18/18 lolos,
+modal 10/10 lolos.** Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+2 XP)
+→ latih → lamar kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara
+~48,40 USD; USD tidak berubah) → pasar (jual/beli, pajak 2%) → makan →
+valas (cetak 1 emas = 10 USD) → perjalanan (1 Tiket) → chat + lapor +
+blokir → aturan dunia (partai Level 10, pasar 0) → daily tick (hari 1 → 2,
+energi pulih 100) → logout → **admin/referral/ID**: registrasi dengan kode
+referral (+100/+50 emas, premium 2/1 hari), kode tidak valid diabaikan, akun
+admin otomatis untuk email khusus, ban menolak login + unban memulihkan,
+grant premium/emas/energi/barang tercatat di log admin, route admin ditolak
+untuk non-admin (403).
+
+**Verifikasi Postgres sungguhan (27 Nov 2026):** migrasi `initDb` dari state
+lama (skema sebelum fitur admin/referral + 6 lowongan ADMIN bergaji USD)
+diuji di Postgres 16 lokal: **16/16 lolos** — kolom baru ditambah, kode
+referral ter-backfill, akun admin ditandai, 6 lowongan diubah jadi `goods`
++ resource/qty benar, tanpa duplikat; `initDb` 2× berurutan dan 2× konkuren
+aman (skrip di `/tmp/verify-admin-migration.mjs`).
 
 **Catatan jujur soal tes Postgres:** jalur Postgres diverifikasi lewat pg-mem
-(emulator), BUKAN Postgres sungguhan — tidak ada server Postgres di mesin ini.
-Dua batasan pg-mem 2.8.1 ditemukan dan didokumentasikan di `test/pg-test.js`:
+(emulator) untuk `test:pg`, TAPI migrasi `initDb` (termasuk migrasi admin/
+referral/lowongan ADMIN) sudah diverifikasi di **Postgres 16 sungguhan**
+(lokal, 27 Nov 2026, 16/16 — lihat di atas). Dua batasan pg-mem 2.8.1
+ditemukan dan didokumentasikan di `test/pg-test.js`:
 (1) `kolom INTEGER - $param` dihitung terbalik (bug emulator; SQL aplikasi
 benar di Postgres sungguhan — pola yang sama lolos di tes e2e SQLite);
 (2) ROLLBACK tidak berfungsi di emulator, jadi pemeriksaan rollback dilewati

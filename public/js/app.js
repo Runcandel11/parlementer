@@ -54,6 +54,13 @@ function showAuth() {
   $('#auth-view').hidden = false;
   $('#tab-login').onclick = () => switchAuthTab('login');
   $('#tab-register').onclick = () => switchAuthTab('register');
+  // Link referral ?ref=CODE: isi otomatis field kode dan buka tab DAFTAR.
+  const refParam = new URLSearchParams(location.search).get('ref');
+  if (refParam) {
+    const refInput = $('#form-register input[name="ref"]');
+    if (refInput) refInput.value = refParam.trim().toUpperCase().slice(0, 8);
+    switchAuthTab('register');
+  }
   $('#form-login').onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -124,12 +131,15 @@ const NAV = [
 ];
 
 function buildNav() {
+  const adminGroup = ME?.citizen?.is_admin ? `
+    <div class="nav-group">ADMIN</div>
+    <button class="nav-item" data-route="admin" type="button"><span class="ico">🛡️</span>Panel Admin</button>` : '';
   $('#drawer-nav').innerHTML = NAV.map((g) => `
     <div class="nav-group">${g.group}</div>
     ${g.items.map(([slug, label, ico]) => `
       <button class="nav-item" data-route="${slug}" type="button">
         <span class="ico">${ico}</span>${label}
-      </button>`).join('')}`).join('') + `
+      </button>`).join('')}`).join('') + adminGroup + `
     <div class="nav-group">AKUN</div>
     <button class="nav-item" data-route="settings" type="button"><span class="ico">⚙️</span>Pengaturan</button>
     <button class="nav-item" id="nav-logout" type="button"><span class="ico">🚪</span>Keluar</button>`;
@@ -145,6 +155,7 @@ function closeDrawer() { $('#drawer').classList.remove('open'); $('#drawer-overl
 async function showApp() {
   $('#auth-view').hidden = true;
   $('#app').hidden = false;
+  await refreshMe(); // dulu, supaya buildNav tahu apakah warga ini admin
   buildNav();
   $('#btn-menu').onclick = openDrawer;
   $('#drawer-close').onclick = closeDrawer;
@@ -153,7 +164,6 @@ async function showApp() {
   $('#energy-chat').onclick = () => { location.hash = '#/chat'; };
   $('#btn-notif').onclick = () => { location.hash = '#/notifications'; };
   $('#btn-settings').onclick = () => { location.hash = '#/settings'; };
-  await refreshMe();
   window.addEventListener('hashchange', route);
   route();
   setInterval(refreshMe, 30000);
@@ -162,6 +172,8 @@ async function showApp() {
 async function refreshMe() {
   try {
     ME = await api('/api/me');
+    // Akun dibanned di tengah sesi: alihkan ke halaman banned.
+    if (ME.user?.is_banned && location.hash !== '#/banned') location.hash = '#/banned';
     renderHUD();
   } catch { /* sesi habis */ }
 }
@@ -187,10 +199,22 @@ function renderHUD() {
 
 // ---------- ROUTER ----------
 const ROUTES = {};
+// ID publik pemain: PL- + nomor urut 6 digit (mis. PL-000001).
+const pubId = (id) => 'PL-' + String(id).padStart(6, '0');
 function route() {
   clearInterval(chatTimer); chatTimer = null; chatSince = 0;
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
   const [slug, arg] = hash.split('/');
+  // Akun banned: tampilkan pesan banned, bukan dashboard/game.
+  if (ME?.user?.is_banned) {
+    $('#page').innerHTML = page('⛔ AKUN DIBANNED', '', `
+    <div class="panel"><div class="empty"><div class="big-ico">⛔</div>
+    <h3>Akun ini dibanned</h3>
+    <p class="muted">Alasan: ${esc(ME.user.banned_reason || 'tidak dicantumkan')}</p>
+    <p class="muted">Akunmu tidak bisa masuk ke game sampai admin mencabut ban ini.</p>
+    <button class="btn-danger" onclick="logout()">KELUAR</button></div></div>`);
+    return;
+  }
   $$('#drawer-nav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.route === slug));
   const fn = ROUTES[slug] || ROUTES.dashboard;
   $('#page').innerHTML = '<div class="panel"><p class="muted">Memuat…</p></div>';
@@ -378,12 +402,20 @@ ROUTES.profile = async (username) => {
   $('#page').innerHTML = page('BERKAS WARGA', '', `
   <div class="panel">
     <div class="panel-head"><h3>👤 ${esc(pr.username)} ${pr.isPremium ? '◆' : ''}</h3><span class="chip">LEVEL ${pr.level}</span></div>
+    <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(pr.publicId)}</b></span></div>
     <div class="kv"><span class="k">Kewarganegaraan</span><span class="v">Republik Indonesia</span></div>
     <div class="kv"><span class="k">Daerah asal</span><span class="v">${esc(pr.region_name)}</span></div>
     <div class="kv"><span class="k">Partai</span><span class="v">${pr.party ? esc(pr.party.name) + ' [' + esc(pr.party.tag) + ']' : '—'}</span></div>
     <div class="kv"><span class="k">Bergabung</span><span class="v">${fmtDate(pr.created_at)}</span></div>
     ${pr.bio ? `<p style="margin-top:10px">${esc(pr.bio)}</p>` : ''}
   </div>
+  ${pr.referral ? `<div class="panel"><h3>🔗 KODE REFERRAL</h3>
+    <div class="kv"><span class="k">Kode referralmu</span><span class="v"><b>${esc(pr.referral.code)}</b> <button class="btn-gold btn-sm" id="btn-copy-ref" type="button">Salin</button></span></div>
+    <div class="kv"><span class="k">Link ajakan</span><span class="v small">${esc(location.origin + '/?ref=' + pr.referral.code)}</span></div>
+    <div class="kv"><span class="k">Orang yang memakai kodemu</span><span class="v">${pr.referral.uses} orang</span></div>
+    <div class="kv"><span class="k">Emas dari referral</span><span class="v gold-text">+${fmt(pr.referral.goldEarned)} emas</span></div>
+    <p class="muted small">Setiap warga baru yang memakai kodemu memberimu +100 emas + 2 hari Premium — dan dia mendapat +50 emas + 1 hari Premium.</p>
+  </div>` : ''}
   <div class="panel"><h3>📊 ATRIBUT</h3>
     <div class="kv"><span class="k">Kekuatan</span><span class="v">${pr.attr_str}</span></div>
     <div class="kv"><span class="k">Pendidikan</span><span class="v">${pr.attr_edu}</span></div>
@@ -402,6 +434,19 @@ ROUTES.profile = async (username) => {
   ${pr.companies.length ? `<div class="panel"><h3>🏭 PERUSAHAAN</h3>${pr.companies.map((c) => `<div class="kv"><span class="k">${esc(c.name)}</span><span class="v">${esc(c.type)}</span></div>`).join('')}</div>` : ''}
   ${pr.articles.length ? `<div class="panel"><h3>📰 ARTIKEL TERBARU</h3>${pr.articles.map((a) => `<div class="kv"><span class="k">${esc(a.title)}</span><span class="v small muted">${fmtDate(a.created_at)}</span></div>`).join('')}</div>` : ''}
   ${pr.username === ME.citizen.username ? `<button class="btn-ghost" onclick="location.hash='#/settings'">✏️ Edit Profil</button>` : ''}`);
+  const copyBtn = $('#btn-copy-ref');
+  if (copyBtn && pr.referral) {
+    copyBtn.onclick = async () => {
+      const link = location.origin + '/?ref=' + pr.referral.code;
+      try { await navigator.clipboard.writeText(link); toast('Link referral disalin!'); }
+      catch {
+        const ta = document.createElement('textarea');
+        ta.value = link; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); toast('Link referral disalin!'); } catch { toast(link); }
+        document.body.removeChild(ta);
+      }
+    };
+  }
 };
 
 // ---------- PENGATURAN ----------
@@ -417,6 +462,7 @@ ROUTES.settings = async () => {
     <div class="row"><input id="set-name" placeholder="Nama baru" style="flex:2"><button class="btn-gold" id="btn-rename">Ganti (50 emas)</button></div>
   </div>
   <div class="panel"><h3>👤 AKUN</h3>
+    <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(pubId(ME.user.id))}</b></span></div>
     <div class="kv"><span class="k">Email</span><span class="v">${esc(c.email)}</span></div>
     <div class="kv"><span class="k">Nama warga</span><span class="v">${esc(c.username)}</span></div>
     <div class="kv"><span class="k">Premium</span><span class="v">${c.isPremium ? 'Aktif sampai ' + fmtDate(c.premium_until) : 'Tidak aktif'}</span></div>
@@ -431,6 +477,91 @@ ROUTES.settings = async () => {
     catch (e) { toast(e.message); }
   };
   $('#btn-logout').onclick = logout;
+};
+
+// ---------- PANEL ADMIN ----------
+ROUTES.admin = async (q) => {
+  const query = q ? decodeURIComponent(q) : '';
+  const [list, logs] = await Promise.all([
+    api('/api/admin/players' + (query ? '?q=' + encodeURIComponent(query) : '')),
+    api('/api/admin/actions'),
+  ]);
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Hanya akun admin yang bisa melihat halaman ini.', `
+  <div class="panel"><h3>🔍 CARI PEMAIN</h3>
+    <div class="row"><input id="adm-q" placeholder="Nama / email / ID (cth: PL-000001)" value="${esc(query)}" style="flex:2">
+    <button class="btn-gold" id="adm-search">Cari</button>
+    ${query ? '<button class="btn-ghost" id="adm-reset">Reset</button>' : ''}</div>
+    <p class="muted small">${list.players.length} pemain ditemukan.</p>
+  </div>
+  ${list.players.map((p) => `
+  <div class="panel" data-player="${p.id}">
+    <div class="panel-head"><h3>👤 ${esc(p.username)} ${p.isPremium ? '◆' : ''}</h3>
+      <span class="chip">${p.is_banned ? '⛔ BANNED' : p.is_admin ? '🛡️ ADMIN' : 'WARGA'}</span></div>
+    <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(p.publicId)}</b></span></div>
+    <div class="kv"><span class="k">Email</span><span class="v">${esc(p.email)}</span></div>
+    <div class="kv"><span class="k">Level</span><span class="v">${p.level}</span></div>
+    <div class="kv"><span class="k">Emas / USD</span><span class="v">${fmt(p.gold)} emas · ${fmtUSD(p.usd)} USD</span></div>
+    <div class="kv"><span class="k">Premium</span><span class="v">${p.isPremium ? 'Aktif sampai ' + fmtDate(p.premium_until) : 'Tidak aktif'}</span></div>
+    ${p.is_banned ? `<div class="kv"><span class="k">Alasan ban</span><span class="v">${esc(p.banned_reason || '')}</span></div>` : ''}
+    <div class="kv"><span class="k">Bergabung</span><span class="v">${fmtDate(p.created_at)}</span></div>
+    <div class="row" style="margin-top:10px">
+      <select class="adm-premium" style="flex:1"><option value="1">Premium 1 bln</option><option value="3">Premium 3 bln</option><option value="6">Premium 6 bln</option><option value="12">Premium 12 bln</option></select>
+      <button class="btn-gold btn-sm" data-act="premium">Beri Premium</button>
+    </div>
+    <div class="row">
+      <input class="adm-gold" type="number" min="1" placeholder="Jumlah emas" style="flex:1">
+      <button class="btn-gold btn-sm" data-act="gold">+ Emas</button>
+      <input class="adm-usd" type="number" min="1" placeholder="Jumlah USD" style="flex:1">
+      <button class="btn-gold btn-sm" data-act="usd">+ USD</button>
+    </div>
+    <div class="row">
+      <select class="adm-item" style="flex:1"><option>Makanan</option><option>Senjata</option><option>Tiket</option></select>
+      <select class="adm-tier"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+      <input class="adm-qty" type="number" min="1" value="10" style="width:80px">
+      <button class="btn-gold btn-sm" data-act="item">Beri Barang</button>
+      <button class="btn-gold btn-sm" data-act="energy">⚡ Isi Energi</button>
+    </div>
+    <div class="row">
+      ${p.is_banned
+        ? `<button class="btn-gold btn-sm" data-act="unban">✅ Cabut Ban</button>`
+        : `<input class="adm-reason" placeholder="Alasan ban (wajib)" style="flex:2">
+           <button class="btn-danger btn-sm" data-act="ban">⛔ Ban</button>`}
+    </div>
+  </div>`).join('') || emptyState('👥', 'Tidak ada pemain', 'Coba kata kunci lain.')}
+  <div class="panel"><h3>📋 LOG ADMIN</h3>
+    ${logs.actions.length ? logs.actions.map((a) => `<div class="kv"><span class="k"><b>${esc(a.admin_name)}</b> → ${esc(a.target_name)}<br><small class="muted">${esc(a.action)} · ${esc(a.detail)}</small></span><span class="v small muted">${ago(a.created_at)}</span></div>`).join('')
+      : '<p class="muted">Belum ada aksi admin yang tercatat.</p>'}
+  </div>`);
+  $('#adm-search').onclick = () => { const v = $('#adm-q').value.trim(); location.hash = v ? '#/admin/' + encodeURIComponent(v) : '#/admin'; };
+  const resetBtn = $('#adm-reset');
+  if (resetBtn) resetBtn.onclick = () => { location.hash = '#/admin'; };
+  $$('#page [data-player]').forEach((panel) => {
+    const uid = Number(panel.dataset.player);
+    const runAct = async (path, body) => {
+      try { await post(path, body); toast('Aksi admin berhasil.'); await refreshMe(); route(); }
+      catch (e) { toast(e.message); }
+    };
+    panel.querySelectorAll('[data-act]').forEach((btn) => {
+      btn.onclick = async () => {
+        const act = btn.dataset.act;
+        if (act === 'premium') return runAct('/api/admin/premium', { user_id: uid, months: Number(panel.querySelector('.adm-premium').value) });
+        if (act === 'gold') return runAct('/api/admin/gold', { user_id: uid, amount: Number(panel.querySelector('.adm-gold').value) });
+        if (act === 'usd') return runAct('/api/admin/usd', { user_id: uid, amount: Number(panel.querySelector('.adm-usd').value) });
+        if (act === 'item') return runAct('/api/admin/item', {
+          user_id: uid, commodity: panel.querySelector('.adm-item').value,
+          tier: Number(panel.querySelector('.adm-tier').value), qty: Number(panel.querySelector('.adm-qty').value),
+        });
+        if (act === 'energy') return runAct('/api/admin/energy', { user_id: uid });
+        if (act === 'unban') return runAct('/api/admin/unban', { user_id: uid });
+        if (act === 'ban') {
+          const reason = panel.querySelector('.adm-reason').value.trim();
+          if (!reason) { toast('Alasan ban wajib diisi.'); return; }
+          if (!confirm(`Ban pemain ini? Alasan: ${reason}`)) return;
+          return runAct('/api/admin/ban', { user_id: uid, reason });
+        }
+      };
+    });
+  });
 };
 
 boot();
@@ -584,6 +715,11 @@ ROUTES.fx = async () => {
   });
 };
 
+// Label upah lowongan: ADMIN dibayar bahan mentah, perusahaan bayar USD/bagi hasil.
+const payLabel = (j) => j.salary_type === 'goods'
+  ? `${fmt(j.pay_qty)}× ${j.resource} / shift`
+  : `${fmt(j.salary)} USD / shift`;
+
 // ---------- PEKERJAAN ----------
 ROUTES.jobs = async () => {
   const data = await api('/api/jobs');
@@ -592,12 +728,12 @@ ROUTES.jobs = async () => {
   <div class="stat-grid">
     <div class="stat-cell"><div class="stat-label">📋 Lowongan Terbuka</div><div class="stat-num">${fmt(data.jobs.length)}</div><div class="stat-sub">di seluruh negeri</div></div>
     <div class="stat-cell"><div class="stat-label">💺 Kursi Kosong</div><div class="stat-num">${fmt(data.stats.seats || 0)}</div><div class="stat-sub">siap diisi</div></div>
-    <div class="stat-cell"><div class="stat-label">💰 Gaji Terbaik</div><div class="stat-num gold">${fmt(data.stats.best || 0)}</div><div class="stat-sub">USD / shift</div></div>
+    <div class="stat-cell"><div class="stat-label">💰 Nilai Terbaik</div><div class="stat-num gold">${fmt(data.stats.best || 0)}</div><div class="stat-sub">nilai setara / shift</div></div>
     <div class="stat-cell"><div class="stat-label">🧑‍💼 Posisi Saat Ini</div><div class="stat-num" style="font-size:20px">${myJob ? esc(myJob.title) : 'Belum bekerja'}</div><div class="stat-sub">${myJob ? esc(myJob.company_name || 'ADMIN') : 'Lamar lowongan di bawah'}</div></div>
   </div>
   ${myJob ? `<div class="panel"><h3>💼 PEKERJAANMU</h3>
-    <div class="kv"><span class="k">${esc(myJob.title)} · ${esc(myJob.company_name || 'ADMIN')}</span><span class="v">${fmt(myJob.salary)} USD/shift</span></div>
-    <p class="muted small">Satu giliran memakai 100 energi. Gaji dipotong pajak penghasilan 2%.</p>
+    <div class="kv"><span class="k">${esc(myJob.title)} · ${esc(myJob.company_name || 'ADMIN')}</span><span class="v">${payLabel(myJob)}</span></div>
+    <p class="muted small">Satu giliran memakai 100 energi. ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan 2%.'}</p>
     <div class="row"><button class="btn-gold" id="btn-shift">KERJAKAN SATU GILIRAN (100 ⚡)</button>
     <button class="btn-ghost" id="btn-quit">Berhenti Kerja</button></div></div>` : ''}
   <div class="panel"><h3>📋 PAPAN LOWONGAN</h3>
@@ -606,7 +742,8 @@ ROUTES.jobs = async () => {
         <h4>${esc(j.title)} ${j.is_admin ? '<span class="chip">ADMIN</span>' : ''}</h4>
         <p class="muted small">${esc(j.company_name || 'Pemerintah')} · ${esc(j.region_name)} · Level ${j.level_min}+ · ${j.workers}/${j.seats} kursi</p>
         <p class="small">${esc(j.description || '')}</p>
-        <div class="kv"><span class="k">${j.salary_type === 'share' ? 'Bagi hasil' : 'Gaji tetap'}</span><span class="v gold-text">${fmt(j.salary)} USD / shift</span></div>
+        <div class="kv"><span class="k">${j.salary_type === 'goods' ? 'Upah (bahan mentah)' : j.salary_type === 'share' ? 'Bagi hasil' : 'Gaji tetap'}</span><span class="v gold-text">${payLabel(j)}</span></div>
+        ${j.salary_type === 'goods' ? `<p class="muted small">Setara ~${fmt(j.salary, 2)} USD / shift · jual bahannya di pasar untuk uang.</p>` : ''}
         <button class="btn-gold btn-sm" data-apply="${j.id}" ${ME.citizen.job_id === j.id ? 'disabled' : ''}>${ME.citizen.job_id === j.id ? '✓ Pekerjaanmu' : 'LAMAR'}</button>
       </div>`).join('') : emptyState('💼', 'Belum ada lowongan', 'Lowongan ADMIN dan perusahaan warga akan muncul di sini.')}
   </div>`);

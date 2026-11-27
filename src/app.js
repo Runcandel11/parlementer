@@ -9,6 +9,7 @@ import express from 'express';
 import { initDb, isPg } from './db.js';
 import { registerCore } from './api-core.js';
 import { registerCivic } from './api-civic.js';
+import { registerAdmin } from './api-admin.js';
 import { maybeTick, ensureElections } from './tick.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,7 @@ export function createApp() {
 
   registerCore(app);
   registerCivic(app);
+  registerAdmin(app);
 
   // Frontend statis + SPA fallback.
   app.use(express.static(path.join(__dirname, '..', 'public')));

@@ -118,19 +118,25 @@ async function main() {
   r = await A.get('/api/me');
   check('Emas 54, Kekuatan 1, XP 3', r.data.citizen.gold === 54 && r.data.citizen.attr_str === 1 && r.data.citizen.xp === 3);
 
-  console.log('\n[5] Pekerjaan ADMIN & shift');
+  console.log('\n[5] Pekerjaan ADMIN (dibayar bahan mentah) & shift');
   r = await A.get('/api/jobs');
   const adminJobs = r.data.jobs.filter((j) => j.is_admin === 1);
   check('Ada 6 lowongan ADMIN', adminJobs.length === 6, `ditemukan ${adminJobs.length}`);
-  check('Gaji terbaik ADMIN 48 USD', r.data.stats.best === 48, `best=${r.data.stats.best}`);
+  check('Semua lowongan ADMIN dibayar bahan mentah (bukan USD)',
+    adminJobs.every((j) => j.salary_type === 'goods' && j.resource && j.pay_qty > 0),
+    adminJobs.map((j) => `${j.title}:${j.resource}×${j.pay_qty}`).join(', '));
+  check('Nilai setara terbaik ADMIN 48 USD', r.data.stats.best === 48, `best=${r.data.stats.best}`);
   const job = adminJobs.find((j) => j.title === 'Pekerja Gudang Pelabuhan');
-  check('Lowongan "Pekerja Gudang Pelabuhan" ada (48 USD, Kepulauan Riau)', !!job && job.salary === 48);
+  check('Lowongan "Pekerja Gudang Pelabuhan" ada (44× Besi Mentah, Kepulauan Riau)', !!job && job.resource === 'Besi Mentah' && job.pay_qty === 44);
   r = await A.post('/api/jobs/apply', { job_id: job.id });
   check('Lamar pekerjaan berhasil', r.status === 200 && r.data.ok);
   r = await A.post('/api/jobs/shift');
-  check('Shift selesai: bruto 48, bersih 47,04 (pajak 2%)', r.status === 200 && r.data.gross === 48 && eq(r.data.net, 47.04), `gross=${r.data.gross} net=${r.data.net}`);
+  check('Shift selesai: dibayar 44× Besi Mentah (setara ~48,40 USD)', r.status === 200 && r.data.goods === '44× Besi Mentah', `goods=${r.data.goods}`);
   r = await A.get('/api/me');
-  check('Energi 0 setelah shift, USD 597,04', r.data.citizen.energy === 0 && eq(r.data.citizen.usd, 597.04), `energi=${r.data.citizen.energy} usd=${r.data.citizen.usd}`);
+  check('Energi 0 setelah shift, USD tetap 550 (tanpa gaji uang)', r.data.citizen.energy === 0 && eq(r.data.citizen.usd, 550), `energi=${r.data.citizen.energy} usd=${r.data.citizen.usd}`);
+  r = await A.get('/api/inventory');
+  const besi = r.data.items.find((i) => i.name === 'Besi Mentah');
+  check('Inventaris: 44× Besi Mentah T1 dari shift', besi && besi.qty === 44 && besi.tier === 1, `besi=${besi?.qty}`);
 
   console.log('\n[6] Pasar — mulai kosong (tanpa bot)');
   r = await A.get('/api/market?scope=local');
@@ -160,7 +166,7 @@ async function main() {
   check('A membeli 5 unit: bayar 45 USD', r.status === 200 && eq(r.data.total, 45), `total=${r.data.total}`);
   check('Penjual terima 44,10 USD (setelah pajak 2%)', eq(r.data.sellerReceives, 44.1), `diterima=${r.data.sellerReceives}`);
   r = await A.get('/api/me');
-  check('Saldo A: 552,04 USD', eq(r.data.citizen.usd, 552.04), `usd=${r.data.citizen.usd}`);
+  check('Saldo A: 505 USD (550 − 45)', eq(r.data.citizen.usd, 505), `usd=${r.data.citizen.usd}`);
   r = await B.get('/api/me');
   check('Saldo B: 544,10 USD', eq(r.data.citizen.usd, 544.1), `usd=${r.data.citizen.usd}`);
   r = await A.get('/api/market?scope=local');
@@ -178,7 +184,7 @@ async function main() {
   r = await A.post('/api/fx/mint', { gold: 1 });
   check('Cetak 1 emas → +10 USD', r.status === 200 && r.data.usd === 10);
   r = await A.get('/api/me');
-  check('Emas 53, USD 562,04', r.data.citizen.gold === 53 && eq(r.data.citizen.usd, 562.04), `emas=${r.data.citizen.gold} usd=${r.data.citizen.usd}`);
+  check('Emas 53, USD 515', r.data.citizen.gold === 53 && eq(r.data.citizen.usd, 515), `emas=${r.data.citizen.gold} usd=${r.data.citizen.usd}`);
 
   console.log('\n[9] Peta & perjalanan');
   r = await A.get('/api/regions');
@@ -257,6 +263,112 @@ async function main() {
   check('Logout berhasil', r.status === 200);
   r = await A.get('/api/auth/me');
   check('Setelah logout, /api/auth/me ditolak (401)', r.status === 401);
+
+  console.log('\n[14] Referral kode unik, akun admin, ID pemain, ban');
+  const R = new Client();
+  const N = new Client();
+  const X = new Client();
+  const Y = new Client();
+  const ADM = new Client();
+
+  r = await R.post('/api/auth/register', { email: 'ref1@test.local', password: 'rahasia123', username: 'referrer_satu' });
+  check('Referrer mendaftar', r.status === 200 && r.data.ok);
+  r = await R.get('/api/me');
+  const refCode = r.data.referral?.code;
+  check('Kode referral 8 karakter tanpa ambiguitas (tanpa 0/O/1/I/l/L)', typeof refCode === 'string' && /^[A-HJKMNP-Z2-9]{8}$/.test(refCode), `kode=${refCode}`);
+  check('Referral awal: 0 pemakai, 0 emas', r.data.referral.uses === 0 && r.data.referral.goldEarned === 0);
+  check('ID publik referrer PL-000003', r.data.user.publicId === 'PL-000003', r.data.user.publicId || '');
+
+  r = await N.post('/api/auth/register', { email: 'ref2@test.local', password: 'rahasia123', username: 'pendaftar_satu', ref: refCode });
+  check('Pendaftar dengan kode referral berhasil', r.status === 200 && r.data.ok);
+  r = await N.get('/api/me');
+  const nowMs = Date.now();
+  check('Pendaftar baru: 100 emas (50 awal + 50 bonus)', r.data.citizen.gold === 100, `emas=${r.data.citizen.gold}`);
+  check('Pendaftar baru: premium aktif 1 hari', r.data.citizen.isPremium && r.data.citizen.premium_until > nowMs && r.data.citizen.premium_until <= nowMs + 86400000 + 60000, `until=${r.data.citizen.premium_until}`);
+  r = await R.get('/api/me');
+  check('Referrer: 150 emas (50 + 100 bonus)', r.data.citizen.gold === 150, `emas=${r.data.citizen.gold}`);
+  check('Referrer: premium aktif ~2 hari', r.data.citizen.isPremium && r.data.citizen.premium_until > nowMs + 86400000 && r.data.citizen.premium_until <= nowMs + 2 * 86400000 + 60000);
+  check('Referrer: 1 pemakai kode, +100 emas referral', r.data.referral.uses === 1 && r.data.referral.goldEarned === 100);
+
+  r = await X.post('/api/auth/register', { email: 'ref3@test.local', password: 'rahasia123', username: 'pendaftar_dua', ref: refCode.toLowerCase() });
+  check('Kode referral huruf kecil tetap berlaku', r.status === 200 && r.data.ok);
+  r = await X.get('/api/me');
+  check('Pendaftar kedua: 100 emas + premium 1 hari', r.data.citizen.gold === 100 && r.data.citizen.isPremium);
+  r = await R.get('/api/me');
+  check('Referrer: 2 pemakai kode, +200 emas referral', r.data.referral.uses === 2 && r.data.referral.goldEarned === 200);
+
+  r = await Y.post('/api/auth/register', { email: 'ref4@test.local', password: 'rahasia123', username: 'pendaftar_tiga', ref: 'ZZZZZZZZ' });
+  check('Kode referral tidak valid: registrasi tetap jalan', r.status === 200 && r.data.ok);
+  r = await Y.get('/api/me');
+  check('Tanpa kode valid: 50 emas, tanpa premium', r.data.citizen.gold === 50 && !r.data.citizen.isPremium);
+  r = await R.get('/api/me');
+  check('Referrer tetap 2 pemakai kode', r.data.referral.uses === 2);
+
+  r = await ADM.post('/api/auth/register', { email: 'koboijuniorkhalid@gmail.com', password: 'rahasia123', username: 'khalid_admin' });
+  check('Admin mendaftar dengan email khusus', r.status === 200 && r.data.ok);
+  r = await ADM.get('/api/me');
+  check('Akun email khusus otomatis jadi admin', r.data.user.is_admin === true);
+  check('ID publik admin PL-000007', r.data.user.publicId === 'PL-000007', r.data.user.publicId || '');
+  r = await B.get('/api/me');
+  check('Warga biasa bukan admin', r.data.user.is_admin === false);
+  check('ID publik B PL-000002', r.data.user.publicId === 'PL-000002');
+
+  r = await B.get('/api/admin/players');
+  check('Non-admin: GET /api/admin/players ditolak 403', r.status === 403);
+  r = await B.post('/api/admin/gold', { user_id: 1, amount: 10 });
+  check('Non-admin: POST /api/admin/gold ditolak 403', r.status === 403);
+  r = await B.post('/api/admin/ban', { user_id: 1, reason: 'tes' });
+  check('Non-admin: POST /api/admin/ban ditolak 403', r.status === 403);
+
+  r = await ADM.get('/api/admin/players');
+  check('Admin: daftar pemain tampil (7 pemain)', r.status === 200 && r.data.players.length === 7, `jumlah=${r.data.players?.length}`);
+  check('Daftar pemain menampilkan ID publik PL-000002', r.data.players.some((p) => p.publicId === 'PL-000002' && p.username === 'warga_dua'));
+  r = await ADM.post('/api/admin/gold', { user_id: 2, amount: 25 });
+  check('Admin: beri +25 emas ke B', r.status === 200 && r.data.ok);
+  r = await B.get('/api/me');
+  check('Emas B: 50 → 75', r.data.citizen.gold === 75, `emas=${r.data.citizen.gold}`);
+  r = await ADM.post('/api/admin/premium', { user_id: 2, months: 3 });
+  check('Admin: beri Premium 3 bulan ke B', r.status === 200 && r.data.ok);
+  r = await B.get('/api/me');
+  check('Premium B aktif ~90 hari', r.data.citizen.isPremium && r.data.citizen.premium_until > Date.now() + 89 * 86400000);
+  r = await ADM.post('/api/admin/energy', { user_id: 2 });
+  check('Admin: isi energi B sampai penuh (120, premium)', r.status === 200 && r.data.energy === 120);
+  r = await B.get('/api/me');
+  check('Energi B kini 120', r.data.citizen.energy === 120);
+  r = await ADM.post('/api/admin/item', { user_id: 2, commodity: 'Tiket', tier: 1, qty: 5 });
+  check('Admin: beri 5× Tiket T1 ke B', r.status === 200 && r.data.ok);
+  r = await B.get('/api/inventory');
+  const tiketB = r.data.items.find((i) => i.name === 'Tiket');
+  check('Tiket T1 B: 3 → 8', tiketB && tiketB.qty === 8, `tiket=${tiketB?.qty}`);
+  r = await ADM.get('/api/admin/actions');
+  const acts = r.data.actions.map((a) => a.action);
+  check('Log admin mencatat grant emas/premium/energi/barang', ['gold', 'premium', 'energy', 'item'].every((a) => acts.includes(a)), acts.join(','));
+
+  r = await ADM.post('/api/admin/ban', { user_id: 2 });
+  check('Ban tanpa alasan ditolak (400)', r.status === 400);
+  r = await ADM.post('/api/admin/ban', { user_id: 7, reason: 'tes' });
+  check('Admin tidak bisa membanned akun admin', r.status === 400);
+  r = await ADM.post('/api/admin/ban', { user_id: 2, reason: 'Tes banned' });
+  check('Admin: ban B dengan alasan', r.status === 200 && r.data.ok);
+  const B2 = new Client();
+  r = await B2.post('/api/auth/login', { email: 'warga2@test.local', password: 'rahasia123' });
+  check('Login akun banned ditolak + pesan alasan', r.status === 403 && (r.data.error || '').includes('Tes banned'), `status=${r.status} ${r.data.error || ''}`);
+  r = await B.get('/api/me');
+  check('/api/me mengembalikan status banned', r.data.user.is_banned === true && r.data.user.banned_reason === 'Tes banned');
+  r = await ADM.post('/api/admin/unban', { user_id: 2 });
+  check('Admin: unban B', r.status === 200 && r.data.ok);
+  r = await B2.post('/api/auth/login', { email: 'warga2@test.local', password: 'rahasia123' });
+  check('Login B pulih setelah unban', r.status === 200 && r.data.ok);
+  r = await ADM.get('/api/admin/actions');
+  check('Log admin mencatat ban + unban', r.data.actions.some((a) => a.action === 'ban') && r.data.actions.some((a) => a.action === 'unban'));
+
+  r = await R.get('/api/profile/referrer_satu');
+  check('Profil menampilkan ID publik PL-000003', r.data.profile.publicId === 'PL-000003');
+  check('Profil sendiri: kode + 2 pemakai + 200 emas referral', r.data.profile.referral && r.data.profile.referral.uses === 2 && r.data.profile.referral.goldEarned === 200 && r.data.profile.referral.code === refCode);
+  r = await B.get('/api/profile/referrer_satu');
+  check('Profil orang lain: statistik referral tidak ditampilkan', r.data.profile.referral === null);
+  const html2 = await fetch(BASE + '/').then((x) => x.text());
+  check('Form daftar punya field Kode Referral', html2.includes('KODE REFERAL'));
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

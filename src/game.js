@@ -10,13 +10,19 @@ export function xpForLevel(level) { return level * 5; }
 
 export function xpGainForShift() { return 1; }
 
+// Kelelahan menurunkan hasil kerja: mulai 10.000 (×0,75), 15.000 (×0,5).
+// Berlaku untuk gaji USD maupun upah bahan mentah.
+export function fatigueMult(fatigue) {
+  if (fatigue >= 15000) return 0.5;
+  if (fatigue >= 10000) return 0.75;
+  return 1;
+}
+
 // Gaji shift: 100 energi = 1 shift penuh.
 // Gaji dasar per 10 energi 4,80 USD + bonus Ekonomi (0,30 USD per level Ekonomi per 10 energi).
 // Contoh referensi: shift penuh ~48 USD sebelum pajak.
 export function shiftSalary(baseSalary, economyAttr, fatigue) {
-  let mult = 1;
-  if (fatigue >= 15000) mult = 0.5;
-  else if (fatigue >= 10000) mult = 0.75;
+  const mult = fatigueMult(fatigue);
   const gross = baseSalary * (1 + 0.03 * economyAttr) * mult;
   return { gross, net: gross * (1 - INCOME_TAX), tax: gross * INCOME_TAX };
 }

@@ -1,14 +1,14 @@
 // API inti Parlementer: auth (email+password), dashboard, pekerjaan, perusahaan,
 // pasar, valas, peta, inventaris, konvoi, misi, kronik, pencapaian, notifikasi, profil, toko.
 import bcrypt from 'bcryptjs';
-import { sql, one, run, tx } from './db.js';
+import { sql, one, run, tx, ADMIN_EMAIL, generateReferralCode } from './db.js';
 import {
   signToken, cookieOptions, COOKIE_NAME, authRequired, citizenRequired,
-  loadCitizen, isValidEmail, isValidUsername, todayStr,
+  loadCitizen, isValidEmail, isValidUsername, todayStr, publicId,
 } from './util.js';
 import {
   WA_TOPUP_URL, MINT_RATE, INCOME_TAX, IMPORT_TAX, MIN_OFFER_QTY,
-  xpForLevel, xpGainForShift, shiftSalary, trainCost, foodEnergy, DAILY_MISSIONS, CHRONICLE,
+  xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, foodEnergy, DAILY_MISSIONS, CHRONICLE,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
 } from './game.js';
@@ -79,6 +79,14 @@ export function registerCore(app) {
   }
 
   // ---------- AUTH (email + password) ----------
+  // Bonus referral: pemilik kode +100 emas + 2 hari premium; pendaftar baru
+  // yang memakai kode +50 emas + 1 hari premium. Premium diperpanjang dari
+  // premium_until yang masih aktif, atau dari sekarang bila tidak aktif.
+  const REFERRER_GOLD = 100;
+  const REFERRER_PREMIUM_MS = 2 * 24 * 60 * 60 * 1000;
+  const NEWCOMER_GOLD = 50;
+  const NEWCOMER_PREMIUM_MS = 1 * 24 * 60 * 60 * 1000;
+
   app.post('/api/auth/register', r(async (req, res) => {
     const { email, password, username, ref } = req.body || {};
     if (!isValidEmail(email)) return res.status(400).json({ error: 'Format email tidak valid.' });
@@ -88,29 +96,50 @@ export function registerCore(app) {
     if (emailTaken) return res.status(400).json({ error: 'Email ini sudah terdaftar. Silakan masuk.' });
     const nameTaken = await one('SELECT id FROM users WHERE username = ?', [username]);
     if (nameTaken) return res.status(400).json({ error: 'Nama warga ini sudah dipakai orang lain.' });
+    // Referral berbasis KODE unik 8 karakter (bukan nama). Kode tidak valid
+    // = diabaikan, registrasi tetap jalan normal tanpa bonus.
     let referredBy = null;
-    if (ref) {
-      const refUser = await one('SELECT id FROM users WHERE username = ?', [ref]);
+    const refCode = (ref || '').trim().toUpperCase();
+    if (refCode) {
+      const refUser = await one('SELECT id FROM users WHERE referral_code = ?', [refCode]);
       if (refUser) referredBy = refUser.id;
     }
     const hash = await bcrypt.hash(password, 10);
     const now = Date.now();
-    const user = await run(
-      'INSERT INTO users (email, username, pass_hash, referred_by, created_at) VALUES (?,?,?,?,?) RETURNING id',
-      [email.toLowerCase(), username, hash, referredBy, now]);
-    const citizen = await run(
-      `INSERT INTO citizens (user_id, level, xp, energy, gold, usd, region_id, home_region_id, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?) RETURNING id`,
-      [user.id, 1, 0, 100, 50, 500, 1, 1, now]);
-    // Paket awal: 3 Makanan T1, 3 Senjata T1, 3 Tiket T1.
-    for (const name of ['Makanan', 'Senjata', 'Tiket']) {
-      const com = await one('SELECT id FROM commodities WHERE name = ?', [name]);
-      await addItem(citizen.id, com.id, 1, 3);
-    }
-    await notify(citizen.id, 'SISTEM', 'Selamat datang di Parlementer!',
-      'Kamu warga baru Republik Indonesia. Ambil pasokan harianmu dan cari pekerjaan dari ADMIN untuk modal awal.');
-    res.cookie(COOKIE_NAME, signToken(user.id), cookieOptions());
-    res.json({ ok: true, user: { id: user.id, email: email.toLowerCase(), username } });
+    const isAdmin = email.toLowerCase() === ADMIN_EMAIL ? 1 : 0;
+    const result = await tx(async (t) => {
+      const myCode = await generateReferralCode(t);
+      const user = await t.run(
+        'INSERT INTO users (email, username, pass_hash, referred_by, referral_code, premium_until, is_admin, created_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id',
+        [email.toLowerCase(), username, hash, referredBy, myCode, referredBy ? now + NEWCOMER_PREMIUM_MS : 0, isAdmin, now]);
+      const citizen = await t.run(
+        `INSERT INTO citizens (user_id, level, xp, energy, gold, usd, region_id, home_region_id, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?) RETURNING id`,
+        [user.id, 1, 0, 100, 50 + (referredBy ? NEWCOMER_GOLD : 0), 500, 1, 1, now]);
+      // Paket awal: 3 Makanan T1, 3 Senjata T1, 3 Tiket T1.
+      for (const name of ['Makanan', 'Senjata', 'Tiket']) {
+        const com = await t.one('SELECT id FROM commodities WHERE name = ?', [name]);
+        await addItem(citizen.id, com.id, 1, 3, t);
+      }
+      await t.run('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?) RETURNING id',
+        [citizen.id, 'SISTEM', 'Selamat datang di Parlementer!',
+          'Kamu warga baru Republik Indonesia. Ambil pasokan harianmu dan cari pekerjaan dari ADMIN untuk modal awal.', now]);
+      if (referredBy) {
+        // Bonus pemilik kode: +100 emas + 2 hari premium (diperpanjang bila aktif).
+        const refUser = await t.one('SELECT premium_until FROM users WHERE id = ?', [referredBy]);
+        const refCitizen = await t.one('SELECT id FROM citizens WHERE user_id = ?', [referredBy]);
+        const newUntil = Math.max(now, refUser?.premium_until || 0) + REFERRER_PREMIUM_MS;
+        await t.run('UPDATE users SET premium_until = ? WHERE id = ?', [newUntil, referredBy]);
+        if (refCitizen) {
+          await t.run('UPDATE citizens SET gold = gold + ? WHERE id = ?', [REFERRER_GOLD, refCitizen.id]);
+          await t.run('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?) RETURNING id',
+            [refCitizen.id, 'SOSIAL', 'Bonus referral!', `${username} mendaftar memakai kode referralmu. Kamu mendapat +${REFERRER_GOLD} emas + 2 hari Premium.`, now]);
+        }
+      }
+      return { userId: user.id, myCode };
+    });
+    res.cookie(COOKIE_NAME, signToken(result.userId), cookieOptions());
+    res.json({ ok: true, user: { id: result.userId, publicId: publicId(result.userId), email: email.toLowerCase(), username, referralCode: result.myCode } });
   }));
 
   app.post('/api/auth/login', r(async (req, res) => {
@@ -118,11 +147,12 @@ export function registerCore(app) {
     if (!isValidEmail(email) || !password) return res.status(400).json({ error: 'Email dan password wajib diisi.' });
     const user = await one('SELECT * FROM users WHERE email = ?', [email.toLowerCase()]);
     if (!user) return res.status(400).json({ error: 'Email belum terdaftar.' });
+    if (user.is_banned) return res.status(403).json({ error: `Akun ini dibanned: ${user.banned_reason || 'tanpa alasan yang dicantumkan'}.` });
     const ok = await bcrypt.compare(password, user.pass_hash);
     if (!ok) return res.status(400).json({ error: 'Password salah.' });
     res.cookie(COOKIE_NAME, signToken(user.id), cookieOptions());
     const citizen = await loadCitizen(user.id);
-    res.json({ ok: true, user: { id: user.id, email: user.email, username: user.username }, citizen });
+    res.json({ ok: true, user: { id: user.id, publicId: publicId(user.id), email: user.email, username: user.username }, citizen });
   }));
 
   app.post('/api/auth/logout', r(async (req, res) => {
@@ -133,7 +163,13 @@ export function registerCore(app) {
   app.get('/api/auth/me', authRequired, r(async (req, res) => {
     const citizen = await loadCitizen(req.userId);
     if (!citizen) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
-    res.json({ user: { id: citizen.user_id, email: citizen.email, username: citizen.username }, citizen });
+    res.json({
+      user: {
+        id: citizen.user_id, publicId: publicId(citizen.user_id), email: citizen.email, username: citizen.username,
+        is_admin: !!citizen.is_admin, is_banned: !!citizen.is_banned, banned_reason: citizen.banned_reason || '',
+      },
+      citizen,
+    });
   }));
 
   // ---------- DASHBOARD / WARGA ----------
@@ -149,8 +185,20 @@ export function registerCore(app) {
     const activeWars = await sql("SELECT w.*, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active' ORDER BY w.created_at DESC");
     const votingLaws = await sql("SELECT l.*, u.username AS proposer FROM laws l JOIN citizens c ON c.id = l.proposer_id JOIN users u ON u.id = c.user_id WHERE l.status = 'voting' AND l.ends_at > ? ORDER BY l.ends_at ASC", [Date.now()]);
     const isPremium = c.premium_until > Date.now();
+    const refUses = await one('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?', [c.user_id]);
+    const referral = {
+      code: c.referral_code,
+      uses: Number(refUses.n),
+      // Setiap referral berhasil memberi pemilik kode +100 emas.
+      goldEarned: Number(refUses.n) * 100,
+    };
     res.json({
+      user: {
+        id: c.user_id, publicId: publicId(c.user_id), email: c.email, username: c.username,
+        is_admin: !!c.is_admin, is_banned: !!c.is_banned, banned_reason: c.banned_reason || '',
+      },
       citizen: { ...c, isPremium },
+      referral,
       region, party, job,
       unread: Number(unread.n), unreadDm: Number(unreadDm.n),
       world, population: Number(population.n),
@@ -311,13 +359,19 @@ export function registerCore(app) {
 
   // ---------- PROFIL ----------
   app.get('/api/profile/:username', authRequired, r(async (req, res) => {
-    const u = await one('SELECT u.id, u.username, u.premium_until, c.* FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.username = ?', [req.params.username]);
+    const u = await one('SELECT u.id, u.username, u.premium_until, u.referral_code, c.* FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.username = ?', [req.params.username]);
     if (!u) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
     const region = await one('SELECT name FROM regions WHERE id = ?', [u.region_id]);
     const party = u.party_id ? await one('SELECT name, tag FROM parties WHERE id = ?', [u.party_id]) : null;
     const companies = await sql('SELECT id, name, type FROM companies WHERE owner_id = ?', [u.id]);
     const articles = await sql('SELECT id, title, created_at FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT 5', [u.id]);
-    res.json({ profile: { ...u, pass_hash: undefined, region_name: region?.name, party, companies, articles, isPremium: u.premium_until > Date.now() } });
+    // Statistik referral hanya untuk pemilik profil sendiri.
+    let referral = null;
+    if (req.userId === u.id) {
+      const uses = await one('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?', [u.id]);
+      referral = { code: u.referral_code, uses: Number(uses.n), goldEarned: Number(uses.n) * 100 };
+    }
+    res.json({ profile: { ...u, publicId: publicId(u.id), referral_code: u.referral_code, referral, pass_hash: undefined, region_name: region?.name, party, companies, articles, isPremium: u.premium_until > Date.now() } });
   }));
   app.post('/api/profile/bio', authRequired, citizenRequired, r(async (req, res) => {
     const { bio } = req.body || {};
@@ -385,6 +439,23 @@ export function registerCore(app) {
     const job = await one('SELECT * FROM jobs WHERE id = ?', [c.job_id]);
     const { gross, net } = shiftSalary(job.salary, c.attr_eco, c.fatigue);
     let goodsNote = '';
+    if (job.salary_type === 'goods') {
+      // Lowongan ADMIN: dibayar BAHAN MENTAH, bukan uang (tanpa pajak).
+      // Jumlah dipengaruhi kelelahan seperti gaji (×0,75 / ×0,5).
+      const com = await one('SELECT * FROM commodities WHERE name = ?', [job.resource]);
+      if (!com) throw Object.assign(new Error('Bahan upah lowongan ini tidak dikenal.'), { status: 500 });
+      const qty = Math.max(1, Math.floor((job.pay_qty || 0) * fatigueMult(c.fatigue)));
+      const usdValue = Math.round(qty * com.ref_usd * 100) / 100;
+      await tx(async (t) => {
+        await t.run('UPDATE citizens SET energy = energy - 100, energy_spent_today = energy_spent_today + 100, fatigue = fatigue + 100, shifts = shifts + 1 WHERE id = ?', [c.id]);
+        await addItem(c.id, com.id, 1, qty, t);
+      });
+      const note = `Dibayar ${qty}× ${job.resource} (setara ~${usdValue} USD).`;
+      await addXp(c, xpGainForShift());
+      await chronicleDone(c, 'shift');
+      await setMission(c, 'energy', Math.min(500, (c.energy_spent_today || 0) + 100));
+      return res.json({ ok: true, gross: usdValue, net: 0, tax: 0, goods: `${qty}× ${job.resource}`, note });
+    }
     if (job.salary_type === 'share') {
       // Bagi hasil: 80–98% dibayar dalam bentuk barang (sumber daya perusahaan).
       const pct = 80 + Math.min(18, Math.floor(job.share_pct || 90) - 80);

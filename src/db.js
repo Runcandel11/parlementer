@@ -5,10 +5,32 @@
 // Semua INSERT memakai `RETURNING id` agar lastID konsisten di kedua backend.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Email yang menjadi admin otomatis (satu-satunya admin; tidak ada endpoint
+// promosi admin). Dibandingkan case-insensitive (email selalu disimpan lowercase).
+export const ADMIN_EMAIL = 'koboijuniorkhalid@gmail.com';
+
+// Kode referral: 8 karakter alfanumerik tanpa karakter ambigu (tanpa 0/O, 1/I/l/L).
+const REFERRAL_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export function makeReferralCode() {
+  let code = '';
+  for (let i = 0; i < 8; i++) code += REFERRAL_ALPHABET[crypto.randomInt(REFERRAL_ALPHABET.length)];
+  return code;
+}
+
+// Buat kode referral yang belum dipakai siapa pun (regenerasi bila bentrok).
+export async function generateReferralCode(t) {
+  const db = t || { one };
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const code = makeReferralCode();
+    const taken = await db.one('SELECT id FROM users WHERE referral_code = ?', [code]);
+    if (!taken) return code;
+  }
+  throw new Error('Gagal membuat kode referral unik.');
+}
 // PG_MEM_TEST=1 memakai pg-mem (emulator Postgres di memori) untuk menguji jalur
 // Postgres tanpa server Postgres sungguhan. Bukan untuk production.
 export const isPg = !!process.env.DATABASE_URL || process.env.PG_MEM_TEST === '1';
@@ -148,8 +170,20 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT NOT NULL UNIQUE,
   pass_hash TEXT NOT NULL,
   referred_by INTEGER,
+  referral_code TEXT UNIQUE,
   premium_until BIGINT NOT NULL DEFAULT 0,
   is_admin INTEGER NOT NULL DEFAULT 0,
+  is_banned INTEGER NOT NULL DEFAULT 0,
+  banned_reason TEXT NOT NULL DEFAULT '',
+  banned_at BIGINT NOT NULL DEFAULT 0,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admin_actions (
+  id ${id},
+  admin_id INTEGER NOT NULL,
+  target_id INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS citizens (
@@ -262,6 +296,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   title TEXT NOT NULL,
   salary REAL NOT NULL,
   salary_type TEXT NOT NULL DEFAULT 'fixed',
+  resource TEXT NOT NULL DEFAULT '',
+  pay_qty INTEGER NOT NULL DEFAULT 0,
   share_pct REAL NOT NULL DEFAULT 0,
   level_min INTEGER NOT NULL DEFAULT 1,
   tier INTEGER NOT NULL DEFAULT 1,
@@ -541,13 +577,18 @@ export const COMMODITIES = [
 ];
 
 // Lowongan resmi ADMIN — satu-satunya pekerjaan di awal permainan (modal awal).
+// ATURAN: lowongan ADMIN dibayar BAHAN MENTAH, bukan uang. `salary` hanya nilai
+// setara USD (untuk statistik/sortir); yang diterima per shift adalah `qty`
+// unit `resource` (harga pasar bahan ~1–2 USD/unit, jadi jumlahnya puluhan
+// unit agar nilainya ≈ gaji lama ~48 USD/shift). Pekerjaan perusahaan pemain
+// tetap dibayar seperti semula (USD tetap / bagi hasil).
 export const ADMIN_JOBS = [
-  { title: 'Pekerja Gudang Pelabuhan', salary: 48, region: 'Kepulauan Riau', desc: 'Bongkar muat peti kemas di pelabuhan. Kerja fisik, bayaran pasti.' },
-  { title: 'Kurir Kota', salary: 46, region: 'Kepulauan Riau', desc: 'Antar paket keliling kota. Butuh stamina dan hafal jalan.' },
-  { title: 'Pembersih Jalan Kota', salary: 44, region: 'Jakarta', desc: 'Jaga kebersihan jalan ibu kota setiap pagi.' },
-  { title: 'Asisten Toko Kelontong', salary: 45, region: 'Jawa Barat', desc: 'Melayani pembeli, menata rak, dan menjaga kasir.' },
-  { title: 'Buruh Tani', salary: 42, region: 'Jawa Timur', desc: 'Panen dan olah hasil kebun. Bonus panen saat musim raya.' },
-  { title: 'Penjaga Malam Pasar', salary: 47, region: 'Sumatera Utara', desc: 'Ronda malam di pasar tradisional sampai subuh.' },
+  { title: 'Pekerja Gudang Pelabuhan', salary: 48, resource: 'Besi Mentah', qty: 44, region: 'Kepulauan Riau', desc: 'Bongkar muat peti kemas di pelabuhan. Kerja fisik, dibayar besi mentah.' },
+  { title: 'Kurir Kota', salary: 46, resource: 'Minyak Mentah', qty: 40, region: 'Kepulauan Riau', desc: 'Antar paket keliling kota. Butuh stamina dan hafal jalan.' },
+  { title: 'Pembersih Jalan Kota', salary: 44, resource: 'Kayu', qty: 44, region: 'Jakarta', desc: 'Jaga kebersihan jalan ibu kota setiap pagi.' },
+  { title: 'Asisten Toko Kelontong', salary: 45, resource: 'Gandum Mentah', qty: 38, region: 'Jawa Barat', desc: 'Melayani pembeli, menata rak, dan menjaga kasir.' },
+  { title: 'Buruh Tani', salary: 42, resource: 'Kapas Mentah', qty: 21, region: 'Jawa Timur', desc: 'Panen dan olah hasil kebun. Bonus panen saat musim raya.' },
+  { title: 'Penjaga Malam Pasar', salary: 47, resource: 'Batu Bara', qty: 39, region: 'Sumatera Utara', desc: 'Ronda malam di pasar tradisional sampai subuh.' },
 ];
 
 export async function closeDb() {
@@ -575,6 +616,8 @@ export async function initDb() {
     if (isPg) await cleanupOrphanTypes(t);
     await t.exec(schema(dialect));
     if (isPg) await migrateTimestampsToBigint(t);
+    await migrateUserColumns(t);
+    await migrateAdminJobs(t);
     await seed(t);
   });
 }
@@ -587,7 +630,7 @@ export async function initDb() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world'];
+const TABLE_NAMES = ['users', 'admin_actions', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -629,6 +672,55 @@ async function migrateTimestampsToBigint(t) {
   }
 }
 
+// Migrasikan kolom users yang ditambahkan setelah deploy pertama
+// (referral_code, is_banned, banned_reason, banned_at) untuk database yang
+// sudah terlanjur dibuat dengan skema lama (Neon live + SQLite lama).
+// Idempotent: kolom yang sudah ada tidak disentuh. Setelah itu:
+//  - semua user yang belum punya kode referral dibuatkan kode unik;
+//  - akun ADMIN_EMAIL selalu ditandai is_admin = 1 (bila sudah terdaftar).
+async function migrateUserColumns(t) {
+  if (isPg) {
+    await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE');
+    await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned INTEGER NOT NULL DEFAULT 0');
+    await t.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_reason TEXT NOT NULL DEFAULT ''");
+    await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at BIGINT NOT NULL DEFAULT 0');
+  } else {
+    const cols = await t.sql('PRAGMA table_info(users)');
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has('referral_code')) await t.exec('ALTER TABLE users ADD COLUMN referral_code TEXT UNIQUE');
+    if (!names.has('is_banned')) await t.exec('ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0');
+    if (!names.has('banned_reason')) await t.exec("ALTER TABLE users ADD COLUMN banned_reason TEXT NOT NULL DEFAULT ''");
+    if (!names.has('banned_at')) await t.exec('ALTER TABLE users ADD COLUMN banned_at BIGINT NOT NULL DEFAULT 0');
+  }
+  const missing = await t.sql('SELECT id FROM users WHERE referral_code IS NULL');
+  for (const u of missing) {
+    const code = await generateReferralCode(t);
+    await t.run('UPDATE users SET referral_code = ? WHERE id = ?', [code, u.id]);
+  }
+  await t.run('UPDATE users SET is_admin = 1 WHERE email = ?', [ADMIN_EMAIL]);
+}
+
+// Migrasikan lowongan ADMIN lama (dibayar USD) ke aturan baru (dibayar bahan
+// mentah). Database live sudah berisi 6 lowongan ADMIN dari seed lama — tanpa
+// migrasi ini mereka tetap bergaji USD dan kolom resource/pay_qty-nya kosong.
+// Idempotent: nilai yang disetel sama setiap kali dijalankan.
+async function migrateAdminJobs(t) {
+  if (isPg) {
+    await t.exec("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS resource TEXT NOT NULL DEFAULT ''");
+    await t.exec('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS pay_qty INTEGER NOT NULL DEFAULT 0');
+  } else {
+    const cols = await t.sql('PRAGMA table_info(jobs)');
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has('resource')) await t.exec("ALTER TABLE jobs ADD COLUMN resource TEXT NOT NULL DEFAULT ''");
+    if (!names.has('pay_qty')) await t.exec('ALTER TABLE jobs ADD COLUMN pay_qty INTEGER NOT NULL DEFAULT 0');
+  }
+  for (const j of ADMIN_JOBS) {
+    await t.run(
+      "UPDATE jobs SET salary_type = 'goods', resource = ?, pay_qty = ?, salary = ? WHERE is_admin = 1 AND title = ?",
+      [j.resource, j.qty, j.salary, j.title]);
+  }
+}
+
 async function seed(t = { one, run }) {
   const now = Date.now();
   const regionCount = await t.one('SELECT COUNT(*) AS c FROM regions');
@@ -656,9 +748,9 @@ async function seed(t = { one, run }) {
   if (Number(jobCount.c) === 0) {
     for (const j of ADMIN_JOBS) {
       const reg = await t.one('SELECT id FROM regions WHERE name = ?', [j.region]);
-      await t.run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, level_min, tier, seats, seats_taken, region_id, description, created_at)
-        VALUES (NULL,1,?,?,?,?,?,4,0,?,?,?) RETURNING id`,
-        [j.title, j.salary, 'fixed', 1, 1, reg.id, j.desc, now]);
+      await t.run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, resource, pay_qty, level_min, tier, seats, seats_taken, region_id, description, created_at)
+        VALUES (NULL,1,?,?, 'goods', ?, ?,1,1,4,0,?,?,?) RETURNING id`,
+        [j.title, j.salary, j.resource, j.qty, reg.id, j.desc, now]);
     }
   }
   const world = await t.one('SELECT * FROM world WHERE id = 1');
