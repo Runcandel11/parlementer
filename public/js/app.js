@@ -450,7 +450,7 @@ const NAV = [
     ['elections', 'Pemilu', '🗳'], ['orgs', 'Organisasi', '🤝'],
   ]},
   { group: 'PERANG', items: [
-    ['war', 'Perang Tanah Air', '🛡️'], ['war-world', 'Perang Dunia', '🔥'],
+    ['military', 'Militer', '⚔️'], ['war', 'Perang Tanah Air', '🛡️'], ['war-world', 'Perang Dunia', '🔥'],
   ]},
   { group: 'BANTUAN', items: [
     ['help', 'Meja Bantuan', '🎧'], ['contact', 'Kontak', '✉️'],
@@ -897,6 +897,13 @@ ROUTES.dashboard = async () => {
   ${ME.votingLaws.length ? `<div class="panel"><h3>🏛 UU SEDANG DIVOTING</h3>
     ${ME.votingLaws.map((l) => `<div class="kv"><span class="k">${esc(l.title)}</span><span class="v">${l.yes} Ya / ${l.abstain} / ${l.no} Tidak</span></div>`).join('')}
     <button class="btn-gold btn-sm" data-goto="#/parliament">Buka Parlemen</button></div>` : ''}
+  ${ME.worldEvent ? `<div class="panel" id="dash-event"><h3>${esc(ME.worldEvent.icon)} EVENT DUNIA: ${esc(ME.worldEvent.name).toUpperCase()}</h3>
+    <p class="muted small">${esc(ME.worldEvent.desc)}</p>
+    <div class="kv"><span class="k">Efek minggu ini</span><span class="v gold-text">${esc(ME.worldEvent.effect)}</span></div></div>` : ''}
+  ${ME.military ? `<div class="panel" id="dash-military">
+    <div class="panel-head"><h3>⚔️ MILITER</h3><button class="btn-text gold" type="button" data-goto="#/military">KELOLA ›</button></div>
+    <div class="kv"><span class="k">Kekuatan</span><span class="v">${ME.military.power} · Kerusakan perang ×${ME.military.mult}</span></div>
+    <div class="kv"><span class="k">Pasukan</span><span class="v">${ME.military.count}/${ME.military.cap} unit · Perawatan ${ME.military.upkeep} USD/hari</span></div></div>` : ''}
   <div class="panel">
     <div class="profile-hero ${heroCountry ? '' : 'free'}">
       ${heroCountry ? '' : '<span class="hero-q" aria-hidden="true">?</span>'}
@@ -1390,6 +1397,8 @@ ROUTES.profile = async (username) => {
     <div class="kv"><span class="k">Bergabung</span><span class="v">${fmtDate(pr.created_at)}</span></div>
     <div class="kv"><span class="k">Terakhir main</span><span class="v">${pr.last_seen_at ? ago(pr.last_seen_at) : 'Belum pernah'}</span></div>
     <div class="kv"><span class="k">Skor Kredit</span><span class="v"><b style="color:${pr.credit?.color || '#3fb950'}">${pr.credit_score ?? 100}/100 · ${esc(pr.credit?.label || 'Baik')}</b></span></div>
+    <div class="kv"><span class="k">Reputasi Dagang</span><span class="v"><b>${esc(pr.trade_reputation || 'Pedagang Baru')}</b> · ${fmt(pr.trades_completed || 0)} transaksi selesai</span></div>
+    <div class="kv"><span class="k">Kekuatan Militer</span><span class="v">⚔️ ${pr.military_power ?? 0}</span></div>
     ${pr.bio ? `<p style="margin-top:10px">${esc(pr.bio)}</p>` : ''}
     ${pr.user_id === ME.citizen.user_id ? `<div style="margin-top:12px">
       <label class="small muted">BIOGRAFI (maks 1000 karakter)</label>
@@ -2067,7 +2076,7 @@ function marketPage(scope) {
               <div class="offer-title">${esc(com.name)} <span class="tier">T${o.tier}</span> × ${fmt(o.qty)}</div>
               <div class="offer-own">Milikmu: ${fmt(own(com.id, o.tier))}</div>
               ${isBest ? '<span class="badge-best">TERBAIK</span>' : ''}
-              <div class="offer-seller"><span class="avatar-initial" style="width:20px;height:20px;font-size:11px">${esc((o.seller[0] || '?').toUpperCase())}</span> ${sellerTag}${esc(o.seller)}</div>
+              <div class="offer-seller"><span class="avatar-initial" style="width:20px;height:20px;font-size:11px">${esc((o.seller[0] || '?').toUpperCase())}</span> ${sellerTag}${esc(o.seller)}${o.seller_reputation ? ` · <span class="muted small">⭐ ${esc(o.seller_reputation)}</span>` : ''}</div>
             </div>
             <div class="offer-price">
               <div class="big">${scope === 'global' ? fmt(unit, 2) + ' <small>g</small>' : fmtRp(unit)}</div>
@@ -2376,7 +2385,7 @@ ROUTES.companies = async () => {
     <p class="small">• <b>Produksi harian:</b> setiap perusahaan menghasilkan produk setiap hari (otomatis saat pergantian hari) dan langsung masuk inventaris pemilik.</p>
     <p class="small">• <b>Karyawan:</b> setiap shift karyawan menambah produk ke inventaris pemilik — sekitar 1/10 produksi harian per shift penuh. Produk kecil langsung masuk; produk besar seperti Drone terakumulasi beberapa shift.</p>
     <p class="small">• <b>Gaji:</b> gaji karyawan dibayar oleh sistem, <b>bukan</b> dipotong dari pemilik — mendirikan perusahaan tidak membuatmu keluar uang tiap giliran.</p>
-    <p class="small">• <b>Pabrik:</b> butuh 2× Besi Mentah untuk mengolah 1× Bahan Bangunan — produksi maupun bonus shift berhenti bila bahan habis.</p>
+    <p class="small">• <b>Bahan baku:</b> semua perusahaan (kecuali Pabrik Sumber Daya) butuh bahan baku dari inventaris pemilik — Pabrik: 2× Besi Mentah per Bahan Bangunan; Industri Ringan: 1× Gandum Mentah per Makanan; Industri Berat: 1× Besi Mentah + 1× Minyak Mentah per Drone. Produksi maupun bonus shift berhenti bila bahan habis.</p>
     <p class="small">• <b>Milikmu:</b> pemilik bisa mengubah nama, tentang, dan bahan yang diproduksi, serta memasang foto perusahaan.</p>
   </div>
   <div class="panel"><h3>➕ DIRIKAN PERUSAHAAN</h3>
@@ -2385,6 +2394,7 @@ ROUTES.companies = async () => {
         <div class="card ${''}">
           <h4>${esc(t.name)}</h4>
           <p class="muted small">${esc(t.desc)}</p>
+          <p class="muted small">${esc(t.input_text || '')}</p>
           <p class="price-big gold-text">${fmt(t.cost)} <small style="font-size:14px">emas</small></p>
           <p class="muted small">Di wilayahmu saat ini: ${esc(ME.region?.name || '')}</p>
           <button class="btn-gold btn-sm" data-found="${t.type}">DIRIKAN</button>
@@ -2400,6 +2410,7 @@ ROUTES.companies = async () => {
       <p class="muted small">${esc(c.type)} · ${esc(c.region_name)} · ${c.employees} karyawan${c.resource ? ' · Produksi: ' + esc(c.resource) : ''}</p>
       ${c.about ? `<p class="small">${esc(c.about)}</p>` : ''}
       <p class="muted small">🎁 Bonus shift: ${esc(c.bonus_text || '')} · Total dari karyawan: ${fmt(c.bonus_given || 0)} unit</p>
+      <p class="muted small">🧱 ${esc(c.input_text || '')}</p>
       <div class="row"><input placeholder="Judul lowongan baru" id="job-title-${c.id}"><input placeholder="Gaji (Rp)" type="number" id="job-salary-${c.id}" style="max-width:120px">
       <button class="btn-gold btn-sm" data-newjob="${c.id}">BUKA LOWONGAN</button></div>
       <div class="row" style="margin-top:8px"><button class="btn-gold btn-sm" data-editco="${c.id}">✏️ EDIT</button>
@@ -2695,12 +2706,23 @@ ROUTES.regions = async (id) => {
     </div>
     <div class="panel"><h3>⚖️ POLITIK</h3>
       <div class="kv"><span class="k">Negara</span><span class="v">${r.country_name ? esc(r.country_name) : 'Belum Bernegara'}</span></div>
+      <div class="kv"><span class="k">Penguasa wilayah</span><span class="v">${r.controller === 'pemberontak' ? `⚔️ Panglima Perang: ${esc(r.controller_name || '—')}` : r.controller === 'negara' ? esc(r.country_name || '—') : 'Bebas — tidak ada yang menguasai'}</span></div>
+      ${r.controller === 'pemberontak' ? '<p class="muted small">Wilayah ini dikuasai pemberontak — pajak pasarnya mengalir ke panglima perang, bukan ke kas negara.</p>' : ''}
       <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${d.taxIncome ?? 0}%${r.country_name ? '' : ' · wilayah yang belum bernegara tidak memungut pajak'}</span></div>
       <div class="kv"><span class="k">Pajak produksi</span><span class="v">1%</span></div>
       <div class="kv"><span class="k">Pajak impor / ekspor</span><span class="v">2% / 2%</span></div>
       <div class="kv"><span class="k">Perbatasan</span><span class="v">Terbuka</span></div>
     </div>
+    <div class="panel"><h3>👥 DEMOGRAFI</h3>
+      <div class="kv"><span class="k">Total warga (domisili)</span><span class="v">${fmt(d.demographics?.total ?? 0)}</span></div>
+      <div class="kv"><span class="k">Pemula (Lv 1–4)</span><span class="v">${fmt(d.demographics?.pemula ?? 0)}</span></div>
+      <div class="kv"><span class="k">Aktif (Lv 5–9)</span><span class="v">${fmt(d.demographics?.aktif ?? 0)}</span></div>
+      <div class="kv"><span class="k">Veteran (Lv 10+)</span><span class="v">${fmt(d.demographics?.veteran ?? 0)}</span></div>
+      <div class="kv"><span class="k">Level rata-rata</span><span class="v">${d.demographics?.avgLevel ?? 0}</span></div>
+      <div class="kv"><span class="k">⚔️ Kekuatan militer warga</span><span class="v">${fmt(d.regionPower ?? 0)}</span></div>
+    </div>
     <div class="panel"><h3>✈️ PERJALANAN</h3>
+      ${d.worldEvent?.key === 'badai' ? '<p class="muted small">⛈️ Badai Besar: semua perjalanan +5 menit minggu ini.</p>' : ''}
       ${d.mine
         ? `<p class="muted">Kamu di sini.</p>${d.home
           ? '<p class="teal-text small">🏠 Ini wilayah kewarganegaraanmu.</p>'
@@ -3282,6 +3304,7 @@ ROUTES.war = async (id) => {
           <button class="btn-gold" data-goto="#/regions/${w.region_id}">TERBANG KE SANA →</button>`
         : `<p class="muted small">Energi ${ME.citizen.energy}/100 · Senjata di inventaris dipakai sebagai amunisi (1 senjata per serangan).</p>
           ${d.bonuses?.length ? `<p class="muted small">Bonus aktif: ${d.bonuses.map(esc).join(' · ')}</p>` : ''}
+          <p class="muted small">⚔️ Kekuatan militermu: ${d.militaryPower ?? 0} (kerusakan ×${d.militaryMult ?? 1}) — <a data-goto="#/military" style="cursor:pointer" class="gold-text">rekrut pasukan</a>.</p>
           <div class="row">
             <button class="btn-gold" data-attack="attacker|Senjata">SERANG SEBAGAI PENYERANG 🔥</button>
             <button class="btn-ghost" data-attack="defender|Senjata">BELAH SEBAGAI PEMBELA 🛡️</button>
@@ -3328,6 +3351,50 @@ ROUTES['war-world'] = async () => {
     <p class="muted small">${esc(w.region_name)} · ${fmt(w.score_a)} vs ${fmt(w.score_d)}</p>
     <button class="btn-gold btn-sm" data-goto="#/war/${w.id}">BUKA FRONT</button></div>`).join('')
     : emptyState('🌍', 'Belum ada perang dunia', 'Dunia masih damai. Pemberontakan dimulai dari wilayah (Peta).')}`);
+};
+
+// ---------- MILITER (Tahap 6, v4.0.0) ----------
+// Rekrut unit (komoditas + USD), bubarkan, lihat kekuatan + perawatan.
+// Kekuatan memperkuat serangan perang (pengali ×1,00–1,50, maks di 100).
+ROUTES.military = async () => {
+  const d = await api('/api/military');
+  const defs = Object.values(d.defs || {});
+  const owned = Object.fromEntries((d.units || []).map((u) => [u.unit_type, u.qty]));
+  $('#page').innerHTML = page('MILITER', 'Pasukanmu memperkuat setiap serangan perang — dan menelan biaya perawatan setiap hari.', `
+  <div class="stat-grid">
+    <div class="stat-cell"><div class="stat-label">⚔️ Kekuatan</div><div class="stat-num">${fmt(d.power)}</div><div class="stat-sub">kerusakan perang ×${d.mult}</div></div>
+    <div class="stat-cell"><div class="stat-label">🪖 Pasukan</div><div class="stat-num">${fmt(d.count)}<span style="font-size:18px;color:var(--muted)">/${fmt(d.cap)}</span></div><div class="stat-sub">batas naik 10 per level</div></div>
+    <div class="stat-cell"><div class="stat-label">💰 Perawatan</div><div class="stat-num">${fmt(d.upkeep)}</div><div class="stat-sub">USD per hari</div></div>
+    <div class="stat-cell"><div class="stat-label">🏆 Kekuatan Teratas</div><div class="stat-num" style="font-size:20px">${d.top?.[0] ? esc(d.top[0].username) : '—'}</div><div class="stat-sub">${d.top?.[0] ? fmt(d.top[0].power) + ' kekuatan' : 'belum ada pasukan'}</div></div>
+  </div>
+  <div class="panel"><h3>🪖 REKRUT PASUKAN</h3>
+    <p class="muted small">Bayar komoditas dari inventaris + USD. Perawatan harian dipotong tiap pergantian hari — bila saldo kurang, unit termahal desersi dulu.</p>
+    ${defs.map((u) => `
+    <div class="card"><h4>${esc(u.name)}</h4>
+      <p class="muted small">${esc(u.desc)}</p>
+      <div class="kv"><span class="k">Kekuatan per unit</span><span class="v">${u.power}</span></div>
+      <div class="kv"><span class="k">Biaya rekrut</span><span class="v">${u.commodityQty}× ${esc(u.commodity)} + ${fmt(u.usd)} USD</span></div>
+      <div class="kv"><span class="k">Perawatan</span><span class="v">${u.upkeep} USD/hari</span></div>
+      <div class="kv"><span class="k">Milikmu</span><span class="v">${fmt(owned[u.type] || 0)} unit</span></div>
+      <div class="row"><input type="number" id="recruit-qty-${u.type}" value="1" min="1" max="50" style="max-width:90px" aria-label="Jumlah ${esc(u.name)}">
+      <button class="btn-gold btn-sm" data-recruit="${u.type}">REKRUT</button>
+      ${owned[u.type] ? `<button class="btn-ghost btn-sm" data-disband="${u.type}">BUBARKAN 1</button>` : ''}</div>
+    </div>`).join('')}
+  </div>
+  <div class="panel"><h3>🏆 KEKUATAN MILITER TERATAS</h3>
+    ${d.top?.length ? d.top.map((t, i) => `<div class="kv"><span class="k">#${i + 1} <span data-goto="#/profile/${encodeURIComponent(t.username)}" style="cursor:pointer" title="Lihat profil ${esc(t.username)}">${esc(t.username)}</span></span><span class="v">${fmt(t.power)} kekuatan · ${fmt(t.count)} unit</span></div>`).join('')
+      : '<p class="muted">Belum ada yang merekrut pasukan.</p>'}
+  </div>`);
+  $$('[data-recruit]').forEach((b) => b.onclick = async () => {
+    const qty = Number($('#recruit-qty-' + b.dataset.recruit)?.value || 1);
+    try { const r = await post('/api/military/recruit', { type: b.dataset.recruit, qty }); toast(`Direkrut ${qty}× ${d.defs[b.dataset.recruit].name} — kekuatanmu kini ${r.power} (×${r.mult}).`); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-disband]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Bubarkan 1 unit ini? Tidak ada pengembalian dana/barang.')) return;
+    try { await post('/api/military/disband', { type: b.dataset.disband, qty: 1 }); toast('1 unit dibubarkan.'); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
 };
 
 // ---------- PERS ----------

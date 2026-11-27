@@ -1,7 +1,7 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
 import { sql, one, run, tx, forUpdate, convoyBuildings, getParliamentOpensAt } from './db.js';
 import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl, requireCredit } from './util.js';
-import { warDamage, warDamageWithBonus, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR } from './game.js';
+import { warDamage, warDamageWithBonus, unitDamageMult, worldEventFor, MILITARY_UNITS, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR } from './game.js';
 
 // Ruang chat publik yang selalu ada. Ruang wilayah (region_<id>) bersifat
 // dinamis — divalidasi terpisah di validateRoom (hanya wilayah sendiri).
@@ -18,6 +18,23 @@ export async function notify(citizenId, category, title, content = '') {
 export async function notifyAll(category, title, content = '') {
   await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) SELECT id, ?, ?, ?, ? FROM citizens',
     [category, title, content, Date.now()]);
+}
+
+// Kekuatan militer warga (Tahap 6): jumlah (qty × power) semua unitnya.
+// Dipakai api-civic (serang + detail perang) dan api-core (/api/me,
+// profil). Tanpa unit = 0. t = handle tx (opsional) — tanpa t memakai
+// koneksi biasa; ini hanya baca, tidak perlu kunci baris.
+export async function militaryPowerOf(citizenId, t) {
+  const rows = t
+    ? await t.sql('SELECT unit_type, qty FROM military_units WHERE citizen_id = ?', [citizenId])
+    : await sql('SELECT unit_type, qty FROM military_units WHERE citizen_id = ?', [citizenId]);
+  return rows.reduce((s, r) => s + (MILITARY_UNITS[r.unit_type]?.power || 0) * (r.qty || 0), 0);
+}
+export async function militaryUnitsOf(citizenId, t) {
+  const rows = t
+    ? await t.sql('SELECT unit_type, qty FROM military_units WHERE citizen_id = ? AND qty > 0 ORDER BY unit_type', [citizenId])
+    : await sql('SELECT unit_type, qty FROM military_units WHERE citizen_id = ? AND qty > 0 ORDER BY unit_type', [citizenId]);
+  return rows;
 }
 
 // --- Helper bersama Tahap 5 (dipakai juga api-core.js + tick.js) ---
@@ -50,10 +67,14 @@ export function countrySummary(c) {
 // Tarif pajak penghasilan yang berlaku untuk warga negara ini, sebagai
 // pecahan (0.02). Tanpa negara = 0% (tidak ada negara = tidak ada pajak).
 // Liberalisme: −1 poin dari tarif (minimal 0%).
-export function getIncomeTaxRate(t, country) {
+export function getIncomeTaxRate(t, country, day = null) {
   const base = Number(country?.tax_income) || 0;
   const delta = ideologyDef(country?.ideology).taxDelta;
-  return Math.max(0, base + delta) / 100;
+  let rate = Math.max(0, base + delta) / 100;
+  // Event dunia (Tahap 6): minggu Pasar Bergairah -> pajak −1 poin.
+  // day = null (pemanggil lama / tes tanpa hari) = tanpa efek event.
+  if (day && worldEventFor(day).key === 'booming') rate = Math.max(0, rate - 0.01);
+  return rate;
 }
 // Pengali upah lowongan ADMIN untuk warga negara ini. Sosialisme: ×1.1
 // (dikalikan di atas admin_pay_mult hasil UU — keduanya berlaku).
@@ -132,6 +153,9 @@ export async function warDamageBonus(t, citizenId, country) {
   if (Number(country?.mobilization_until) > now) { mult *= MOBILIZE_DAMAGE_MULT; labels.push('Mobilisasi +10%'); }
   if (await hasDefensePact(t, citizenId)) { mult *= DEFENSE_PACT_DAMAGE_MULT; labels.push('Pakta Pertahanan +10%'); }
   if (country && ideologyDef(country.ideology).warDamageMult > 1) { mult *= ideologyDef(country.ideology).warDamageMult; labels.push('Nasionalisme +10%'); }
+  // Event dunia (Tahap 6): minggu Darurat Militer -> kerusakan +10%.
+  const w = await t.one('SELECT day FROM world WHERE id = 1');
+  if (worldEventFor(w?.day || 1).key === 'darurat') { mult *= 1.1; labels.push('Darurat Militer +10%'); }
   return { mult, labels };
 }
 
@@ -266,7 +290,7 @@ export function registerCivic(app) {
         [cleanName, ide.id, sys.id, c.id, reg.name, new Date(now).toISOString().slice(0, 10)]);
       const upd = await t.run('UPDATE citizens SET gold = gold - ? WHERE id = ? AND gold >= ?', [COUNTRY_FORM_COST_GOLD, c.id, COUNTRY_FORM_COST_GOLD]);
       if (!upd.changes) throw Object.assign(new Error(`Mendirikan negara butuh ${COUNTRY_FORM_COST_GOLD} emas.`), { status: 400 });
-      await t.run('UPDATE regions SET country_id = ? WHERE id = ?', [ins.id, reg.id]);
+      await t.run("UPDATE regions SET country_id = ?, controller = 'negara', controller_id = ? WHERE id = ?", [ins.id, ins.id, reg.id]);
       // Jadwalkan pemilu pertama negara ini.
       const presOpens = now + PRESIDENT_ELECTION_DELAY_DAYS * 24 * 60 * 60 * 1000;
       await t.run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','scheduled',?,?,?,?) RETURNING id",
@@ -887,7 +911,13 @@ export function registerCivic(app) {
     // ideologi Nasionalisme). Tanpa negara, hanya pakta yang bisa berlaku.
     const country = await getMyCountry({ one }, req.citizen);
     const bonus = await warDamageBonus({ one }, req.citizen.id, country);
-    res.json({ war, fighters, feed, totals, atFront, myRegion: req.citizen.region_id, bonuses: bonus.labels, mobilizationActive: Number(country?.mobilization_until) > Date.now(), budgetWarActive: budgetActive(country) === 'war' });
+    // Kekuatan militer (Tahap 6): unit yang direkrut memperkuat serangan —
+    // pengali ×1,00–1,50 dari total kekuatan (maks 100). Ditampilkan di
+    // halaman perang supaya pemain tahu bonusnya sebelum menyerang.
+    const myPower = await militaryPowerOf(req.citizen.id);
+    const milMult = unitDamageMult(myPower);
+    if (myPower > 0) bonus.labels.push(`Pasukan +${Math.round((milMult - 1) * 100)}%`);
+    res.json({ war, fighters, feed, totals, atFront, myRegion: req.citizen.region_id, bonuses: bonus.labels, militaryPower: myPower, militaryMult: Math.round(milMult * 100) / 100, mobilizationActive: Number(country?.mobilization_until) > Date.now(), budgetWarActive: budgetActive(country) === 'war' });
   }));
 
   app.post('/api/wars/:id/attack', authRequired, citizenRequired, r(async (req, res) => {
@@ -912,6 +942,13 @@ export function registerCivic(app) {
     if (buildings.has('military')) appliedBonuses.push('Pos Militer +10%');
     appliedBonuses.push(...bonus.labels);
     damage = Math.round(damage * bonus.mult);
+    // Kekuatan militer (Tahap 6): unit yang direkrut memperkuat serangan —
+    // pengali ×1,00–1,50 dari total kekuatan (maks 100). Dihitung SEBELUM
+    // tx (hanya baca; nilai dipakai di dalam tx apa adanya).
+    const myPower = await militaryPowerOf(c.id);
+    const milMult = unitDamageMult(myPower);
+    if (myPower > 0) appliedBonuses.push(`Pasukan +${Math.round((milMult - 1) * 100)}%`);
+    damage = Math.round(damage * milMult);
     // Atomik: kunci baris warga, baca amunisi segar di dalam tx, potong
     // energi + amunisi + catat serangan + update skor + progres misi — semua
     // dari nilai yang dikunci (dulu misi dihitung dari objek basi di luar tx).

@@ -33,8 +33,14 @@
 // minuman energi 0,10 emas/kaleng (+1 energi); tab notifikasi; daftar
 // pemain yang diblokir; inventaris lengkap di dashboard; foto profil
 // mengikuti aspek asli galeri.
+// Update MAYOR v4.0.0 = Tahap 6 master overhaul (28 Nov 2026): sistem
+// militer (rekrut unit, perawatan harian, pengali kerusakan perang);
+// kepemilikan wilayah (perang yang dimenangkan mengubah pengendali —
+// pajak pasar wilayah taklukan mengalir ke panglima perang); rantai
+// produksi penuh (semua perusahaan butuh bahan baku); reputasi dagang;
+// demografi wilayah; event dunia mingguan.
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '3.1.0';
+export const VERSION = '4.0.0';
 
 // --- Sistem kredit skor (v3.0.0, saran LIO tiket #7) ---
 // Semua warga mulai 100. Laporan chat yang terbukti benar menurunkan skor
@@ -359,6 +365,102 @@ export const ENERGY_REGEN_MS = 60 * 1000;
 // Bangunan butuh 2× Besi Mentah dari inventaris pemilik. Bila bahan kurang,
 // produksi hari itu hanya sebanyak yang bahannya cukup (bisa 0).
 export const FACTORY_INPUT = { commodity: 'Besi Mentah', perUnit: 2 };
+
+// Rantai produksi penuh (Tahap 6): SEMUA jenis perusahaan kini butuh bahan
+// baku — bukan cuma Pabrik. Satu peta, satu sumber kebenaran untuk tick
+// harian (tick.js) DAN bonus shift (api-core.js), supaya angka keduanya
+// tidak pernah berbeda:
+//   resource (Pabrik Sumber Daya): menambang — tanpa input.
+//   factory (Pabrik): 2× Besi Mentah per 1× Bahan Bangunan.
+//   light (Industri Ringan): 1× Gandum Mentah per 1× Makanan.
+//   heavy (Industri Berat): 1× Besi Mentah + 1× Minyak Mentah per 1× Drone.
+// FACTORY_INPUT di atas dipertahankan sebagai alias lama (dipakai tes lama).
+export const PRODUCTION_INPUT = {
+  resource: [],
+  factory: [{ commodity: 'Besi Mentah', perUnit: 2 }],
+  light: [{ commodity: 'Gandum Mentah', perUnit: 1 }],
+  heavy: [{ commodity: 'Besi Mentah', perUnit: 1 }, { commodity: 'Minyak Mentah', perUnit: 1 }],
+};
+export function productionInputsFor(type) { return PRODUCTION_INPUT[type] || []; }
+export function productionInputText(type) {
+  const inputs = productionInputsFor(type);
+  if (!inputs.length) return 'Tanpa bahan baku — menambang langsung dari wilayah.';
+  return 'Butuh: ' + inputs.map((i) => `${i.perUnit}× ${i.commodity}`).join(' + ') + ' per unit.';
+}
+
+// --- Militer (Tahap 6) ---
+// Unit militer direkrut warga dengan komoditas + USD, dirawat harian dari
+// USD, dan memperkuat serangan perang. Angka dipilih supaya militer terasa
+// tapi tidak mendominasi: kekuatan total 100 memberi pengali maksimal ×1,5
+// (setara bonus konvoi + anggaran + mobilisasi + pakta + nasionalisme
+// sekaligus — tapi butuh 50 Infanteri atau 20 Drone, bukan gratis).
+export const MILITARY_UNITS = {
+  infantry: { type: 'infantry', name: 'Infanteri', commodity: 'Senjata', commodityQty: 1, usd: 5, power: 2, upkeep: 1, desc: 'Pasukan darat — murah, mudah direkrut massal.' },
+  drone: { type: 'drone', name: 'Drone Perang', commodity: 'Drone', commodityQty: 1, usd: 10, power: 5, upkeep: 2, desc: 'Serangan udara presisi — kerusakan +50% dari Senjata.' },
+  heavy: { type: 'heavy', name: 'Kendaraan Berat', commodity: 'Bahan Bangunan', commodityQty: 2, usd: 20, power: 12, upkeep: 5, desc: 'Tank dan kendaraan lapis baja — kekuatan terbesar per unit.' },
+};
+// Batas pasukan: 50 + 10 per level (Level 1 = 60 unit, Level 10 = 150).
+// Tanpa batas, pemain kaya bisa menumpuk ribuan unit dan pengali perang
+// pecah — batas ini yang menjaga ×1,5 tetap maksimal.
+export const UNIT_CAP_BASE = 50;
+export const UNIT_CAP_PER_LEVEL = 10;
+export function unitCapFor(level) { return UNIT_CAP_BASE + UNIT_CAP_PER_LEVEL * Math.max(1, level); }
+// Kekuatan total = jumlah (qty × power) semua unit. Pengali kerusakan =
+// 1 + min(kekuatan, 100) / 200 — kekuatan 20 → ×1,10; 100 → ×1,50 (maks).
+export function militaryPowerFor(units) {
+  return (units || []).reduce((s, u) => s + (MILITARY_UNITS[u.type || u.unit_type]?.power || 0) * (u.qty || 0), 0);
+}
+export function unitDamageMult(power) { return 1 + Math.min(Math.max(0, power || 0), 100) / 200; }
+export function unitUpkeepFor(units) {
+  return (units || []).reduce((s, u) => s + (MILITARY_UNITS[u.type || u.unit_type]?.upkeep || 0) * (u.qty || 0), 0);
+}
+export function unitCountFor(units) {
+  return (units || []).reduce((s, u) => s + (u.qty || 0), 0);
+}
+
+// --- Reputasi dagang (Tahap 6) ---
+// Tiap transaksi pasar yang SELESAI (beli penawaran / jual ke order beli)
+// menambah 1 hitungan untuk pembeli DAN penjual. Tier murni prestise +
+// informasi (bukan diskon — emas/USD/harga yang berjalan TIDAK diubah).
+export const TRADE_REPUTATION_TIERS = [
+  { min: 0, label: 'Pedagang Baru' },
+  { min: 10, label: 'Pedagang Aktif' },
+  { min: 50, label: 'Pedagang Terpercaya' },
+  { min: 150, label: 'Saudagar Besar' },
+];
+export function tradeReputation(count) {
+  const c = Math.max(0, count || 0);
+  let cur = TRADE_REPUTATION_TIERS[0];
+  let next = null;
+  for (const t of TRADE_REPUTATION_TIERS) {
+    if (c >= t.min) cur = t;
+    else { next = t; break; }
+  }
+  return { label: cur.label, count: c, nextMin: next?.min ?? null, nextLabel: next?.label ?? null };
+}
+
+// --- Event dunia mingguan (Tahap 6) ---
+// Satu event berlaku satu minggu dunia (7 hari), bergilir deterministik
+// dari nomor hari — tidak ada acak server, tidak ada "bot" yang bermain.
+// Efeknya kecil dan sementara (±10–50%), tidak mengubah harga dasar,
+// emas, atau USD yang berjalan. Diumumkan lewat notifikasi saat minggu
+// berganti + tampil di dashboard dan /api/world.
+export const WORLD_EVENTS = [
+  { key: 'panen', name: 'Panen Raya', icon: '🌾', effect: 'Upah bahan ADMIN +20%', desc: 'Hasil panen melimpah di seluruh wilayah — upah bahan mentah ADMIN naik 20% minggu ini.' },
+  { key: 'festival', name: 'Festival Rakyat', icon: '🎉', effect: 'XP shift +50%', desc: 'Festival rakyat semarak — setiap giliran kerja memberi XP 50% lebih banyak minggu ini.' },
+  { key: 'badai', name: 'Badai Besar', icon: '⛈️', effect: 'Perjalanan +5 menit', desc: 'Badai besar melanda kepulauan — semua perjalanan lebih lama 5 menit minggu ini.' },
+  { key: 'wabah', name: 'Wabah Melanda', icon: '🤒', effect: 'Biaya latihan +2 emas', desc: 'Wabah melanda — pelatih menaikkan biaya latihan 2 emas minggu ini.' },
+  { key: 'booming', name: 'Pasar Bergairah', icon: '📈', effect: 'Pajak penghasilan −1 poin', desc: 'Pasar sedang bergairah — pajak penghasilan turun 1 poin minggu ini.' },
+  { key: 'darurat', name: 'Darurat Militer', icon: '⚠️', effect: 'Kerusakan perang +10%', desc: 'Darurat militer diberlakukan — semua serangan perang 10% lebih kuat minggu ini.' },
+];
+export function worldEventFor(day) {
+  const d = Math.max(1, Number(day) || 1);
+  return WORLD_EVENTS[Math.floor((d - 1) / 7) % WORLD_EVENTS.length];
+}
+export function worldEventEndsDay(day) {
+  const d = Math.max(1, Number(day) || 1);
+  return (Math.floor((d - 1) / 7) + 1) * 7;
+}
 
 // --- Batas harga wajar (Tahap 4) ---
 // Harga jual/order beli ditolak bila di luar 0,25×–4× median harga transaksi

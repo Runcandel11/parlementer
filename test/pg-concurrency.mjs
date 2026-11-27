@@ -167,7 +167,11 @@ async function main() {
     check('Energi tepat 0 setelah 1 shift (tidak negatif)', wAfter.energy === 0, `energi=${wAfter.energy}`);
     r = await W.get('/api/inventory');
     const besi = r.data.items.find((i) => i.name === 'Besi Mentah');
-    check('Upah tepat 44× Besi Mentah (tidak 88)', besi && besi.qty === 44, `besi=${besi?.qty}`);
+    // Tahap 6: hari 1 = minggu Panen Raya — upah ADMIN +20%, jadi bayaran
+    // = effectiveQty (52), bukan pay_qty dasar (44). effectiveQty dari
+    // /api/jobs adalah angka yang sama dengan yang dibayarkan shift.
+    const expectPay = job.effectiveQty || job.pay_qty;
+    check(`Upah tepat ${expectPay}× Besi Mentah (tidak 2×)`, besi && besi.qty === expectPay, `besi=${besi?.qty}`);
 
     console.log('\n[4] Race: dua klaim pencapaian paralel (ON CONFLICT)');
     const P = await register('ach@conc.local', 'pencapaian_race');

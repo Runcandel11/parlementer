@@ -2,7 +2,7 @@
 // Dipanggil otomatis saat ada request (cek tanggal) + interval 10 menit.
 // Aman di Render free (tanpa cron eksternal): tick jalan saat ada yang membuka game.
 import { sql, one, run, getParliamentOpensAt } from './db.js';
-import { DAILY_PRODUCTION, FACTORY_INPUT, RETENTION, productionWithBonus, BUDGET_KINDS, BUDGET_DURATION_MS, lawEffectText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, systemDef, COUNTRY_JOIN_MIN_YES } from './game.js';
+import { DAILY_PRODUCTION, PRODUCTION_INPUT, MILITARY_UNITS, worldEventFor, worldEventEndsDay, RETENTION, productionWithBonus, BUDGET_KINDS, BUDGET_DURATION_MS, lawEffectText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, systemDef, COUNTRY_JOIN_MIN_YES } from './game.js';
 
 function todayStr(d = new Date()) { return d.toISOString().slice(0, 10); }
 
@@ -110,33 +110,40 @@ export async function runDailyTick() {
     if (co.type === 'light') commodity = 'Makanan';
     if (co.type === 'heavy') commodity = 'Drone';
     if (!commodity || amount <= 0) continue;
-    // Tahap 4 — rantai produksi: Pabrik butuh 2× Besi Mentah per 1× Bahan
-    // Bangunan dari inventaris pemilik. Bila bahan kurang, produksi hanya
-    // sebanyak bahannya cukup (bisa 0 + notifikasi).
+    // Tahap 6 — rantai produksi penuh: SEMUA jenis perusahaan butuh bahan
+    // baku (PRODUCTION_INPUT di game.js — satu sumber kebenaran dengan
+    // bonus shift). Bila bahan kurang, produksi hanya sebanyak bahannya
+    // cukup (bisa 0 + notifikasi).
     let produce = amount;
-    let used = 0;
-    if (co.type === 'factory') {
-      const input = await one('SELECT id FROM commodities WHERE name = ?', [FACTORY_INPUT.commodity]);
-      const stock = input ? await one('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1', [co.owner_id, input.id]) : null;
+    const inputs = PRODUCTION_INPUT[co.type] || [];
+    const usedInputs = [];
+    for (const input of inputs) {
+      const inputRow = await one('SELECT id FROM commodities WHERE name = ?', [input.commodity]);
+      const stock = inputRow ? await one('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1', [co.owner_id, inputRow.id]) : null;
       const have = stock?.qty || 0;
-      produce = Math.min(amount, Math.floor(have / FACTORY_INPUT.perUnit));
-      if (produce <= 0) {
-        await notify(co.owner_id, 'EKONOMI', 'Pabrik kekurangan bahan',
-          `${co.name} tidak berproduksi hari ini: butuh ${amount * FACTORY_INPUT.perUnit}× ${FACTORY_INPUT.commodity} (punya ${have}).`);
-        continue;
-      }
-      used = produce * FACTORY_INPUT.perUnit;
-      const took = await run('UPDATE inventory SET qty = qty - ? WHERE id = ? AND qty >= ?', [used, stock.id, used]);
-      if (!took.changes) continue; // stok berubah bersamaan — lewati hari ini
+      produce = Math.min(produce, Math.floor(have / input.perUnit));
+      usedInputs.push({ input, stock, have });
     }
+    if (inputs.length && produce <= 0) {
+      await notify(co.owner_id, 'EKONOMI', `${co.name} kekurangan bahan`,
+        `${co.name} tidak berproduksi hari ini: butuh ${inputs.map((i) => `${amount * i.perUnit}× ${i.commodity}`).join(' + ')} (punya ${inputs.map((i, idx) => `${usedInputs[idx].have}× ${i.commodity}`).join(', ')}).`);
+      continue;
+    }
+    for (const { input, stock } of usedInputs) {
+      const used = produce * input.perUnit;
+      if (used <= 0) continue;
+      const took = await run('UPDATE inventory SET qty = qty - ? WHERE id = ? AND qty >= ?', [used, stock.id, used]);
+      if (!took.changes) { produce = 0; break; } // stok berubah bersamaan — lewati hari ini
+    }
+    if (produce <= 0) continue;
     const com = await one('SELECT id FROM commodities WHERE name = ?', [commodity]);
     if (!com) continue;
     const inv = await one('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1', [co.owner_id, com.id]);
     if (inv) await run('UPDATE inventory SET qty = qty + ? WHERE id = ?', [produce, inv.id]);
     else await run('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) RETURNING id', [co.owner_id, com.id, produce]);
     await notify(co.owner_id, 'EKONOMI', 'Produksi perusahaan',
-      co.type === 'factory'
-        ? `${co.name} mengolah ${used}× ${FACTORY_INPUT.commodity} menjadi ${produce}× ${commodity} hari ini.`
+      inputs.length
+        ? `${co.name} mengolah ${usedInputs.map(({ input }) => `${produce * input.perUnit}× ${input.commodity}`).join(' + ')} menjadi ${produce}× ${commodity} hari ini.`
         : `${co.name} memproduksi ${produce}× ${commodity} hari ini.`);
   }
 
@@ -262,7 +269,7 @@ export async function runDailyTick() {
     const passed = country && region && !region.country_id && j.yes > j.no && j.yes >= COUNTRY_JOIN_MIN_YES;
     if (passed) {
       await run("UPDATE country_joins SET status = 'passed' WHERE id = ?", [j.id]);
-      await run('UPDATE regions SET country_id = ? WHERE id = ? AND country_id IS NULL', [j.country_id, j.region_id]);
+      await run("UPDATE regions SET country_id = ?, controller = 'negara', controller_id = ? WHERE id = ? AND country_id IS NULL", [j.country_id, j.country_id, j.region_id]);
       // Notifikasi ke WARGA wilayah itu (kewarganegaraan = home_region_id),
       // bukan sekadar yang sedang berada di sana.
       await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) SELECT id, ?, ?, ?, ? FROM citizens WHERE home_region_id = ?',
@@ -274,7 +281,15 @@ export async function runDailyTick() {
     }
   }
 
-  // 5) Perang: tutup yang berakhir, tentukan pemenang.
+  // 5) Perang: tutup yang berakhir, tentukan pemenang — dan UBAH
+  // KEPEMILIKAN WILAYAH (Tahap 6, BUG-10): perang yang dimenangkan
+  // benar-benar mengubah pengendali wilayah.
+  //   - Penyerang menang: wilayah lepas dari negaranya (country_id NULL)
+  //     dan dikuasai panglima perang — penyerang dengan kerusakan terbanyak
+  //     (seri = citizen_id terkecil). controller='pemberontak'.
+  //   - Pembela menang di wilayah yang dikuasai pemberontak: wilayah
+  //     dibebaskan (controller='bebas'). Pembela menang di wilayah
+  //     bernegara: tidak ada perubahan (negara mempertahankannya).
   const wars = await sql("SELECT * FROM wars WHERE status = 'active' AND ends_at <= ?", [now]);
   for (const w of wars) {
     const winner = w.score_a > w.score_d ? 'attacker' : 'defender';
@@ -283,6 +298,22 @@ export async function runDailyTick() {
     for (const f of fighters) {
       await notify(f.citizen_id, 'PERANG', `Perang ${w.name} berakhir`,
         winner === 'attacker' ? 'Pemberontak memenangkan wilayah ini.' : `${w.defender_label || 'Pembela'} berhasil mempertahankan wilayah ini.`);
+    }
+    const region = await one('SELECT * FROM regions WHERE id = ?', [w.region_id]);
+    if (!region) continue;
+    if (winner === 'attacker') {
+      const top = await sql("SELECT citizen_id, SUM(damage) AS dmg FROM war_attacks WHERE war_id = ? AND side = 'attacker' GROUP BY citizen_id ORDER BY dmg DESC, citizen_id ASC LIMIT 1", [w.id]);
+      const warlordId = top[0]?.citizen_id || null;
+      const warlord = warlordId ? await one('SELECT u.username FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.id = ?', [warlordId]) : null;
+      await run("UPDATE regions SET country_id = NULL, controller = 'pemberontak', controller_id = ? WHERE id = ?", [warlordId, w.region_id]);
+      // Beritahu warga wilayah itu (kewarganegaraan = home_region_id).
+      await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) SELECT id, ?, ?, ?, ? FROM citizens WHERE home_region_id = ?',
+        ['PERANG', `${region.name} jatuh ke tangan pemberontak`, warlord ? `${warlord.username} kini menguasai ${region.name} setelah memenangkan perang. Pajak pasar wilayah ini kini mengalir kepadanya.` : `${region.name} kini dikuasai pemberontak.`, now, w.region_id]);
+      if (warlordId) await notify(warlordId, 'PERANG', `Kamu menguasai ${region.name}`, `Kamu menjadi panglima perang ${region.name} — pajak pasar wilayah ini kini mengalir kepadamu selama kamu berkuasa.`);
+    } else if (region.controller === 'pemberontak') {
+      await run("UPDATE regions SET controller = 'bebas', controller_id = NULL WHERE id = ?", [w.region_id]);
+      await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) SELECT id, ?, ?, ?, ? FROM citizens WHERE home_region_id = ?',
+        ['PERANG', `${region.name} dibebaskan`, `Pembela berhasil merebut kembali ${region.name} dari pemberontak — wilayah ini kembali bebas.`, now, w.region_id]);
     }
   }
 
@@ -313,6 +344,52 @@ export async function runDailyTick() {
   await run('UPDATE world SET day = day + 1, last_tick_date = ? WHERE id = 1', [today]);
   const after = await one('SELECT * FROM world WHERE id = 1');
   console.log(`[tick] Hari ${after.day} — ${today}`);
+
+  // 9) Perawatan militer (Tahap 6): tiap unit menelan USD harian. Bila
+  // saldo pemilik kurang, unit termahal desersi dulu (dihapus) sampai
+  // biayanya cukup — saldo tidak pernah dibuat negatif. Pemilik diberi
+  // tahu bila ada desersi.
+  const unitHolders = await sql('SELECT citizen_id, unit_type, qty FROM military_units WHERE qty > 0');
+  const byCitizen = new Map();
+  for (const u of unitHolders) {
+    const list = byCitizen.get(u.citizen_id) || [];
+    list.push(u);
+    byCitizen.set(u.citizen_id, list);
+  }
+  for (const [citizenId, units] of byCitizen) {
+    const upkeep = units.reduce((s, u) => s + (MILITARY_UNITS[u.unit_type]?.upkeep || 0) * u.qty, 0);
+    if (upkeep <= 0) continue;
+    const owner = await one('SELECT usd FROM citizens WHERE id = ?', [citizenId]);
+    if (!owner) continue;
+    const balance = Number(owner.usd) || 0;
+    let due = upkeep;
+    if (balance >= due) {
+      await run('UPDATE citizens SET usd = usd - ? WHERE id = ?', [due, citizenId]);
+      continue;
+    }
+    // Desersi: hapus unit dengan perawatan tertinggi dulu, sampai biaya
+    // sisa terjangkau saldo — atau semua unit bila saldo 0.
+    const sorted = [...units].sort((a, b) => (MILITARY_UNITS[b.unit_type]?.upkeep || 0) - (MILITARY_UNITS[a.unit_type]?.upkeep || 0));
+    const deserted = [];
+    for (const u of sorted) {
+      if (balance >= due) break;
+      deserted.push(`${u.qty}× ${MILITARY_UNITS[u.unit_type]?.name || u.unit_type}`);
+      await run('DELETE FROM military_units WHERE citizen_id = ? AND unit_type = ?', [citizenId, u.unit_type]);
+      due -= (MILITARY_UNITS[u.unit_type]?.upkeep || 0) * u.qty;
+    }
+    if (due > 0) await run('UPDATE citizens SET usd = usd - ? WHERE id = ? AND usd >= ?', [due, citizenId, due]);
+    await notify(citizenId, 'PERANG', 'Pasukanmu desersi', `Kamu tidak mampu membayar perawatan ${upkeep} USD/hari (saldo ${Math.round(balance)} USD) — desersi: ${deserted.join(', ')}.`);
+  }
+
+  // 10) Event dunia mingguan (Tahap 6): bila minggu berganti, umumkan
+  // event baru ke SEMUA warga (notifikasi SISTEM) — satu-satunya "bot"
+  // yang diizinkan: pengumuman sistem, bukan warga palsu.
+  const oldEvent = worldEventFor(world.day);
+  const newEvent = worldEventFor(after.day);
+  if (oldEvent.key !== newEvent.key) {
+    await notifyAll('SISTEM', `${newEvent.icon} Event Dunia: ${newEvent.name}`,
+      `${newEvent.desc} Berlaku sampai hari ${worldEventEndsDay(after.day)}.`);
+  }
   return { ticked: true, day: after.day };
 }
 

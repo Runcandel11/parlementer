@@ -9,6 +9,7 @@ import express from 'express';
 import { initDb, isPg, one } from './db.js';
 import { registerCore } from './api-core.js';
 import { registerCivic } from './api-civic.js';
+import { registerMilitary } from './api-military.js';
 import { registerAdmin } from './api-admin.js';
 import { registerAppeals } from './api-appeals.js';
 import { getUserIdFromReq } from './util.js';
@@ -101,6 +102,7 @@ export function createApp() {
 
   registerCore(app);
   registerCivic(app);
+  registerMilitary(app);
   registerAdmin(app);
   registerAppeals(app);
 

@@ -1,4 +1,4 @@
-// Parlementer — tes DOM fitur tiket v3.1.0 (jsdom + server sungguhan).
+// Parlementer — tes DOM fitur tiket v4.0.0 (jsdom + server sungguhan).
 // Membuktikan di UI (bukan cuma API):
 //   (1) #22/#18 Dashboard INVENTARIS menampilkan SEMUA barang + jumlahnya
 //       (termasuk tier 2 — dulu hanya kartu T1 maks 6);
@@ -145,7 +145,7 @@ async function main() {
     check('server menyala dan /api/world merespons', up);
     if (!up) { process.exitCode = 1; return; }
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 3.1.0', world.version === '3.1.0', `version=${world.version}`);
+    check('API /api/world: versi 4.0.0', world.version === '4.0.0', `version=${world.version}`);
 
     const jarA = makeJar();
     const jarB = makeJar();

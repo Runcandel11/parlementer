@@ -235,7 +235,7 @@ async function main() {
   // steady state hanya baca penanda (tanpa lock/DDL); migrasi penuh hanya
   // bila penanda dihapus / versi lama.
   const ver = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Penanda versi skema = 14', ver.rows[0]?.value === '14', `value=${ver.rows[0]?.value}`);
+  check('Penanda versi skema = 15', ver.rows[0]?.value === '15', `value=${ver.rows[0]?.value}`);
   const t9a = Date.now();
   await Promise.all([initDb(), initDb(), initDb(), initDb(), initDb()]);
   const t9b = Date.now() - t9a;
@@ -302,7 +302,7 @@ async function main() {
   const archive = await pool.query("SELECT kind, currency, amount FROM treasury_tx WHERE kind = 'pembubaran' ORDER BY created_at");
   check('Migrasi: kas RI diarsip sebagai treasury_tx pembubaran (−100 emas, −50 USD)', archive.rows.length === 2 && archive.rows.some((r) => r.currency === 'gold' && Number(r.amount) === -100) && archive.rows.some((r) => r.currency === 'usd' && Number(r.amount) === -50), JSON.stringify(archive.rows));
   const ver10 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 14', ver10.rows[0]?.value === '14', `value=${ver10.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 15', ver10.rows[0]?.value === '15', `value=${ver10.rows[0]?.value}`);
 
   console.log('\n[11] Regresi bug Partai — GET /api/parties di Postgres (ORDER BY ambigu)');
   // Bug live 27 Nov 2026: begitu ada ≥1 partai, GET /api/parties 500 di
@@ -377,6 +377,14 @@ async function main() {
     check('GET /api/parties sebagai warga Negara Tes: kursi partai = 7 (per negara)',
       rr.status === 200 && rr.data.parties?.[0]?.seats === 7,
       `status=${rr.status} seats=${rr.data.parties?.[0]?.seats}`);
+    // P1 harus benar-benar warga merdeka untuk cek ini: wilayah lahirnya
+    // acak (Tahap 5) — bila kebetulan wilayah 5 (Negara Tes), pindahkan
+    // dulu ke wilayah merdeka mana pun supaya kursinya 0.
+    const p1Home = (await P1.get('/api/me')).data.citizen.home_region_id;
+    if (p1Home === 5) {
+      const freeP = await pool.query('SELECT id FROM regions WHERE country_id IS NULL AND id <> 5 ORDER BY id LIMIT 1');
+      await pool.query('UPDATE citizens SET region_id = $1, home_region_id = $1 WHERE id = $2', [freeP.rows[0].id, p1me.data.citizen.id]);
+    }
     rr = await P1.get('/api/parties');
     check('GET /api/parties sebagai warga merdeka: kursi partai tetap 0',
       rr.status === 200 && rr.data.parties?.[0]?.seats === 0,
@@ -400,7 +408,7 @@ async function main() {
   const tCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('travel_to_region_id', 'travel_arrives_at', 'home_changed_at')");
   check('Migrasi: kolom perjalanan ditambah kembali', Number(tCols2.rows[0].n) === 3, `n=${tCols2.rows[0].n}`);
   const ver11 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 14', ver11.rows[0]?.value === '14', `value=${ver11.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 15', ver11.rows[0]?.value === '15', `value=${ver11.rows[0]?.value}`);
 
   console.log('\n[12b] Perusahaan v2.4.0 — migrasi v12 (foto + bonus shift)');
   const coCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'companies' AND column_name IN ('photo', 'photo_sm', 'bonus_credit', 'bonus_given', 'bonus_warned_at')");
@@ -413,7 +421,7 @@ async function main() {
   const coCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'companies' AND column_name IN ('photo', 'photo_sm', 'bonus_credit', 'bonus_given', 'bonus_warned_at')");
   check('Migrasi: kolom perusahaan ditambah kembali', Number(coCols2.rows[0].n) === 5, `n=${coCols2.rows[0].n}`);
   const ver12 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 14', ver12.rows[0]?.value === '14', `value=${ver12.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 15', ver12.rows[0]?.value === '15', `value=${ver12.rows[0]?.value}`);
 
   console.log('\n[12c] Kredit skor v3.0.0 — migrasi v13 (kolom skor + verdict + riwayat)');
   const crCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('credit_score', 'credit_updated_at')");
@@ -429,7 +437,7 @@ async function main() {
   const crCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('credit_score', 'credit_updated_at')");
   check('Migrasi: kolom kredit skor ditambah kembali', Number(crCols2.rows[0].n) === 2, `n=${crCols2.rows[0].n}`);
   const ver13 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 14', ver13.rows[0]?.value === '14', `value=${ver13.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 15', ver13.rows[0]?.value === '15', `value=${ver13.rows[0]?.value}`);
 
   console.log('\n[12d] Fitur tiket v3.1.0 — migrasi v14 (Minuman Energi + skala XP ×20)');
   const drinkRow = await pool.query("SELECT ref_usd, ref_gold, category FROM commodities WHERE name = 'Minuman Energi'");
@@ -449,7 +457,7 @@ async function main() {
   check('Migrasi: XP lama 7 → 140 (×20, progres tidak hilang)', xpRows.rows[0]?.xp === 140, `xp=${xpRows.rows[0]?.xp}`);
   check('Migrasi: XP 0 tetap 0', xpRows.rows[1]?.xp === 0, `xp=${xpRows.rows[1]?.xp}`);
   const ver14 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 14', ver14.rows[0]?.value === '14', `value=${ver14.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 15', ver14.rows[0]?.value === '15', `value=${ver14.rows[0]?.value}`);
   // Aturan durasi (unit, tanpa server): Kepri → Jakarta ±830 km = 10 mnt;
   // Jakarta → Bandung ±116 km = 3 mnt; terjauh dipangkas ke 30 mnt.
   const { travelMinutesFor } = await import('../src/game.js');
@@ -525,6 +533,66 @@ async function main() {
     console.log(tServerLog);
     tStop();
   }
+
+  console.log('\n[15] Tahap 6 v4.0.0 — migrasi v15 (militer, kepemilikan wilayah, reputasi)');
+  const milTbl = await pool.query("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name = 'military_units'");
+  check('Tabel military_units ada', Number(milTbl.rows[0].n) === 1, `n=${milTbl.rows[0].n}`);
+  const milCheck = await pool.query("SELECT COUNT(*) AS n FROM information_schema.table_constraints WHERE table_name = 'military_units' AND constraint_type = 'CHECK'");
+  check('CHECK unit_type di military_units ada', Number(milCheck.rows[0].n) >= 1, `n=${milCheck.rows[0].n}`);
+  const regCtrlCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'regions' AND column_name IN ('controller', 'controller_id')");
+  check('Kolom regions.controller + controller_id ada', regCtrlCols.rowCount === 2, `n=${regCtrlCols.rowCount}`);
+  const tradeCol = await pool.query("SELECT column_name, column_default FROM information_schema.columns WHERE table_name = 'citizens' AND column_name = 'trades_completed'");
+  check('Kolom citizens.trades_completed ada, default 0', tradeCol.rowCount === 1 && String(tradeCol.rows[0].column_default || '').includes('0'), JSON.stringify(tradeCol.rows[0]));
+  const ver15 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
+  check('Versi skema setelah migrasi = 15', ver15.rows[0]?.value === '15', `value=${ver15.rows[0]?.value}`);
+  // Migrasi: hapus tabel + kolom v15, initDb mengembalikannya; backfill
+  // wilayah bernegara -> controller='negara'.
+  await pool.query("INSERT INTO country (id, name, ideology, system, founder_id, capital, founded, treasury, treasury_usd, tax_income, tax_production, tax_import, tax_export) VALUES (999001, 'Negara Uji Lima Belas', 'Konservatisme', 'presidensial', 999001, 'Jakarta', '2026-11-28', 0, 0, 2, 1, 2, 2)");
+  const freeReg15 = await pool.query('SELECT id FROM regions WHERE country_id IS NULL ORDER BY id LIMIT 1');
+  const freeReg15Id = freeReg15.rows[0].id;
+  await pool.query('UPDATE regions SET country_id = 999001 WHERE id = $1', [freeReg15Id]);
+  await pool.query('DROP TABLE military_units');
+  await pool.query('ALTER TABLE regions DROP COLUMN controller');
+  await pool.query('ALTER TABLE citizens DROP COLUMN trades_completed');
+  await resetVersion();
+  await initDb();
+  const milTbl2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name = 'military_units'");
+  check('Migrasi: tabel military_units dibuat kembali', Number(milTbl2.rows[0].n) === 1, `n=${milTbl2.rows[0].n}`);
+  const regCtrl2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'regions' AND column_name IN ('controller', 'controller_id')");
+  check('Migrasi: kolom controller kembali', Number(regCtrl2.rows[0].n) === 2, `n=${regCtrl2.rows[0].n}`);
+  const backfill15 = await pool.query('SELECT controller, controller_id FROM regions WHERE id = $1', [freeReg15Id]);
+  check('Migrasi: backfill wilayah bernegara -> controller=negara', backfill15.rows[0]?.controller === 'negara' && backfill15.rows[0]?.controller_id === 999001, JSON.stringify(backfill15.rows[0]));
+  const tradeCol2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name = 'trades_completed'");
+  check('Migrasi: kolom trades_completed kembali', Number(tradeCol2.rows[0].n) === 1, `n=${tradeCol2.rows[0].n}`);
+  const ver15b = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
+  check('Versi skema setelah migrasi ulang = 15', ver15b.rows[0]?.value === '15', `value=${ver15b.rows[0]?.value}`);
+  // CHECK menolak jenis unit tak dikenal; baris valid masuk.
+  await pool.query("INSERT INTO users (id, email, username, pass_hash, created_at) VALUES (999005, 'mil@test.local', 'warga_mil', 'x', 0)");
+  await pool.query("INSERT INTO citizens (id, user_id, region_id, home_region_id, created_at) VALUES (999005, 999005, 1, 1, 0)");
+  let badUnitRejected = false;
+  try {
+    await pool.query("INSERT INTO military_units (citizen_id, unit_type, qty, created_at) VALUES (999005, 'kavaleri', 1, 0)");
+  } catch { badUnitRejected = true; }
+  check('CHECK: unit_type tak dikenal ditolak', badUnitRejected);
+  await pool.query("INSERT INTO military_units (citizen_id, unit_type, qty, created_at) VALUES (999005, 'infantry', 10, 0) ON CONFLICT (citizen_id, unit_type) DO UPDATE SET qty = 10");
+  const milRow = await pool.query('SELECT qty FROM military_units WHERE citizen_id = 999005 AND unit_type = $1', ['infantry']);
+  check('Baris militer valid tersimpan (10 Infanteri)', Number(milRow.rows[0]?.qty) === 10, `qty=${milRow.rows[0]?.qty}`);
+  await pool.query('DELETE FROM military_units WHERE citizen_id = 999005');
+  await pool.query('UPDATE regions SET country_id = NULL, controller = $1, controller_id = NULL WHERE id = $2', ['bebas', freeReg15Id]);
+  await pool.query('DELETE FROM country WHERE id = 999001');
+  // Fungsi murni Tahap 6 (unit, tanpa server).
+  const s6 = await import('../src/game.js');
+  check('unitDamageMult(0)=1, (20)=1,1, (100)=1,5, (200)=1,5 (mentok)', s6.unitDamageMult(0) === 1 && s6.unitDamageMult(20) === 1.1 && s6.unitDamageMult(100) === 1.5 && s6.unitDamageMult(200) === 1.5, `${s6.unitDamageMult(20)} / ${s6.unitDamageMult(100)}`);
+  check('unitCapFor(1)=60, (10)=150', s6.unitCapFor(1) === 60 && s6.unitCapFor(10) === 150, `${s6.unitCapFor(1)} / ${s6.unitCapFor(10)}`);
+  check('worldEventFor: 1 panen, 8 festival, 15 badai, 22 wabah, 29 booming, 36 darurat, 43 panen', s6.worldEventFor(1).key === 'panen' && s6.worldEventFor(8).key === 'festival' && s6.worldEventFor(15).key === 'badai' && s6.worldEventFor(22).key === 'wabah' && s6.worldEventFor(29).key === 'booming' && s6.worldEventFor(36).key === 'darurat' && s6.worldEventFor(43).key === 'panen', `${s6.worldEventFor(1).key}/${s6.worldEventFor(8).key}/${s6.worldEventFor(43).key}`);
+  check('worldEventEndsDay: hari 1 berakhir hari 7, hari 8 berakhir hari 14', s6.worldEventEndsDay(1) === 7 && s6.worldEventEndsDay(8) === 14, `${s6.worldEventEndsDay(1)} / ${s6.worldEventEndsDay(8)}`);
+  check('tradeReputation: 0 Baru, 10 Aktif, 50 Terpercaya, 150 Saudagar', s6.tradeReputation(0).label === 'Pedagang Baru' && s6.tradeReputation(10).label === 'Pedagang Aktif' && s6.tradeReputation(50).label === 'Pedagang Terpercaya' && s6.tradeReputation(150).label === 'Saudagar Besar', `${s6.tradeReputation(0).label}/${s6.tradeReputation(50).label}`);
+  check('tradeReputation(49): tier berikutnya 50 (Terpercaya)', s6.tradeReputation(49).nextMin === 50 && s6.tradeReputation(49).nextLabel === 'Pedagang Terpercaya', JSON.stringify(s6.tradeReputation(49)));
+  const heavyInputs = s6.productionInputsFor('heavy');
+  check('productionInputsFor(heavy): 2 input (Besi + Minyak, 1× tiap unit)', heavyInputs.length === 2 && heavyInputs.some((i) => i.commodity === 'Besi Mentah' && i.perUnit === 1) && heavyInputs.some((i) => i.commodity === 'Minyak Mentah' && i.perUnit === 1), JSON.stringify(heavyInputs));
+  check('productionInputsFor(resource): tanpa input; factory butuh 2× Besi', s6.productionInputsFor('resource').length === 0 && s6.productionInputText('factory').includes('Besi Mentah'), s6.productionInputText('factory'));
+  check('MILITARY_UNITS: Infanteri 2/1, Drone 5/2, Berat 12/5 (power/upkeep)', s6.MILITARY_UNITS.infantry.power === 2 && s6.MILITARY_UNITS.infantry.upkeep === 1 && s6.MILITARY_UNITS.drone.power === 5 && s6.MILITARY_UNITS.drone.upkeep === 2 && s6.MILITARY_UNITS.heavy.power === 12 && s6.MILITARY_UNITS.heavy.upkeep === 5, JSON.stringify(s6.MILITARY_UNITS));
+  check('militaryPowerFor: 10 Infanteri + 5 Drone = 45; upkeep 20; count 12', s6.militaryPowerFor([{ type: 'infantry', qty: 10 }, { type: 'drone', qty: 5 }]) === 45 && s6.unitUpkeepFor([{ type: 'infantry', qty: 10 }, { type: 'drone', qty: 5 }]) === 20 && s6.unitCountFor([{ type: 'infantry', qty: 10 }, { type: 'heavy', qty: 2 }]) === 12, `${s6.militaryPowerFor([{ type: 'infantry', qty: 10 }, { type: 'drone', qty: 5 }])} / ${s6.unitUpkeepFor([{ type: 'infantry', qty: 10 }, { type: 'drone', qty: 5 }])}`);
 
   await pool.end();
   console.log(`\n[pg-verify] SELESAI: ${passed} lolos, ${failed} gagal`);

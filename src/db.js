@@ -326,6 +326,10 @@ CREATE TABLE IF NOT EXISTS citizens (
   laws_proposed INTEGER NOT NULL DEFAULT 0,
   purchases INTEGER NOT NULL DEFAULT 0,
   recruits INTEGER NOT NULL DEFAULT 0,
+  -- Reputasi dagang (Tahap 6): jumlah transaksi pasar yang selesai
+  -- (pembeli dan penjual sama-sama +1). Tier reputasi dihitung dari angka
+  -- ini (game.js TRADE_REPUTATION_TIERS) — murni prestise, bukan diskon.
+  trades_completed INTEGER NOT NULL DEFAULT 0,
   chronicle_done TEXT NOT NULL DEFAULT '[]',
   chronicle_claimed TEXT NOT NULL DEFAULT '[]',
   missions TEXT NOT NULL DEFAULT '{}',
@@ -373,6 +377,14 @@ CREATE TABLE IF NOT EXISTS regions (
   country TEXT NOT NULL DEFAULT '',
   country_id INTEGER REFERENCES country(id),
   type TEXT NOT NULL DEFAULT 'Daratan',
+  -- Kepemilikan wilayah (Tahap 6, BUG-10): siapa yang menguasai wilayah
+  -- ini SEKARANG — 'bebas' (tidak ada yang menguasai, controller_id NULL),
+  -- 'negara' (controller_id = id negara pemilik, selaras country_id), atau
+  -- 'pemberontak' (controller_id = id warga panglima perang yang merebutnya
+  -- lewat perang). Pajak pasar wilayah yang dikuasai pemberontak mengalir
+  -- ke panglima perang, bukan ke kas negara.
+  controller TEXT NOT NULL DEFAULT 'bebas' CHECK (controller IN ('bebas','negara','pemberontak')),
+  controller_id INTEGER,
   city_score INTEGER NOT NULL DEFAULT 7,
   capacity INTEGER NOT NULL DEFAULT 100,
   health INTEGER NOT NULL DEFAULT 7,
@@ -684,6 +696,17 @@ CREATE TABLE IF NOT EXISTS war_attacks (
   damage INTEGER NOT NULL,
   ammo TEXT NOT NULL DEFAULT 'Senjata',
   created_at BIGINT NOT NULL
+);
+-- Unit militer (Tahap 6): satu baris per (warga, jenis unit). qty bisa 0
+-- (baris dihapus saat habis — disband menghapus barisnya). CHECK menjaga
+-- jenis tetap dalam daftar MILITARY_UNITS (game.js).
+CREATE TABLE IF NOT EXISTS military_units (
+  id ${id},
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  unit_type TEXT NOT NULL CHECK (unit_type IN ('infantry','drone','heavy')),
+  qty INTEGER NOT NULL DEFAULT 0 CHECK (qty >= 0),
+  created_at BIGINT NOT NULL,
+  UNIQUE(citizen_id, unit_type)
 );
 CREATE TABLE IF NOT EXISTS war_support (
   region_id INTEGER NOT NULL REFERENCES regions(id),
@@ -1059,6 +1082,7 @@ export async function initDb() {
     await migrateCompanyColumns(t);
     await migrateCreditColumns(t);
     await migrateXpScale(t);
+    await migrateStage6Columns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1120,7 +1144,7 @@ async function runDataFixups() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -1137,7 +1161,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1388,6 +1412,29 @@ async function migrateXpScale(t) {
   await t.run('UPDATE citizens SET xp = xp * 20 WHERE xp > 0');
 }
 
+// Tahap 6 (v4.0.0): militer + kepemilikan wilayah + reputasi dagang.
+//  - tabel military_units dibuat di schema() (CREATE TABLE IF NOT EXISTS —
+//    no-op di DB lama karena schema() jalan sebelum migrasi);
+//  - regions.controller / controller_id: wilayah yang sudah punya negara
+//    di-backfill 'negara' + id negaranya; yang merdeka tetap 'bebas'.
+//  - citizens.trades_completed: mulai 0 untuk semua warga (riwayat
+//    transaksi lama tidak dihitung ulang — reputasi dihitung dari transaksi
+//    yang terjadi setelah v4.0.0).
+async function migrateStage6Columns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('regions', 'controller', "TEXT NOT NULL DEFAULT 'bebas'");
+  await addCol('regions', 'controller_id', 'INTEGER');
+  await addCol('citizens', 'trades_completed', 'INTEGER NOT NULL DEFAULT 0');
+  await t.run("UPDATE regions SET controller = 'negara', controller_id = country_id WHERE country_id IS NOT NULL AND (controller = 'bebas' OR controller IS NULL)");
+}
+
 // Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di
 // db_meta supaya bisa diubah tanpa deploy; nilai awal = 2 Des 2026 00:00
 // WIB (PARLIAMENT_OPENS_AT_DEFAULT di game.js). Dipakai gate parlemen +
@@ -1444,9 +1491,17 @@ async function migrateWorldRedesign(t) {
   // FK): wilayah dilepas DULU (country='' + country_id=NULL) sebelum baris
   // negara dihapus — sebaliknya DELETE gagal 23503 bila ada wilayah yang
   // masih merujuk negara itu.
-  await t.run("UPDATE regions SET country = '', country_id = NULL");
-  const old = await t.one('SELECT * FROM country WHERE id = 1');
+  // GATE (perbaikan Tahap 6, v4.0.0): pembubaran HANYA jalan bila negara
+  // lama itu masih ada (id=1, nama 'Republik Indonesia'). Tanpa gate ini,
+  // UPDATE regions tanpa syarat di bawah akan membubarkan SEMUA negara
+  // buatan pemain di SETIAP migrasi penuh (resetVersion + initDb — mis.
+  // saat deploy versi baru) — ketahuan saat menguji backfill controller
+  // v15: country_id negara uji terhapus sebelum backfill jalan. Negara
+  // buatan pemain tidak pernah bisa ber-id 1 + bernama sama persis:
+  // sequence id tidak kembali ke 1 setelah baris lama dihapus.
+  const old = await t.one("SELECT * FROM country WHERE id = 1 AND name = 'Republik Indonesia'");
   if (old) {
+    await t.run("UPDATE regions SET country = '', country_id = NULL");
     const gold = Number(old.treasury) || 0;
     const usd = Number(old.treasury_usd) || 0;
     if (gold > 0) {
@@ -1458,11 +1513,11 @@ async function migrateWorldRedesign(t) {
         [-usd, 'Pembubaran Republik Indonesia — kas Rupiah dihapus (negara dibubarkan, dunia kembali terpecah).', Date.now()]);
     }
     await t.run('DELETE FROM country WHERE id = 1');
+    await t.run("UPDATE laws SET status = 'failed' WHERE status = 'voting'");
+    await t.run("UPDATE budgets SET status = 'failed' WHERE status = 'voting'");
+    await t.run("UPDATE impeachments SET status = 'failed' WHERE status = 'voting'");
+    await t.run("UPDATE elections SET status = 'closed' WHERE status IN ('scheduled','open')");
   }
-  await t.run("UPDATE laws SET status = 'failed' WHERE status = 'voting'");
-  await t.run("UPDATE budgets SET status = 'failed' WHERE status = 'voting'");
-  await t.run("UPDATE impeachments SET status = 'failed' WHERE status = 'voting'");
-  await t.run("UPDATE elections SET status = 'closed' WHERE status IN ('scheduled','open')");
 }
 
 // Migrasikan kolom gambar artikel (sampul + thumbnail) untuk database

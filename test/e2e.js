@@ -157,12 +157,15 @@ async function main() {
   r = await A.post('/api/jobs/apply', { job_id: job.id });
   check('Lamar pekerjaan berhasil', r.status === 200 && r.data.ok);
   r = await A.post('/api/jobs/shift');
-  check('Shift selesai: dibayar 44× Besi Mentah (setara ~48,40 USD)', r.status === 200 && r.data.goods === '44× Besi Mentah', `goods=${r.data.goods}`);
+  // Tahap 6: hari 1 = minggu Panen Raya — upah ADMIN +20%, jadi bayaran
+  // = effectiveQty (52), bukan pay_qty dasar (44). effectiveQty dari
+  // /api/jobs adalah angka yang sama dengan yang dibayarkan shift.
+  check(`Shift selesai: dibayar ${job.effectiveQty}× Besi Mentah (panen +20%)`, r.status === 200 && r.data.goods === `${job.effectiveQty}× Besi Mentah`, `goods=${r.data.goods}`);
   r = await A.get('/api/me');
   check('Energi 0 setelah shift, USD tetap 550 (tanpa gaji uang)', r.data.citizen.energy === 0 && eq(r.data.citizen.usd, 550), `energi=${r.data.citizen.energy} usd=${r.data.citizen.usd}`);
   r = await A.get('/api/inventory');
   const besi = r.data.items.find((i) => i.name === 'Besi Mentah');
-  check('Inventaris: 44× Besi Mentah T1 dari shift', besi && besi.qty === 44 && besi.tier === 1, `besi=${besi?.qty}`);
+  check(`Inventaris: ${job.effectiveQty}× Besi Mentah T1 dari shift`, besi && besi.qty === job.effectiveQty && besi.tier === 1, `besi=${besi?.qty}`);
 
   console.log('\n[6] Pasar — mulai kosong (tanpa bot)');
   r = await A.get('/api/market?scope=local');
@@ -323,11 +326,25 @@ async function main() {
   // A kini di Jakarta (tiba di [9]); kewarganegaraan masih wilayah asal
   // (ibu kota Nusantara). Pindah ke Jakarta — harus berhasil karena A
   // sedang berada di sana.
-  r = await A.post('/api/regions/move', { region_id: jakarta.id });
-  check('Pindah kewarganegaraan ke Jakarta berhasil (sedang di sana)', r.status === 200 && r.data.region === 'Jakarta', `status=${r.status} ${r.data.error || ''}`);
+  // LAHIR ACAK (Tahap 5): bila wilayah asal A kebetulan Jakarta, Jakarta
+  // sudah menjadi kewarganegaraannya — tujuan pindah diganti Jawa Barat
+  // (wilayah merdeka lain); A dipindah ke sana lewat DB tes supaya tidak
+  // menghabiskan Tiket ekstra (jatah 3 Tiket sudah pas untuk alur normal).
+  let dest9b = jakarta;
+  if (homeBefore === jakarta.id) {
+    const regs9b = (await A.get('/api/regions')).data.regions;
+    dest9b = regs9b.find((x) => x.name === 'Jawa Barat');
+    const meA9bPre = (await A.get('/api/me')).data;
+    const db9x = new DatabaseSync(DB_PATH);
+    db9x.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(dest9b.id, meA9bPre.citizen.id);
+    db9x.close();
+    check('A lahir di Jakarta — tujuan pindah dialihkan ke Jawa Barat', !!dest9b, `dest=${dest9b?.name}`);
+  }
+  r = await A.post('/api/regions/move', { region_id: dest9b.id });
+  check(`Pindah kewarganegaraan ke ${dest9b.name} berhasil (sedang di sana)`, r.status === 200 && r.data.region === dest9b.name, `status=${r.status} ${r.data.error || ''}`);
   const meA9b = (await A.get('/api/me')).data;
-  check('Kewarganegaraan kini Jakarta', meA9b.citizen.home_region_id === jakarta.id, `home=${meA9b.homeRegion?.name}`);
-  check('Negara mengikuti kewarganegaraan baru (Jakarta merdeka → tanpa negara)', meA9b.country === null, JSON.stringify(meA9b.country));
+  check(`Kewarganegaraan kini ${dest9b.name}`, meA9b.citizen.home_region_id === dest9b.id, `home=${meA9b.homeRegion?.name}`);
+  check(`Negara mengikuti kewarganegaraan baru (${dest9b.name} merdeka → tanpa negara)`, meA9b.country === null, JSON.stringify(meA9b.country));
   // Pindah lagi langsung ditolak — tapi A harus berada di wilayah tujuan
   // dulu; bepergian kembali ke wilayah asal lama lalu coba pindah:
   r = await A.post('/api/regions/travel', { region_id: homeBefore });
@@ -347,25 +364,25 @@ async function main() {
   const meA9c = (await A.get('/api/me')).data;
   check('Kewarganegaraan kembali wilayah asal; negara kembali Nusantara', meA9c.citizen.home_region_id === homeBefore && meA9c.country?.name === 'Nusantara', `home=${meA9c.homeRegion?.name} country=${meA9c.country?.name}`);
   // Pindah ke wilayah yang TIDAK sedang didiami ditolak:
-  r = await A.post('/api/regions/move', { region_id: jakarta.id });
+  r = await A.post('/api/regions/move', { region_id: dest9b.id });
   check('Pindah ke wilayah yang tidak didiami ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
-  // Pindah saat transit ditolak: mulai perjalanan ke Jakarta, coba pindah
-  // sebelum tiba. Tiket awal A (3) sudah habis dipakai 3 perjalanan
+  // Pindah saat transit ditolak: mulai perjalanan ke tujuan pindah, coba
+  // pindah sebelum tiba. Tiket awal A (3) sudah habis dipakai 3 perjalanan
   // sebelumnya — tambah 1 Tiket lewat DB tes agar perjalanan uji ini bisa
   // dimulai.
   const db9t = new DatabaseSync(DB_PATH);
   const tiketId9 = db9t.prepare("SELECT id FROM commodities WHERE name = 'Tiket'").get().id;
   db9t.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,1) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = qty + 1').run(meA9b.citizen.id, tiketId9);
   db9t.close();
-  r = await A.post('/api/regions/travel', { region_id: jakarta.id });
-  check('A bepergian lagi ke Jakarta (untuk uji pindah saat transit)', r.status === 200, `status=${r.status}`);
-  r = await A.post('/api/regions/move', { region_id: jakarta.id });
+  r = await A.post('/api/regions/travel', { region_id: dest9b.id });
+  check(`A bepergian lagi ke ${dest9b.name} (untuk uji pindah saat transit)`, r.status === 200, `status=${r.status}`);
+  r = await A.post('/api/regions/move', { region_id: dest9b.id });
   check('Pindah kewarganegaraan saat transit ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
   const db9d = new DatabaseSync(DB_PATH);
   db9d.prepare('UPDATE citizens SET travel_arrives_at = ? WHERE id = ?').run(Date.now() - 1000, meA9b.citizen.id);
   db9d.close();
   r = await A.get('/api/me');
-  check('A tiba di Jakarta; kewarganegaraan tetap wilayah asal (bukan Jakarta)', r.data.region.name === 'Jakarta' && r.data.citizen.home_region_id === homeBefore, `region=${r.data.region.name} home=${r.data.homeRegion?.name}`);
+  check(`A tiba di ${dest9b.name}; kewarganegaraan tetap wilayah asal (bukan ${dest9b.name})`, r.data.region.name === dest9b.name && r.data.citizen.home_region_id === homeBefore, `region=${r.data.region.name} home=${r.data.homeRegion?.name}`);
 
   console.log('\n[10] Obrolan Global & laporan');
   r = await A.get('/api/chat/global');
@@ -958,6 +975,10 @@ async function main() {
   }
   dbCv.prepare("INSERT INTO companies (owner_id, name, about, type, region_id, resource, created_at) VALUES (?,?,?,?,?,?,?)")
     .run(aId, 'Perusahaan Tes', '', 'light', aRegion, '', Date.now());
+  // Tahap 6: Industri Ringan kini butuh 1× Gandum Mentah per 1× Makanan —
+  // beri bahan supaya produksi 8→9 (+10% Gudang Industri) tetap jalan.
+  const gandumCv = dbCv.prepare("SELECT id FROM commodities WHERE name = 'Gandum Mentah'").get();
+  dbCv.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?)').run(aId, gandumCv.id, 20);
   const beforeFood = (await A.get('/api/inventory')).data.items.find((x) => x.name === 'Makanan');
   const beforeFoodQty = beforeFood ? beforeFood.qty : 0;
   // Picu tick harian lagi (mundurkan tanggal seperti [12]).
@@ -1156,7 +1177,7 @@ async function main() {
   await forceTick(C);
   check('Tick 3: Besi 1 → produksi 0 (tetap 12)', invQty(cId, bahanId) === 12 && invQty(cId, besiId) === 1);
   r = await C.get('/api/notifications');
-  check('Pabrik kekurangan bahan: notifikasi dikirim', (r.data.notifications || []).some((n) => n.title === 'Pabrik kekurangan bahan'));
+  check('Pabrik kekurangan bahan: notifikasi dikirim', (r.data.notifications || []).some((n) => n.title === 'Pabrik Tes kekurangan bahan'));
 
   console.log('  [22g] Retensi data');
   const old = Date.now() - 200 * 86400000;
@@ -1377,6 +1398,9 @@ async function main() {
   const dapurId = r.data.companyId;
   r = await IO.post('/api/jobs/apply', { job_id: jobIdFor(dapurId) });
   check('IO melamar ke Dapur Tes', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  // Tahap 6: bonus shift Dapur kini butuh 1× Gandum Mentah per unit Makanan.
+  const gandumId = dbCo.prepare("SELECT id FROM commodities WHERE name = 'Gandum Mentah'").get().id;
+  setInvL(gId, gandumId, 10);
   const makananBefore = invQtyL(gId, makananId);
   r = await IO.post('/api/jobs/shift');
   check('Shift 1 Dapur: belum genap 1 unit (0,8 terakumulasi)', r.status === 200 && (r.data.companyBonus === null || r.data.companyBonus?.qty === 0), JSON.stringify(r.data.companyBonus));
@@ -1385,6 +1409,7 @@ async function main() {
   r = await IO.post('/api/jobs/shift');
   check('Shift 2 Dapur: 1× Makanan masuk (akumulasi 1,6)', r.status === 200 && r.data.companyBonus?.qty === 1 && r.data.companyBonus?.product === 'Makanan', JSON.stringify(r.data.companyBonus));
   check('Pemilik GO: inventaris +1 Makanan', invQtyL(gId, makananId) === makananBefore + 1, `makanan=${invQtyL(gId, makananId)}`);
+  check('Dapur: 1 Gandum terpakai untuk 1 Makanan bonus (Tahap 6)', invQtyL(gId, gandumId) === 9, `gandum=${invQtyL(gId, gandumId)}`);
   // (c) Pabrik — bonus butuh 2× Besi Mentah per unit; bila habis, tertahan.
   r = await GO.post('/api/companies', { type: 'factory', name: 'Pabrik Bonus' });
   check('Pabrik Bonus didirikan (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
@@ -2109,6 +2134,11 @@ async function main() {
   // effectiveQty = jumlah setelah pengali UU upah ADMIN (bila ada) — pakai
   // itu sebagai dasar ekspektasi supaya tes tidak rapuh terhadap UU.
   const baseQty = jobL.effectiveQty ?? jobL.pay_qty;
+  // Tahap 6: minggu Festival Rakyat memberi XP shift +50% — ekspektasi XP
+  // dihitung dari event yang sedang berlaku (bukan hardcode 10/20/1/2).
+  const festMult = meL.worldEvent?.key === 'festival' ? 1.5 : 1;
+  const xp50ok = [Math.round(10 * festMult), Math.round(20 * festMult)];
+  const xp1ok = [Math.round(1 * festMult), Math.round(2 * festMult)];
   const dbL = new DatabaseSync(DB_PATH);
   dbL.prepare('UPDATE citizens SET energy = 50 WHERE id = ?').run(meL.citizen.id);
   dbL.close();
@@ -2117,7 +2147,7 @@ async function main() {
   const got50 = r.data.goods ? Number(String(r.data.goods).split('×')[0]) : -1;
   check(`Shift 50 energi: dibayar ~50% (${expect50}× ${jobL.resource})`, r.status === 200 && got50 >= expect50 - 1 && got50 <= expect50 + 1, `goods=${r.data.goods} energyUsed=${r.data.energyUsed}`);
   check('Respons shift 50 energi: energyUsed 50, energyPct 50', r.data.energyUsed === 50 && r.data.energyPct === 50, `energyUsed=${r.data.energyUsed} energyPct=${r.data.energyPct}`);
-  check('Respons shift 50 energi: xpGained 10 (proporsional)', r.data.xpGained === 10 || r.data.xpGained === 20, `xpGained=${r.data.xpGained} doubleXp=${r.data.doubleXp}`);
+  check('Respons shift 50 energi: xpGained 10 (proporsional)', xp50ok.includes(r.data.xpGained), `xpGained=${r.data.xpGained} doubleXp=${r.data.doubleXp} festivalXp=${r.data.festivalXp}`);
   const dbl50 = r.data.doubleXp === true;
   const dbL2 = new DatabaseSync(DB_PATH);
   dbL2.prepare('UPDATE citizens SET energy = 1 WHERE id = ?').run(meL.citizen.id);
@@ -2126,7 +2156,7 @@ async function main() {
   const got1 = r.data.goods ? Number(String(r.data.goods).split('×')[0]) : -1;
   check('Shift 1 energi: dibayar ~1% (maks 1 unit, bukan penuh)', r.status === 200 && got1 <= 1, `goods=${r.data.goods}`);
   check('Respons shift 1 energi: energyUsed 1, energyPct 1', r.data.energyUsed === 1 && r.data.energyPct === 1, `energyUsed=${r.data.energyUsed}`);
-  check('Respons shift 1 energi: xpGained 1 (minimal 1, tetap nambah)', r.data.xpGained === 1 || r.data.xpGained === 2, `xpGained=${r.data.xpGained} doubleXp=${r.data.doubleXp}`);
+  check('Respons shift 1 energi: xpGained 1 (minimal 1, tetap nambah)', xp1ok.includes(r.data.xpGained), `xpGained=${r.data.xpGained} doubleXp=${r.data.doubleXp} festivalXp=${r.data.festivalXp}`);
   const dbl1 = r.data.doubleXp === true;
   const dbL3 = new DatabaseSync(DB_PATH);
   dbL3.prepare('UPDATE citizens SET energy = 0 WHERE id = ?').run(meL.citizen.id);
@@ -2137,7 +2167,8 @@ async function main() {
   // XP shift PROPORSIONAL (tiket #22, v3.1.0): 50 energi -> 10 XP, 1 energi
   // -> 1 XP (minimal 1, tetap nambah). Total 11 XP — atau ×2 per shift bila
   // tes jalan di jam ganda 00:00–01:00 WIB (flag doubleXp per respons).
-  const expectXp = (dbl50 ? 20 : 10) + (dbl1 ? 2 : 1);
+  // Tahap 6: minggu Festival Rakyat mengalikan lagi ×1,5 (festMult).
+  const expectXp = (dbl50 ? Math.round(20 * festMult) : Math.round(10 * festMult)) + (dbl1 ? Math.round(2 * festMult) : Math.round(1 * festMult));
   check(`Shift sebagian: XP proporsional total ${expectXp} XP`, meL2.xp === expectXp, `xp=${meL2.xp} dbl50=${dbl50} dbl1=${dbl1}`);
   check('Shift sebagian: counter shift tetap naik (2 giliran)', meL2.shifts === 2, `shifts=${meL2.shifts}`);
   const dbL4 = new DatabaseSync(DB_PATH);
@@ -2416,11 +2447,14 @@ async function main() {
   dbN.prepare('UPDATE citizens SET energy = 50 WHERE id = ?').run(meT3.citizen.id);
   const wibHour = (new Date().getUTCHours() + 7) % 24;
   const expectDouble = wibHour === 0;
+  // Tahap 6: minggu Festival Rakyat memberi XP shift +50%.
+  const festN = meT3.worldEvent?.key === 'festival' ? 1.5 : 1;
+  const expectShiftXp = Math.round((expectDouble ? 20 : 10) * festN);
   r = await T3.post('/api/jobs/shift');
-  check(`Shift 50 energi: xpGained ${expectDouble ? 20 : 10} (proporsional, ${expectDouble ? 'jam ganda ×2' : 'di luar jam ganda'})`, r.status === 200 && r.data.xpGained === (expectDouble ? 20 : 10), `xpGained=${r.data.xpGained} doubleXp=${r.data.doubleXp} jamWIB=${wibHour}`);
+  check(`Shift 50 energi: xpGained ${expectShiftXp} (proporsional, ${expectDouble ? 'jam ganda ×2' : 'di luar jam ganda'}${festN > 1 ? ' + festival ×1,5' : ''})`, r.status === 200 && r.data.xpGained === expectShiftXp, `xpGained=${r.data.xpGained} doubleXp=${r.data.doubleXp} festivalXp=${r.data.festivalXp} jamWIB=${wibHour}`);
   check('Flag doubleXp shift cocok dengan jam WIB sekarang', r.data.doubleXp === expectDouble, `doubleXp=${r.data.doubleXp} jamWIB=${wibHour}`);
   r = await T3.get('/api/me');
-  check('XP T3 total 60 + shift = 70 (atau 80 di jam ganda)', r.data.citizen.xp === (expectDouble ? 80 : 70), `xp=${r.data.citizen.xp}`);
+  check(`XP T3 total 60 + shift = ${60 + expectShiftXp}`, r.data.citizen.xp === 60 + expectShiftXp, `xp=${r.data.citizen.xp}`);
 
   // --- (c) #20 Konvoi dibayar bahan, bukan emas.
   r = await T4.get('/api/convoy');
@@ -2485,6 +2519,332 @@ async function main() {
   check('T1 membuka blokir T2', r.status === 200 && r.data.ok);
   r = await T1.get('/api/chat/blocked');
   check('Daftar blokir kosong setelah buka blokir', (r.data.blocked || []).length === 0, `n=${(r.data.blocked || []).length}`);
+  console.log('\n[22o] Tahap 6 v4.0.0 — militer, kepemilikan wilayah, rantai produksi, reputasi, demografi, event dunia');
+  const dbS6 = new DatabaseSync(DB_PATH);
+  const M1 = new Client(); const M2 = new Client(); const M3 = new Client(); const M4 = new Client();
+  const M5 = new Client(); const M6 = new Client(); const M7 = new Client(); const M8 = new Client();
+  M1.extraHeaders = { 'X-Forwarded-For': '127.0.0.31' };
+  M2.extraHeaders = { 'X-Forwarded-For': '127.0.0.32' };
+  M3.extraHeaders = { 'X-Forwarded-For': '127.0.0.33' };
+  M4.extraHeaders = { 'X-Forwarded-For': '127.0.0.34' };
+  M5.extraHeaders = { 'X-Forwarded-For': '127.0.0.35' };
+  M6.extraHeaders = { 'X-Forwarded-For': '127.0.0.36' };
+  M7.extraHeaders = { 'X-Forwarded-For': '127.0.0.37' };
+  M8.extraHeaders = { 'X-Forwarded-For': '127.0.0.38' };
+  for (const [i, C] of [[1, M1], [2, M2], [3, M3], [4, M4], [5, M5], [6, M6], [7, M7], [8, M8]]) {
+    r = await C.post('/api/auth/register', { email: `tahap6m${i}@test.local`, password: 'rahasia123', username: `tahap6_m${i}` });
+    check(`Tahap 6: M${i} mendaftar`, r.status === 200 && r.data.ok, `status=${r.status}`);
+  }
+  const meM1 = (await M1.get('/api/me')).data;
+  const meM2 = (await M2.get('/api/me')).data;
+  const meM3o = (await M3.get('/api/me')).data;
+  const meM4 = (await M4.get('/api/me')).data;
+  const meM5 = (await M5.get('/api/me')).data;
+  const meM6 = (await M6.get('/api/me')).data;
+  const meM7 = (await M7.get('/api/me')).data;
+  const meM8 = (await M8.get('/api/me')).data;
+  const m1Id = meM1.citizen.id; const m2Id = meM2.citizen.id; const m3Id = meM3o.citizen.id; const m4Id = meM4.citizen.id;
+  const m5Id = meM5.citizen.id; const m6Id = meM6.citizen.id; const m7Id = meM7.citizen.id; const m8Id = meM8.citizen.id;
+  const comIdO = (name) => dbS6.prepare('SELECT id FROM commodities WHERE name = ?').get(name)?.id;
+  const senjataO = comIdO('Senjata'); const droneO = comIdO('Drone'); const bahanO = comIdO('Bahan Bangunan');
+  const besiO = comIdO('Besi Mentah'); const gandumO = comIdO('Gandum Mentah'); const minyakO = comIdO('Minyak Mentah');
+  const invQtyO = (citizenId, commodityId) => dbS6.prepare('SELECT qty FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1').get(citizenId, commodityId)?.qty || 0;
+  const setInvO = (citizenId, commodityId, qty) => dbS6.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = ?').run(citizenId, commodityId, qty, qty);
+  const setEnergyO = (citizenId, energy) => dbS6.prepare('UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ?').run(energy, Date.now(), citizenId);
+  const setDayO = (day) => dbS6.prepare('UPDATE world SET day = ? WHERE id = 1').run(day);
+  const unitsO = (citizenId) => dbS6.prepare('SELECT unit_type, qty FROM military_units WHERE citizen_id = ?').all(citizenId);
+  const regionA = meM5.citizen.region_id;
+  // Wilayah B harus berbeda dari A (registrasi acak bisa sama).
+  const regionB = regionA === meM6.citizen.region_id ? (regionA % 17) + 1 : meM6.citizen.region_id;
+  dbS6.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(regionB, regionB, m6Id);
+  // Wilayah aman untuk M1: dibebaskan PAKSA via DB (seksi lama memaksa
+  // semua 17 wilayah ke negara 1 lewat DB langsung, jadi tidak ada wilayah
+  // yang benar-benar bebas) — supaya serangan (b)/(f) tidak kena bonus
+  // lingkungan (mobilisasi, anggaran perang, ideologi) dari negara itu.
+  const safeRegionO = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].find((x) => x !== regionA && x !== regionB);
+  dbS6.prepare("UPDATE regions SET country_id = NULL, controller = 'bebas', controller_id = NULL WHERE id = ?").run(safeRegionO);
+  dbS6.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(safeRegionO, safeRegionO, m1Id);
+
+  // --- (a) Militer: rekrut / bubarkan / batas / biaya.
+  setInvO(m1Id, senjataO, 100); setInvO(m1Id, droneO, 50); setInvO(m1Id, bahanO, 50);
+  r = await M1.get('/api/military');
+  check('GET /api/military: awal kosong, cap 60 (Lv 1 = 50+10), 3 jenis unit', r.status === 200 && r.data.power === 0 && r.data.mult === 1 && r.data.cap === 60 && Object.keys(r.data.defs || {}).length === 3, JSON.stringify({ power: r.data.power, cap: r.data.cap }));
+  r = await M1.post('/api/military/recruit', { type: 'kavaleri', qty: 1 });
+  check('Rekrut jenis tak dikenal ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await M1.post('/api/military/recruit', { type: 'infantry', qty: 0 });
+  check('Rekrut 0 unit ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await M1.post('/api/military/recruit', { type: 'infantry', qty: 51 });
+  check('Rekrut 51 unit ditolak (400, maks 50)', r.status === 400, `status=${r.status}`);
+  r = await M1.post('/api/military/recruit', { type: 'infantry', qty: 10 });
+  check('Rekrut 10 Infanteri: kekuatan 20, pengali 1,10, perawatan 10', r.status === 200 && r.data.power === 20 && r.data.mult === 1.1 && r.data.upkeep === 10 && r.data.count === 10, JSON.stringify({ power: r.data.power, mult: r.data.mult }));
+  check('Rekrut 10 Infanteri: 10 Senjata + 50 USD terpotong', invQtyO(m1Id, senjataO) === 90 && (await M1.get('/api/me')).data.citizen.usd === 450, `senjata=${invQtyO(m1Id, senjataO)}`);
+  r = await M1.post('/api/military/recruit', { type: 'drone', qty: 10 });
+  check('Rekrut 10 Drone: kekuatan 70, pengali 1,35, perawatan 30', r.status === 200 && r.data.power === 70 && r.data.mult === 1.35 && r.data.upkeep === 30, JSON.stringify({ power: r.data.power, mult: r.data.mult }));
+  r = await M1.post('/api/military/recruit', { type: 'heavy', qty: 2 });
+  check('Rekrut 2 Kendaraan Berat: kekuatan 94, pengali 1,47', r.status === 200 && r.data.power === 94 && r.data.mult === 1.47, JSON.stringify({ power: r.data.power, mult: r.data.mult }));
+  check('Rekrut Kendaraan Berat: 4 Bahan Bangunan + 40 USD terpotong', invQtyO(m1Id, bahanO) === 46, `bahan=${invQtyO(m1Id, bahanO)}`);
+  r = await M1.post('/api/military/recruit', { type: 'infantry', qty: 50 });
+  check('Rekrut melewati batas 60 unit ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await M1.post('/api/military/recruit', { type: 'infantry', qty: 38 });
+  check('Rekrut sampai batas persis 60 unit berhasil, pengali mentok 1,5', r.status === 200 && r.data.count === 60 && r.data.mult === 1.5, JSON.stringify({ count: r.data.count, mult: r.data.mult }));
+  r = await M1.post('/api/military/recruit', { type: 'infantry', qty: 1 });
+  check('Rekrut di atas batas ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await M1.post('/api/military/disband', { type: 'drone', qty: 3 });
+  check('Bubarkan 3 Drone: kekuatan 155, tetap ×1,5', r.status === 200 && r.data.power === 155 && r.data.mult === 1.5 && r.data.count === 57, JSON.stringify({ power: r.data.power, count: r.data.count }));
+  r = await M1.post('/api/military/disband', { type: 'drone', qty: 99 });
+  check('Bubarkan melebihi yang dimiliki ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await M1.post('/api/military/disband', { type: 'infantry', qty: 48 });
+  check('Bubarkan 48 Infanteri: kekuatan 59, pengali 1,30', r.status === 200 && r.data.power === 59 && r.data.mult === 1.3, JSON.stringify({ power: r.data.power, mult: r.data.mult }));
+  r = await M1.post('/api/military/disband', { type: 'drone', qty: 7 });
+  r = await M1.post('/api/military/disband', { type: 'heavy', qty: 2 });
+  check('Bubarkan semua: kekuatan 0, pengali 1', r.status === 200 && r.data.power === 0 && r.data.mult === 1 && r.data.count === 0, JSON.stringify(r.data));
+
+  // --- (b) Serangan perang memakai pengali militer.
+  setDayO(1); // minggu Panen Raya — bukan Darurat Militer, supaya pengali murni dari unit
+  const warO = dbS6.prepare("INSERT INTO wars (name, region_id, attacker_label, defender_label, score_a, score_d, status, winner, ends_at, created_at) VALUES (?,?,?,?,0,0,'active','',?,?)")
+    .run('Perang Tahap 6', safeRegionO, 'Pemberontak Tahap 6', 'Pembela Tahap 6', Date.now() + 7 * 86400000, Date.now());
+  const warOId = Number(warO.lastInsertRowid);
+  setInvO(m1Id, senjataO, 10); setEnergyO(m1Id, 100);
+  r = await M1.post(`/api/wars/${warOId}/attack`, { side: 'defender', ammo: 'Senjata' });
+  check('Serang tanpa unit: kerusakan dasar 20, tanpa bonus pasukan', r.status === 200 && r.data.damage === 20 && !(r.data.bonuses || []).some((b) => b.startsWith('Pasukan')), `damage=${r.data.damage} bonuses=${JSON.stringify(r.data.bonuses)}`);
+  setInvO(m1Id, senjataO, 10); // serangan di atas memakai 1 Senjata — isi lagi 10 untuk rekrut
+  r = await M1.post('/api/military/recruit', { type: 'infantry', qty: 10 });
+  check('Rekrut 10 Infanteri lagi untuk perang', r.status === 200 && r.data.power === 20);
+  setEnergyO(m1Id, 100); setInvO(m1Id, senjataO, 5); // amunisi untuk serangan
+  r = await M1.post(`/api/wars/${warOId}/attack`, { side: 'defender', ammo: 'Senjata' });
+  check('Serang dengan 10 Infanteri: kerusakan 20 → 22 (×1,10) + label Pasukan', r.status === 200 && r.data.damage === 22 && (r.data.bonuses || []).includes('Pasukan +10%'), `damage=${r.data.damage} bonuses=${JSON.stringify(r.data.bonuses)}`);
+  r = await M1.get('/api/wars/' + warOId);
+  check('Detail perang: militaryPower 20, militaryMult 1,1', r.data.militaryPower === 20 && r.data.militaryMult === 1.1, JSON.stringify({ p: r.data.militaryPower, m: r.data.militaryMult }));
+  await M1.post('/api/military/disband', { type: 'infantry', qty: 10 });
+
+  // --- (c) SATU tick: penutupan perang (kepemilikan) + perawatan + produksi.
+  // M2: 5 Infanteri + 5 Drone (perawatan 15 USD/hari) tapi saldo hanya 5 USD
+  // -> Drone (termahal) desersi, Infanteri bertahan, saldo habis.
+  setInvO(m2Id, senjataO, 5); setInvO(m2Id, droneO, 5);
+  r = await M2.post('/api/military/recruit', { type: 'infantry', qty: 5 });
+  check('M2 merekrut 5 Infanteri', r.status === 200 && r.data.power === 10);
+  r = await M2.post('/api/military/recruit', { type: 'drone', qty: 5 });
+  check('M2 merekrut 5 Drone', r.status === 200 && r.data.power === 35);
+  dbS6.prepare('UPDATE citizens SET usd = 5 WHERE id = ?').run(m2Id);
+  // M3: Industri Ringan + 5 Gandum -> produksi 5 Makanan (butuh 8, bahan 5).
+  dbS6.prepare('UPDATE citizens SET gold = 1000 WHERE id = ?').run(m3Id);
+  r = await M3.post('/api/companies', { type: 'light', name: 'Dapur Enam' });
+  check('M3 mendirikan Industri Ringan', r.status === 200 && !!r.data.companyId, `status=${r.status}`);
+  setInvO(m3Id, gandumO, 5);
+  const makananM3Before = invQtyO(m3Id, comIdO('Makanan'));
+  // M4: Industri Berat + 2 Besi + 2 Minyak -> produksi 2 Drone (butuh 3+3).
+  dbS6.prepare('UPDATE citizens SET gold = 1000 WHERE id = ?').run(m4Id);
+  r = await M4.post('/api/companies', { type: 'heavy', name: 'Berat Enam' });
+  check('M4 mendirikan Industri Berat', r.status === 200 && !!r.data.companyId, `status=${r.status}`);
+  setInvO(m4Id, besiO, 2); setInvO(m4Id, minyakO, 2);
+  const droneM4Before = invQtyO(m4Id, droneO);
+  // Perang A (penyerang menang): panglima = M1 (kerusakan terbanyak 60 vs 40).
+  const warA = dbS6.prepare("INSERT INTO wars (name, region_id, attacker_label, defender_label, score_a, score_d, status, winner, ends_at, created_at) VALUES (?,?,?,?,?,?,'active','',?,?)")
+    .run('Perang Rebut A', regionA, 'Pemberontak A', 'Pembela A', 100, 10, Date.now() - 1000, Date.now());
+  const warAId = Number(warA.lastInsertRowid);
+  dbS6.prepare('INSERT INTO war_attacks (war_id, citizen_id, side, damage, ammo, created_at) VALUES (?,?,?,?,?,?)').run(warAId, m1Id, 'attacker', 60, 'Senjata', Date.now());
+  dbS6.prepare('INSERT INTO war_attacks (war_id, citizen_id, side, damage, ammo, created_at) VALUES (?,?,?,?,?,?)').run(warAId, m2Id, 'attacker', 40, 'Senjata', Date.now());
+  dbS6.prepare('INSERT INTO war_attacks (war_id, citizen_id, side, damage, ammo, created_at) VALUES (?,?,?,?,?,?)').run(warAId, m6Id, 'defender', 5, 'Senjata', Date.now());
+  // Perang B (pembela menang): wilayah B sudah dikuasai pemberontak -> dibebaskan.
+  dbS6.prepare("UPDATE regions SET controller = 'pemberontak', controller_id = ? WHERE id = ?").run(m1Id, regionB);
+  const warB = dbS6.prepare("INSERT INTO wars (name, region_id, attacker_label, defender_label, score_a, score_d, status, winner, ends_at, created_at) VALUES (?,?,?,?,?,?,'active','',?,?)")
+    .run('Perang Rebut B', regionB, 'Pemberontak B', 'Pembela B', 10, 100, Date.now() - 1000, Date.now());
+  const warBId = Number(warB.lastInsertRowid);
+  dbS6.prepare('INSERT INTO war_attacks (war_id, citizen_id, side, damage, ammo, created_at) VALUES (?,?,?,?,?,?)').run(warBId, m1Id, 'attacker', 10, 'Senjata', Date.now());
+  dbS6.prepare('INSERT INTO war_attacks (war_id, citizen_id, side, damage, ammo, created_at) VALUES (?,?,?,?,?,?)').run(warBId, m6Id, 'defender', 50, 'Senjata', Date.now());
+  // Paksa tick (pola [12]): mundurkan tanggal, picu, polling sampai hari 2.
+  const ydayO = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  dbS6.prepare('UPDATE world SET last_tick_date = ? WHERE id = 1').run(ydayO);
+  await M1.get('/api/me');
+  let dayO = 0;
+  for (let i = 0; i < 33; i++) {
+    await sleep(2000);
+    r = await M1.get('/api/world');
+    dayO = r.data.day;
+    if (dayO === 2) break;
+  }
+  check('Tick Tahap 6 berjalan: hari 1 → 2', dayO === 2, `day=${dayO}`);
+  // Tick berjalan async: hari naik di langkah 8, perawatan (langkah 9)
+  // + pengumuman event (langkah 10) menyusul — tunggu sampai desersi M2
+  // terlihat di DB sebelum memeriksa keadaan pasca-tick.
+  for (let i = 0; i < 20; i++) {
+    const droneLeft = dbS6.prepare("SELECT COUNT(*) AS n FROM military_units WHERE citizen_id = ? AND unit_type = 'drone'").get(m2Id).n;
+    const usdLeft = dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m2Id).usd;
+    if (droneLeft === 0 && usdLeft === 0) break;
+    await sleep(500);
+  }
+  const warARow = dbS6.prepare('SELECT status, winner FROM wars WHERE id = ?').get(warAId);
+  check('Perang A ditutup: penyerang menang', warARow.status === 'ended' && warARow.winner === 'attacker', JSON.stringify(warARow));
+  const regA = dbS6.prepare('SELECT controller, controller_id, country_id FROM regions WHERE id = ?').get(regionA);
+  check('Wilayah A dikuasai pemberontak oleh M1 (panglima, kerusakan terbanyak)', regA.controller === 'pemberontak' && regA.controller_id === m1Id && regA.country_id === null, JSON.stringify(regA));
+  r = await M1.get('/api/regions/' + regionA);
+  check('Detail wilayah A: controller_name = tahap6_m1', r.data.region?.controller_name === 'tahap6_m1', `controller_name=${r.data.region?.controller_name}`);
+  r = await M1.get('/api/regions');
+  const listA = (r.data.regions || []).find((x) => x.id === regionA);
+  check('Daftar wilayah: A bertanda pemberontak + nama panglima', listA?.controller === 'pemberontak' && listA?.controller_name === 'tahap6_m1');
+  const warBRow = dbS6.prepare('SELECT status, winner FROM wars WHERE id = ?').get(warBId);
+  check('Perang B ditutup: pembela menang', warBRow.status === 'ended' && warBRow.winner === 'defender', JSON.stringify(warBRow));
+  const regB = dbS6.prepare('SELECT controller, controller_id FROM regions WHERE id = ?').get(regionB);
+  check('Wilayah B dibebaskan (bebas, tanpa penguasa)', regB.controller === 'bebas' && regB.controller_id === null, JSON.stringify(regB));
+  r = await M1.get('/api/notifications');
+  check('M1 diberitahu: Kamu menguasai wilayah A', (r.data.notifications || []).some((n) => n.title && n.title.startsWith('Kamu menguasai')), JSON.stringify((r.data.notifications || []).map((n) => n.title)));
+  const m2Units = unitsO(m2Id);
+  check('Perawatan: Drone M2 desersi (saldo kurang), Infanteri bertahan', m2Units.some((u) => u.unit_type === 'infantry' && u.qty === 5) && !m2Units.some((u) => u.unit_type === 'drone'), JSON.stringify(m2Units));
+  check('Perawatan: saldo M2 habis (5 → 0)', dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m2Id).usd === 0, `usd=${dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m2Id).usd}`);
+  r = await M2.get('/api/notifications');
+  check('M2 diberitahu: Pasukanmu desersi', (r.data.notifications || []).some((n) => n.title === 'Pasukanmu desersi'));
+  check('Produksi Ringan: 5 Gandum -> 5 Makanan (bahan membatasi)', invQtyO(m3Id, comIdO('Makanan')) === makananM3Before + 5 && invQtyO(m3Id, gandumO) === 0, `makanan=${invQtyO(m3Id, comIdO('Makanan'))} gandum=${invQtyO(m3Id, gandumO)}`);
+  check('Produksi Berat: 2 Besi + 2 Minyak -> 2 Drone (bahan membatasi)', invQtyO(m4Id, droneO) === droneM4Before + 2 && invQtyO(m4Id, besiO) === 0 && invQtyO(m4Id, minyakO) === 0, `drone=${invQtyO(m4Id, droneO)} besi=${invQtyO(m4Id, besiO)} minyak=${invQtyO(m4Id, minyakO)}`);
+  r = await M1.get('/api/military');
+  check('GET /api/military top: M2 teratas (kekuatan 10, sisa Infanteri)', (r.data.top || [])[0]?.username === 'tahap6_m2' && (r.data.top || [])[0]?.power === 10, JSON.stringify(r.data.top));
+
+  // --- (d) Reputasi dagang: transaksi selesai + tier.
+  setInvO(m5Id, besiO, 30);
+  r = await M5.post('/api/market/sell', { scope: 'local', commodity_id: besiO, tier: 1, qty: 10, price: 9 });
+  check('M5 pasang penawaran 10× Besi @9', r.status === 200 && !!r.data.offerId, `status=${r.status}`);
+  const offerO1 = r.data.offerId;
+  r = await M6.post('/api/market/buy', { offer_id: offerO1, qty: 10 });
+  check('M6 membeli penawaran M5', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  check('Reputasi: penjual + pembeli masing-masing +1 transaksi', dbS6.prepare('SELECT trades_completed FROM citizens WHERE id = ?').get(m5Id).trades_completed === 1 && dbS6.prepare('SELECT trades_completed FROM citizens WHERE id = ?').get(m6Id).trades_completed === 1, `m5=${dbS6.prepare('SELECT trades_completed FROM citizens WHERE id = ?').get(m5Id).trades_completed} m6=${dbS6.prepare('SELECT trades_completed FROM citizens WHERE id = ?').get(m6Id).trades_completed}`);
+  r = await M5.get('/api/profile/tahap6_m5');
+  check('Profil M5: reputasi Pedagang Baru, 1 transaksi', r.data.profile?.trade_reputation === 'Pedagang Baru' && r.data.profile?.trades_completed === 1, JSON.stringify({ rep: r.data.profile?.trade_reputation, n: r.data.profile?.trades_completed }));
+  r = await M5.post('/api/market/sell', { scope: 'local', commodity_id: besiO, tier: 1, qty: 10, price: 9 });
+  const offerO2 = r.data.offerId;
+  r = await M5.get('/api/market?scope=local');
+  const offerRowO = (r.data.offers || []).find((o) => o.id === offerO2);
+  check('Pasar: penawaran M5 menampilkan reputasi penjual', offerRowO?.seller_reputation === 'Pedagang Baru', `rep=${offerRowO?.seller_reputation}`);
+  dbS6.prepare('UPDATE citizens SET trades_completed = 49 WHERE id = ?').run(m5Id);
+  r = await M6.post('/api/market/buy', { offer_id: offerO2, qty: 10 });
+  check('M6 membeli penawaran kedua M5', r.status === 200 && r.data.ok);
+  r = await M5.get('/api/profile/tahap6_m5');
+  check('Reputasi: 50 transaksi -> Pedagang Terpercaya', r.data.profile?.trade_reputation === 'Pedagang Terpercaya' && r.data.profile?.trades_completed === 50, JSON.stringify({ rep: r.data.profile?.trade_reputation, n: r.data.profile?.trades_completed }));
+  r = await M6.post('/api/market/buy-order', { scope: 'local', commodity_id: besiO, tier: 1, qty: 10, price: 9 });
+  check('M6 pasang order beli 10× Besi @9', r.status === 200 && !!r.data.orderId, `status=${r.status}`);
+  r = await M5.post('/api/market/sell-to-order', { order_id: r.data.orderId, qty: 10 });
+  check('M5 menjual ke order beli M6', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  check('Reputasi: jual ke order beli juga +1 untuk keduanya', dbS6.prepare('SELECT trades_completed FROM citizens WHERE id = ?').get(m5Id).trades_completed === 51 && dbS6.prepare('SELECT trades_completed FROM citizens WHERE id = ?').get(m6Id).trades_completed === 3, `m5=${dbS6.prepare('SELECT trades_completed FROM citizens WHERE id = ?').get(m5Id).trades_completed} m6=${dbS6.prepare('SELECT trades_completed FROM citizens WHERE id = ?').get(m6Id).trades_completed}`);
+
+  // --- (e) Demografi wilayah.
+  r = await M1.get('/api/regions/' + regionA);
+  const demoO = r.data.demographics || {};
+  check('Demografi wilayah A: total = pemula+aktif+veteran, rata-rata ada', typeof demoO.total === 'number' && demoO.total >= 1 && (demoO.pemula + demoO.aktif + demoO.veteran) === demoO.total && typeof demoO.avgLevel === 'number', JSON.stringify(demoO));
+  const expPowerO = dbS6.prepare('SELECT COALESCE(SUM(mu.qty * CASE mu.unit_type WHEN \'infantry\' THEN 2 WHEN \'drone\' THEN 5 WHEN \'heavy\' THEN 12 ELSE 0 END), 0) AS p FROM military_units mu JOIN citizens c ON c.id = mu.citizen_id WHERE c.home_region_id = ?').get(regionA).p;
+  check('Demografi: regionPower cocok dengan hitungan DB', r.data.regionPower === expPowerO, `api=${r.data.regionPower} db=${expPowerO}`);
+
+  // --- (f) Event dunia mingguan: rotasi + efek masing-masing.
+  setDayO(1);
+  r = await M1.get('/api/me');
+  check('Event hari 1: Panen Raya (upah ADMIN +20%)', r.data.worldEvent?.key === 'panen' && r.data.worldEvent?.name === 'Panen Raya', JSON.stringify(r.data.worldEvent));
+  r = await M1.get('/api/world');
+  check('/api/world ikut membawa event minggu ini', r.data.event?.key === 'panen', JSON.stringify(r.data.event));
+  // Panen: upah ADMIN +20% — bandingkan effectiveQty vs pay_qty dasar.
+  const jobsRespO = (await M1.get('/api/jobs')).data;
+  const jobsM1 = jobsRespO.jobs;
+  const adminJobO = jobsM1.find((x) => x.is_admin === 1 && x.region_id === safeRegionO);
+  check('Panen: effectiveQty ADMIN = pay_qty × pengali UU ×1,2', !!adminJobO && adminJobO.effectiveQty === Math.max(1, Math.floor((adminJobO.pay_qty || 0) * (jobsRespO.adminPayMult || 1) * 1.2)), JSON.stringify({ pay: adminJobO?.pay_qty, eff: adminJobO?.effectiveQty, mult: jobsRespO.adminPayMult }));
+  r = await M1.post('/api/jobs/apply', { job_id: adminJobO.id });
+  check('M1 melamar ADMIN (panen)', r.status === 200 && r.data.ok, `status=${r.status}`);
+  setEnergyO(m1Id, 100);
+  dbS6.prepare('UPDATE citizens SET fatigue = 0, energy_spent_today = 0 WHERE id = ?').run(m1Id);
+  r = await M1.post('/api/jobs/shift');
+  const gotPanen = r.data.goods ? Number(String(r.data.goods).split('×')[0]) : -1;
+  check('Panen: shift penuh dibayar effectiveQty (×1,2)', r.status === 200 && gotPanen === adminJobO.effectiveQty, `goods=${r.data.goods} eff=${adminJobO.effectiveQty}`);
+  // Festival: XP shift +50%.
+  setDayO(8);
+  r = await M1.get('/api/me');
+  check('Event hari 8: Festival Rakyat (XP shift +50%)', r.data.worldEvent?.key === 'festival', JSON.stringify(r.data.worldEvent));
+  setEnergyO(m1Id, 100);
+  dbS6.prepare('UPDATE citizens SET fatigue = 0, energy_spent_today = 0 WHERE id = ?').run(m1Id);
+  const xpBeforeO = (await M1.get('/api/me')).data.citizen.xp;
+  const dblFest = (new Date().getUTCHours() + 7) % 24 === 0;
+  r = await M1.post('/api/jobs/shift');
+  const expectFestXp = Math.round(20 * (dblFest ? 2 : 1) * 1.5);
+  check(`Festival: shift penuh XP ${expectFestXp} (+50%)`, r.status === 200 && r.data.xpGained === expectFestXp && r.data.festivalXp === true, `xpGained=${r.data.xpGained} festivalXp=${r.data.festivalXp}`);
+  check('Festival: XP warga bertambah sesuai', (await M1.get('/api/me')).data.citizen.xp === xpBeforeO + expectFestXp);
+  // Badai: perjalanan +5 menit.
+  setDayO(15);
+  r = await M1.get('/api/me');
+  check('Event hari 15: Badai Besar (perjalanan +5 mnt)', r.data.worldEvent?.key === 'badai', JSON.stringify(r.data.worldEvent));
+  setDayO(1);
+  const regsBase = (await M1.get('/api/regions')).data.regions;
+  const targetO = regsBase.find((x) => x.id !== safeRegionO && x.id !== meM7.citizen.region_id);
+  const baseMinO = targetO.travelMinutes;
+  // Basis M7 sendiri: jarak dihitung dari wilayah masing-masing.
+  const baseM7O = (await M7.get('/api/regions')).data.regions.find((x) => x.id === targetO.id).travelMinutes;
+  setDayO(15);
+  const regsStorm = (await M1.get('/api/regions')).data.regions;
+  const stormMinO = regsStorm.find((x) => x.id === targetO.id).travelMinutes;
+  check('Badai: travelMinutes di daftar wilayah +5', stormMinO === baseMinO + 5, `dasar=${baseMinO} badai=${stormMinO}`);
+  r = await M7.post('/api/regions/travel', { region_id: targetO.id });
+  check('Badai: POST travel ikut +5 menit', r.status === 200 && r.data.travelMinutes === baseM7O + 5, `minutes=${r.data.travelMinutes} dasar=${baseM7O}`);
+  // Wabah: biaya latihan +2 emas.
+  setDayO(22);
+  r = await M8.get('/api/me');
+  check('Event hari 22: Wabah Melanda (latihan +2 emas)', r.data.worldEvent?.key === 'wabah', JSON.stringify(r.data.worldEvent));
+  check('Wabah: trainCosts.strength 1 → 3', r.data.citizen.trainCosts?.strength === 3, JSON.stringify(r.data.citizen.trainCosts));
+  r = await M8.post('/api/train', { attr: 'str' });
+  check('Wabah: latih str potong 3 emas (bukan 1)', r.status === 200 && r.data.cost === 3 && (await M8.get('/api/me')).data.citizen.gold === 47, `cost=${r.data.cost} ${r.data.error || ''}`);
+  // Booming: pajak −1 poin — butuh negara (dirikan dulu, M6 Level 10).
+  setDayO(29);
+  r = await M6.get('/api/me');
+  check('Event hari 29: Pasar Bergairah (pajak −1 poin)', r.data.worldEvent?.key === 'booming', JSON.stringify(r.data.worldEvent));
+  // Ibu kota negara baru: wilayah lain yang dibebaskan paksa (alasan sama
+  // seperti safeRegionO — semua wilayah dipaksa ke negara 1 oleh seksi lama).
+  const freeRegionO = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].find((x) => x !== regionA && x !== regionB && x !== safeRegionO);
+  dbS6.prepare("UPDATE regions SET country_id = NULL, controller = 'bebas', controller_id = NULL WHERE id = ?").run(freeRegionO);
+  dbS6.prepare('UPDATE citizens SET region_id = ?, home_region_id = ?, level = 10, gold = 500 WHERE id = ?').run(freeRegionO, freeRegionO, m6Id);
+  r = await M6.post('/api/countries', { name: 'Nusantara Enam', ideology: 'Konservatisme', system: 'presidensial' });
+  check('M6 mendirikan negara Nusantara Enam (Lv 10)', r.status === 200 && !!r.data.countryId, `status=${r.status} ${r.data.error || ''}`);
+  const nusOId = r.data.countryId;
+  check('Negara baru: wilayah ibu kota controller=negara', dbS6.prepare('SELECT controller, controller_id FROM regions WHERE id = ?').get(freeRegionO).controller === 'negara' && dbS6.prepare('SELECT controller_id FROM regions WHERE id = ?').get(freeRegionO).controller_id === nusOId);
+  r = await M6.get('/api/market?scope=local');
+  check('Booming: tarif pajak pasar 2% → 1%', r.data.taxRate === 1, `taxRate=${r.data.taxRate}`);
+  setDayO(1);
+  r = await M6.get('/api/market?scope=local');
+  check('Di luar booming: tarif pajak kembali 2%', r.data.taxRate === 2, `taxRate=${r.data.taxRate}`);
+  // Darurat: kerusakan perang +10%.
+  setDayO(36);
+  r = await M1.get('/api/me');
+  check('Event hari 36: Darurat Militer (kerusakan +10%)', r.data.worldEvent?.key === 'darurat', JSON.stringify(r.data.worldEvent));
+  setEnergyO(m1Id, 100); setInvO(m1Id, senjataO, 5);
+  r = await M1.post(`/api/wars/${warOId}/attack`, { side: 'defender', ammo: 'Senjata' });
+  check('Darurat: serangan 20 → 22 (+10%) + label', r.status === 200 && r.data.damage === 22 && (r.data.bonuses || []).includes('Darurat Militer +10%'), `damage=${r.data.damage} bonuses=${JSON.stringify(r.data.bonuses)}`);
+  // Rotasi: hari 43 kembali ke Panen Raya.
+  setDayO(43);
+  r = await M1.get('/api/me');
+  check('Event hari 43: kembali Panen Raya (rotasi 6 minggu)', r.data.worldEvent?.key === 'panen', JSON.stringify(r.data.worldEvent));
+
+  // --- (g) Pajak penjual di wilayah taklukan mengalir ke panglima perang.
+  setDayO(1); // panen — tarif normal 2%, bukan minggu booming
+  // M5: kewarganegaraan di ibu kota Nusantara Enam (pajak 2%), lokasi di wilayah A (taklukan M1).
+  dbS6.prepare('UPDATE citizens SET home_region_id = ?, region_id = ? WHERE id = ?').run(freeRegionO, regionA, m5Id);
+  setInvO(m5Id, besiO, 10);
+  const m5UsdBefore = dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m5Id).usd;
+  const m1UsdBefore = dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m1Id).usd;
+  const treasuryBefore = dbS6.prepare('SELECT treasury_usd FROM country WHERE id = ?').get(nusOId).treasury_usd;
+  r = await M5.post('/api/market/sell', { scope: 'local', commodity_id: besiO, tier: 1, qty: 10, price: 10 });
+  check('M5 pasang penawaran 10× Besi @10 (dari wilayah taklukan)', r.status === 200 && !!r.data.offerId, `status=${r.status}`);
+  r = await M6.post('/api/market/buy', { offer_id: r.data.offerId, qty: 10 });
+  check('M6 membeli penawaran M5', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  const m1UsdAfter = dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m1Id).usd;
+  const treasuryAfter = dbS6.prepare('SELECT treasury_usd FROM country WHERE id = ?').get(nusOId).treasury_usd;
+  check('Pajak 2 USD (2% dari 100) mengalir ke panglima M1, bukan kas negara', m1UsdAfter === m1UsdBefore + 2 && treasuryAfter === treasuryBefore, `m1 usd ${m1UsdBefore} → ${m1UsdAfter}, kas ${treasuryBefore} → ${treasuryAfter}`);
+  check('Penjual M5 menerima 98 USD (100 − pajak 2%)', dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m5Id).usd === m5UsdBefore + 98, `usd ${m5UsdBefore} → ${dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m5Id).usd}`);
+  r = await M1.get('/api/notifications');
+  check('M1 diberitahu: Pajak wilayah taklukan', (r.data.notifications || []).some((n) => n.title === 'Pajak wilayah taklukan'));
+
+  // --- (h) /api/me: militer + event + reputasi; profil: militer.
+  r = await M1.get('/api/me');
+  check('/api/me: military + worldEvent + tradeReputation ada', !!r.data.military && !!r.data.worldEvent && !!r.data.tradeReputation && r.data.military.power === 0, JSON.stringify({ mil: !!r.data.military, ev: r.data.worldEvent?.key, rep: r.data.tradeReputation?.label }));
+  r = await M1.get('/api/profile/tahap6_m2');
+  check('Profil M2: military_power 10 + reputasi tampil', r.data.profile?.military_power === 10 && typeof r.data.profile?.trade_reputation === 'string', JSON.stringify({ pow: r.data.profile?.military_power, rep: r.data.profile?.trade_reputation }));
+  r = await M1.get('/api/companies');
+  const dapurO = (r.data.companies || []).find((x) => x.name === 'Dapur Enam');
+  check('GET /api/companies: input_text Dapur (1× Gandum Mentah per unit)', dapurO?.input_text?.includes('Gandum Mentah'), `input_text=${dapurO?.input_text}`);
+  const typesO = r.data.types || [];
+  check('GET /api/companies: types membawa input_text tiap jenis', typesO.length === 4 && typesO.every((t) => typeof t.input_text === 'string' && t.input_text.length > 0), JSON.stringify(typesO.map((t) => t.input_text)));
+  dbS6.close();
+
   dbN.close();
 
   stop();
