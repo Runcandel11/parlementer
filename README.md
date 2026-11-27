@@ -95,11 +95,46 @@ benar di Postgres sungguhan — pola yang sama lolos di tes e2e SQLite);
 (2) ROLLBACK tidak berfungsi di emulator, jadi pemeriksaan rollback dilewati
 dan harus diverifikasi di Postgres sungguhan saat deploy pertama.
 
-## Deploy GRATIS — langkah demi langkah
+## Deploy GRATIS — Vercel (Hobby, tanpa kartu) ← cara utama saat ini
+
+Aplikasi sudah diadaptasi untuk Vercel Serverless Function (`api/index.js` +
+`vercel.json`; Express app dipisah ke `src/app.js` supaya `node server.js`
+tetap jalan normal). Paket **Hobby gratis, tanpa kartu**.
+
+1. Buka https://vercel.com → **Sign Up** (bisa pakai akun GitHub `Runcandel11`).
+2. **Add New → Project** → **Import** repo GitHub `Runcandel11/parlementer`
+   (branch `master`). Framework Preset: **Other** (otomatis terdeteksi Node).
+   Build Command & Output Directory biarkan default (Vercel memakai
+   `npm install`; tidak ada langkah build).
+3. Di **Environment Variables**, tambahkan:
+   - `DATABASE_URL` = connection string Postgres Neon (wajib — Vercel tidak
+     punya disk persisten; tanpa ini server mengembalikan error 500 yang jelas)
+   - `JWT_SECRET` = string acak panjang (hasilkan sendiri, mis. `openssl rand -hex 32`)
+   - `NODE_ENV` = `production`
+4. Klik **Deploy**. Tunggu build selesai (±1–3 menit).
+5. Buka URL yang diberikan Vercel (mis. `https://parlementer.vercel.app`).
+   Daftar akun pertama — kamu jadi warga pertama (populasi 1).
+
+Catatan Vercel:
+- **Serverless, tanpa proses jalan terus:** tidak ada `listen()`/`setInterval`
+  di fungsi — tick harian jalan otomatis tiap ada request API (`maybeTick`
+  + klaim atomik di `src/tick.js`, jadi dua instance tidak bisa menjalankan
+  tick yang sama). File statis `public/` dilayani langsung oleh Vercel.
+- Pool Postgres dibatasi `max: 3` per instance agar aman untuk Neon free tier.
+- Fungsi `api/index.js` memakai `maxDuration: 60` detik (maksimum paket Hobby).
+- Cold start pertama butuh beberapa detik (init DB + seed ke Neon).
+- Verifikasi setelah deploy: sama seperti langkah 4 di bawah (login → 50 emas/
+  500 USD → 6 lowongan ADMIN → pasar 0 penawaran → klaim → 55 emas/550 USD).
+
+## Deploy GRATIS — alternatif: Render + Neon
 
 Target: **Render free tier** (web service) + **Postgres gratis di Neon**
 (alternatif: Supabase free tier). Render free **tidak punya disk persisten**,
 jadi database HARUS Postgres eksternal — jangan pakai SQLite di Render.
+**Catatan (27 Nov 2026): Render mewajibkan kartu tersimpan sebelum deploy
+meski paket Free $0/bulan (hanya otorisasi sementara $1) — itu alasan
+pindah ke Vercel. Konfigurasi Render (`Dockerfile`, `render.yaml`) tetap
+disimpan di repo sebagai alternatif.**
 
 ### 1. Siapkan kode di GitHub
 
@@ -165,14 +200,18 @@ jadi database HARUS Postgres eksternal — jangan pakai SQLite di Render.
 ## Struktur proyek
 
 ```
-server.js            # Express: static + API + tick interval
+server.js            # Launcher server biasa: ensureReady() + listen (Render/lokal)
 src/
+  app.js             # Express app + ensureReady() (dipakai server.js & api/index.js)
   db.js              # Adapter DB (Postgres via DATABASE_URL / SQLite lokal)
   util.js            # JWT cookie, auth middleware, validasi
   game.js            # Aturan main (gaji, pajak, XP, kronik, toko, dll.)
   api-core.js        # Auth, dashboard, kerja, pasar, valas, peta, toko
   api-civic.js       # Negara, partai, parlemen, pemilu, perang, pers, chat
-  tick.js            # Daily tick + jadwal pemilu otomatis
+  tick.js            # Daily tick + jadwal pemilu otomatis (+ klaim atomik)
+api/
+  index.js           # Vercel Serverless Function (adapter Express, tanpa listen)
+vercel.json          # Routing Vercel: /api/* + SPA fallback -> api/index.js
 public/
   index.html         # Halaman login + shell aplikasi
   css/style.css      # Tema gelap navy-hitam + aksen emas
@@ -187,7 +226,9 @@ Dockerfile           # Alternatif deploy container
 
 ## Status
 
-Siap deploy. **Belum di-deploy ke mana pun** — butuh akun gratis Render +
-Neon/Supabase yang dibuat pemilik (langkah di atas). Setelah deploy pertama,
-verifikasi ulang: daftar → shift → jual/beli → chat di URL production, dan
-cek ROLLBACK transaksi di Postgres sungguhan (lihat catatan tes di atas).
+Siap deploy ke **Vercel (Hobby gratis, tanpa kartu)** atau Render.
+**Belum di-deploy ke mana pun** — butuh akun gratis Vercel yang dibuat
+pemilik (langkah di atas) + `DATABASE_URL` Neon yang sudah ada. Setelah
+deploy pertama, verifikasi ulang: daftar → shift → jual/beli → chat di URL
+production, dan cek ROLLBACK transaksi di Postgres sungguhan (lihat catatan
+tes di atas).

@@ -31,6 +31,14 @@ export async function runDailyTick() {
   const world = await one('SELECT * FROM world WHERE id = 1');
   const today = todayStr();
   if (!world || world.last_tick_date === today) return { ticked: false, day: world?.day || 1 };
+  // Klaim hari ini secara atomik SEBELUM mengerjakan apa pun: di serverless
+  // beberapa instance bisa menerima request bersamaan dan menjalankan tick
+  // yang sama — tanpa klaim ini, hari bisa maju 2× dan produksi/notifikasi
+  // bisa terduplikasi. Yang gagal klaim langsung berhenti.
+  // Catatan: bila proses crash di tengah tick setelah klaim, tick hari itu
+  // terlewat (aman — tidak ada duplikasi; tick berikutnya jalan besok).
+  const claimed = await run('UPDATE world SET last_tick_date = ? WHERE id = 1 AND last_tick_date <> ?', [today, today]);
+  if (claimed.changes === 0) return { ticked: false, day: world.day };
   const now = Date.now();
 
   // 1) Warga: energi pulih, jatah harian reset, kelelahan pulih sebagian.

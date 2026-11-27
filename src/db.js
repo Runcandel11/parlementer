@@ -28,7 +28,16 @@ async function ensurePool() {
         pool = new pgMem.Pool();
       } else {
         const pg = (await import('pg')).default;
-        pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
+        // Pool kecil: di serverless tiap instance fungsi punya pool sendiri,
+        // dan Neon free tier membatasi jumlah koneksi bersamaan. max 3
+        // per instance sudah cukup untuk game ini (mode server biasa juga
+        // tetap jalan normal dengan pool sekecil ini).
+        pool = new pg.Pool({
+          connectionString: process.env.DATABASE_URL,
+          max: 3,
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 10000,
+        });
         pool.on('error', (e) => console.error('[db] pool error:', e.message));
       }
       return pool;
@@ -38,7 +47,11 @@ async function ensurePool() {
 }
 
 if (!isPg) {
-  const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '..', 'data', 'parlementer.db');
+  // Di Vercel filesystem read-only kecuali /tmp; path default dialihkan ke sana
+  // supaya import modul tidak crash sebelum ensureReady() sempat menolak dengan
+  // pesan yang jelas (DATABASE_URL wajib di Vercel — lihat src/app.js).
+  const dbPath = process.env.DATABASE_PATH
+    || (process.env.VERCEL ? path.join('/tmp', 'parlementer.db') : path.join(__dirname, '..', 'data', 'parlementer.db'));
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   sqliteDb = new DatabaseSync(dbPath);
   sqliteDb.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
