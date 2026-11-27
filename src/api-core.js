@@ -1,6 +1,6 @@
 // API inti Parlementer: auth (email+password), dashboard, pekerjaan, perusahaan,
 // pasar, valas, peta, inventaris, konvoi, misi, kronik, pencapaian, notifikasi, profil, toko.
-import bcrypt from 'bcryptjs';
+import { hashPassword, verifyPassword } from './bcrypt-pool.js';
 import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings, getParliamentOpensAt } from './db.js';
 import {
   signToken, cookieOptions, COOKIE_NAME, authRequired, citizenRequired,
@@ -261,7 +261,7 @@ export function registerCore(app) {
       const refUser = await one('SELECT id FROM users WHERE referral_code = ?', [refCode]);
       if (refUser) referredBy = refUser.id;
     }
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await hashPassword(password);
     const now = Date.now();
     const result = await tx(async (t) => {
       const myCode = await generateReferralCode(t);
@@ -311,7 +311,7 @@ export function registerCore(app) {
     // hanya untuk membuka layar banned + sistem banding; semua API game
     // diblokir middleware penjaga banned (lihat src/app.js). Tanpa sesi ini,
     // pemain yang ke-ban tidak akan pernah bisa mengajukan banding.
-    const ok = await bcrypt.compare(password, user.pass_hash);
+    const ok = await verifyPassword(password, user.pass_hash);
     if (!ok) return res.status(400).json({ error: 'Password salah.' });
     res.cookie(COOKIE_NAME, signToken(user.id, user.token_version || 0), cookieOptions());
     const citizen = await loadCitizen(user.id);

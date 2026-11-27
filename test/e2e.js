@@ -716,6 +716,7 @@ async function main() {
   dbBan.prepare('UPDATE users SET is_banned = 1, banned_reason = ? WHERE id = ?').run('tes migrasi', 8);
   dbBan.close();
 
+
   stop();
   await sleep(500);
   const upAgain = await startServer();
@@ -2023,6 +2024,58 @@ async function main() {
   const meJ2 = (await J.get('/api/me')).data.citizen;
   r = await M.get('/api/dms');
   check('M melihat percakapan dengan J di daftar DM', r.data.conversations.some((cv) => cv.other_id === meJ2.id), `convs=${r.data.conversations.length}`);
+
+  console.log('\n[29] bcrypt di worker — login tidak memblokir request lain');
+  // bcryptjs murni JS: satu hash/verify cost 10 menahan event loop ~100+ ms
+  // (diukur: interval 10 ms hanya jalan 2x selama satu hash). Sejak v2.2.0
+  // hash/compare jalan di pool worker_threads (2 worker), jadi login yang
+  // berbarengan tidak boleh menahan /api/world (cache 30 dtk, trivial).
+  // Ditempatkan di akhir seperti [5b]: tidak boleh menggeser ID pemain
+  // seksi [12]/[14]; akun baru memakai IP berbeda (X-Forwarded-For).
+  const W = new Client();
+  W.extraHeaders = { 'X-Forwarded-For': '127.0.0.9' };
+  r = await W.post('/api/auth/register', { email: 'wargaW@test.local', password: 'rahasia123', username: 'warga_w' });
+  check('Daftar warga W berhasil (hash di worker)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  const dbW = new DatabaseSync(DB_PATH);
+  const hashW = dbW.prepare("SELECT pass_hash FROM users WHERE email = 'wargaw@test.local'").get().pass_hash;
+  dbW.close();
+  check('Format hash tetap bcrypt standar ($2a$10$)', typeof hashW === 'string' && hashW.startsWith('$2a$10$'), `hash=${String(hashW).slice(0, 7)}...`);
+  const W2 = new Client();
+  W2.extraHeaders = { 'X-Forwarded-For': '127.0.0.9' };
+  r = await W2.post('/api/auth/login', { email: 'wargaW@test.local', password: 'rahasia123' });
+  check('Login W berhasil (verify di worker)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await W2.post('/api/auth/login', { email: 'wargaW@test.local', password: 'salah123' });
+  check('Login password salah ditolak (400)', r.status === 400, `status=${r.status}`);
+  // Hash LAMA (dibuat bcryptjs sebelum worker, fixture) tetap bisa login —
+  // pemain lama tidak perlu reset password.
+  const V = new Client();
+  V.extraHeaders = { 'X-Forwarded-For': '127.0.0.10' };
+  r = await V.post('/api/auth/register', { email: 'wargaV@test.local', password: 'rahasia123', username: 'warga_v' });
+  check('Daftar warga V berhasil', r.status === 200 && r.data.ok);
+  const dbV = new DatabaseSync(DB_PATH);
+  dbV.prepare("UPDATE users SET pass_hash = ? WHERE email = 'wargav@test.local'")
+    .run('$2a$10$fDDiCJrRF15.XhYPG.0wzOsqa8NZCqy8L.Qzr7MhLOK8/bVF4Fbu.');
+  dbV.close();
+  r = await V.post('/api/auth/login', { email: 'wargaV@test.local', password: 'rahasia123' });
+  check('Hash lama (pre-worker) tetap bisa login', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  // Bukti tidak memblokir: 6 login berbarengan + 6 /api/world di saat yang
+  // sama — /api/world harus tetap cepat (maks < 100 ms). Kalibrasi di VM
+  // dev: worker 9 ms vs fallback thread-utama 230 ms untuk beban yang sama.
+  const t29 = Date.now();
+  const logins29 = Array.from({ length: 6 }, () => {
+    const c = new Client();
+    c.extraHeaders = { 'X-Forwarded-For': '127.0.0.9' };
+    return c.post('/api/auth/login', { email: 'wargaW@test.local', password: 'rahasia123' });
+  });
+  const worlds29 = Array.from({ length: 6 }, async () => {
+    const s = Date.now();
+    const rr = await fetch(BASE + '/api/world');
+    return { ms: Date.now() - s, ok: rr.ok };
+  });
+  const [loginResults29, worldResults29] = await Promise.all([Promise.all(logins29), Promise.all(worlds29)]);
+  const maxWorldMs29 = Math.max(...worldResults29.map((x) => x.ms));
+  check('6 login berbarengan semuanya berhasil', loginResults29.every((x) => x.status === 200 && x.data.ok), `status=${loginResults29.map((x) => x.status).join(',')}`);
+  check('/api/world tetap cepat saat 6 login berjalan (maks < 100 ms)', worldResults29.every((x) => x.ok) && maxWorldMs29 < 100, `maks=${maxWorldMs29} ms (total ${Date.now() - t29} ms)`);
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

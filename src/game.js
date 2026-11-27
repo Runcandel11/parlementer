@@ -1,10 +1,11 @@
 // Aturan main Parlementer — angka-angka inti (diadaptasi dari mekanik referensi).
 
 // VERSI game (semver; aturan pemilik 27 Nov 2026): update kecil +0.0.1,
-// sedang +0.1, besar +1. Versi saat ini v2.1.2 (koreksi pemilik 22:51 WIB);
-// update travel (ed89257, kecil) = v2.1.3. Ditampilkan di footer
+// sedang +0.1, besar +1. Versi saat ini v2.1.3 (travel, kecil);
+// update sedang v2.2.0 = landing + profil/ADMIN + kartu wilayah abu-abu +
+// perbaikan login (bcrypt pindah ke worker). Ditampilkan di footer
 // (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '2.1.3';
+export const VERSION = '2.2.0';
 
 export const WA_TOPUP_URL = 'https://wa.me/6285220743283';
 export const MINT_RATE = 10; // 1 emas dicetak jadi 10 USD

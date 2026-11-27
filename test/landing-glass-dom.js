@@ -9,7 +9,7 @@
 //   (4) PETA LANGSUNG: wilayah tanpa negara = kaca abu-abu (kelas free) +
 //       tanda "?" (17 ubin, semua belum bernegara di DB segar);
 //   (5) UI KACA: CSS memakai backdrop-filter; ikon atas diperkecil (32px);
-//   (6) VERSI: footer landing + drawer menampilkan "Parlementer v2.1.3"
+//   (6) VERSI: footer landing + drawer menampilkan "Parlementer v2.2.0"
 //       dari konstanta VERSION (API /api/world + /api/me).
 // Jalankan: node test/landing-glass-dom.js
 import { spawn } from 'node:child_process';
@@ -22,7 +22,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3462;
 const DB_PATH = '/tmp/parlementer-landing-glass-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '2.1.3';
+const EXPECTED_VERSION = '2.2.0';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -96,7 +96,7 @@ async function main() {
     check('landing: 3 badge bawah ada', html.includes('GRATIS DIMAINKAN') && html.includes('DIMAINKAN DI BROWSER') && html.includes('SEMUA BISA DIDAPAT DENGAN BERMAIN'));
     check('landing: badge 100% PEMAIN ASLI (tanpa klaim beta)', html.includes('100% PEMAIN ASLI') && !html.toUpperCase().includes('BETA'));
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 2.1.3 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 2.2.0 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // --- Boot tamu (tanpa cookie): landing tampil, form tersembunyi ---
     dom = await bootDom(BASE + '/');
@@ -105,7 +105,7 @@ async function main() {
     check('tamu: #auth-view tampil, #app tersembunyi', !document.querySelector('#auth-view').hidden && document.querySelector('#app').hidden === true);
     check('tamu: hero landing tampil', !document.querySelector('#landing-hero').hidden);
     check('tamu: kartu login/daftar tersembunyi di awal', document.querySelector('#auth-card-wrap').hidden === true);
-    check('tamu: footer landing menampilkan Parlemen v2.1.3', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
+    check('tamu: footer landing menampilkan Parlemen v2.2.0', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
 
     // CTA daftar → form DAFTAR; kembali → hero; CTA masuk → form MASUK.
     document.querySelector('#landing-register').click();
@@ -129,7 +129,7 @@ async function main() {
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await sleep(2500);
     check('daftar dari landing: aplikasi tampil (#app), landing tidak menghadang', document.querySelector('#app').hidden === false && document.querySelector('#auth-view').hidden === true);
-    check('login: footer drawer menampilkan Parlemen v2.1.3', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
+    check('login: footer drawer menampilkan Parlemen v2.2.0', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
 
     // --- PETA LANGSUNG: wilayah tanpa negara = kaca abu-abu + "?" ---
     const tiles = [...document.querySelectorAll('.map-tile')];
