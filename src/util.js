@@ -1,7 +1,8 @@
 // Utilitas bersama: JWT (cookie httpOnly + fallback header), validasi, format.
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
-import { one } from './db.js';
+import { one, run, convoyBuildings } from './db.js';
+import { energyCapFor, ENERGY_REGEN_PER_MIN, ENERGY_REGEN_MS } from './game.js';
 
 export const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 // Fail-closed: di production server MENOLAK start bila JWT_SECRET tidak
@@ -65,7 +66,57 @@ export async function loadCitizen(userId) {
      FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.user_id = ?`,
     [userId],
   );
-  return c || null;
+  if (!c) return null;
+  // Regen energi malas (Tahap 4): tiap kali data warga dibaca, pulihkan
+  // +2/menit dari waktu yang berlalu — pemain offline pun pulih saat kembali.
+  // Gagal regen tidak boleh menggagalkan pembacaan data.
+  try { return await applyEnergyRegen(c); }
+  catch (e) { console.error('[regen] gagal:', e.message); return c; }
+}
+
+// Regen energi malas (Tahap 4): +2 tiap 1 menit sejak energy_updated_at,
+// berhenti di batas maksimum (energyCapFor). Sisa menit yang belum genap
+// dipertahankan (jam baru = jam lama + menit penuh). UPDATE bersyarat pada
+// jam lama mencegah dua request paralel menghitung regen yang sama dua kali
+// (pola Tahap 2: kunci + cek changes).
+export async function applyEnergyRegen(c) {
+  const now = Date.now();
+  const last = c.energy_updated_at || 0;
+  if (!last) {
+    // Baris lama (sebelum kolom ini ada): jangan beri windfall energi —
+    // cukup tandai jam terakhir = sekarang.
+    await run('UPDATE citizens SET energy_updated_at = ? WHERE id = ?', [now, c.id]);
+    return { ...c, energy_updated_at: now };
+  }
+  const elapsed = now - last;
+  if (elapsed < ENERGY_REGEN_MS) return c;
+  const minutes = Math.floor(elapsed / ENERGY_REGEN_MS);
+  const gain = minutes * ENERGY_REGEN_PER_MIN;
+  if (gain <= 0) return c;
+  // Batas absolut (level + Premium + RS Lapangan): bila energi sudah di
+  // atasnya, tidak ada regen yang mungkin — lewati query konvoi.
+  const maxCap = 100 + 5 * (Math.max(1, c.level) - 1) + 30;
+  if (c.energy >= maxCap) {
+    await run('UPDATE citizens SET energy_updated_at = ? WHERE id = ?', [now, c.id]);
+    return { ...c, energy_updated_at: now };
+  }
+  const buildings = await convoyBuildings(c.id);
+  const cap = energyCapFor(c.level, (c.premium_until || 0) > now, buildings.has('health'));
+  if (c.energy >= cap) {
+    await run('UPDATE citizens SET energy_updated_at = ? WHERE id = ?', [now, c.id]);
+    return { ...c, energy_updated_at: now };
+  }
+  const newEnergy = Math.min(cap, c.energy + gain);
+  const newTs = last + minutes * ENERGY_REGEN_MS;
+  const upd = await run(
+    'UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ? AND energy_updated_at = ?',
+    [newEnergy, newTs, c.id, last]);
+  if (!upd.changes) {
+    // Kalah race: baca ulang baris yang sudah di-regen request lain.
+    const fresh = await one('SELECT * FROM citizens WHERE id = ?', [c.id]);
+    return fresh ? { ...c, ...fresh } : c;
+  }
+  return { ...c, energy: newEnergy, energy_updated_at: newTs };
 }
 
 // Ambil userId dari token sesi tanpa melempar error — untuk middleware yang

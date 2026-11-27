@@ -74,6 +74,45 @@ function toast(msg) {
   t._h = setTimeout(() => { t.hidden = true; }, 3500);
 }
 
+// ---------- SUARA KETUKAN (Tahap 4) ----------
+// Ketukan halus disintesis Web Audio API (tanpa file audio, tanpa
+// dependensi). AudioContext dibuat malas saat interaksi pertama — browser
+// melarang autoplay, jadi suara HANYA muncul dari ketukan pengguna. Bila
+// Web Audio tidak tersedia, diam saja (jangan ganggu permainan).
+// Preferensi tersimpan di localStorage ('parlementer_sound' = on/off).
+const SOUND_KEY = 'parlementer_sound';
+function soundEnabled() {
+  try { return localStorage.getItem(SOUND_KEY) !== 'off'; } catch { return true; }
+}
+function setSoundEnabled(on) {
+  try { localStorage.setItem(SOUND_KEY, on ? 'on' : 'off'); } catch { /* abaikan */ }
+}
+let __audioCtx = null;
+function playTap() {
+  if (!soundEnabled()) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    __audioCtx = __audioCtx || new AC();
+    if (__audioCtx.state === 'suspended') void __audioCtx.resume();
+    const t0 = __audioCtx.currentTime;
+    const osc = __audioCtx.createOscillator();
+    const gain = __audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(1400, t0);
+    osc.frequency.exponentialRampToValueAtTime(700, t0 + 0.06);
+    gain.gain.setValueAtTime(0.06, t0);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.07);
+    osc.connect(gain).connect(__audioCtx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.08);
+  } catch { /* suara gagal: jangan ganggu permainan */ }
+}
+// Tiap ketukan pada elemen interaktif membunyikan tap.
+document.addEventListener('pointerdown', (e) => {
+  if (e.target?.closest?.('button, a, input, select, textarea, [role="button"], .nav-item')) playTap();
+});
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     credentials: 'include',
@@ -222,6 +261,7 @@ async function showApp() {
   $('#btn-settings').onclick = () => { location.hash = '#/settings'; };
   window.addEventListener('hashchange', route);
   route();
+  maybeShowAnnouncement();
   setInterval(refreshMe, 30000);
 }
 
@@ -403,7 +443,7 @@ ROUTES.dashboard = async () => {
     <div class="bar gold" style="margin:6px 0 12px"><i style="width:${Math.min(100, c.xp / ME.xpNext * 100)}%"></i></div>
     <div class="kv"><span class="k">⚡ Energi</span><span class="v">${c.energy}/${c.energyCap || 100}</span></div>
     <div class="bar" style="margin:6px 0 12px"><i style="width:${Math.min(100, c.energy / (c.energyCap || 100) * 100)}%"></i></div>
-    <p class="muted small">${c.energy >= (c.energyCap || 100) ? 'Penuh — gunakan untuk bekerja' : 'Makan roti untuk mengisi energi.'}</p>
+    <p class="muted small">${c.energy >= (c.energyCap || 100) ? 'Penuh — gunakan untuk bekerja' : 'Makan roti untuk mengisi energi.'} ⚡ Pulih otomatis +2/menit sampai batas ${c.energyCap || 100} (naik 5 tiap level).</p>
     <div class="row" style="margin-top:12px">
       <button class="btn-gold" id="btn-claim" ${canClaim ? '' : 'disabled'}>${canClaim ? '🎁 AMBIL PASOKAN HARIAN' : '✓ Pasokan hari ini diambil'}</button>
       <button class="btn-ghost" onclick="location.hash='#/inventory'">🍞 Makan Roti</button>
@@ -479,7 +519,7 @@ ROUTES.inventory = async () => {
       : '<p class="muted">Inventaris kosong.</p>'}
   </div>`);
   $$('[data-eat]').forEach((b) => b.onclick = async () => {
-    try { const r = await post('/api/eat', { tier: Number(b.dataset.eat) }); toast(`Energi +${r.gained} (sekarang ${r.energy}/100).`); await refreshMe(); route(); }
+    try { const r = await post('/api/eat', { tier: Number(b.dataset.eat) }); toast(`Energi +${r.gained} (sekarang ${r.energy}/${ME.citizen.energyCap || 100}).`); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   });
 };
@@ -533,8 +573,17 @@ ROUTES.achievements = async () => {
 
 // ---------- NOTIFIKASI ----------
 ROUTES.notifications = async () => {
-  const n = await api('/api/notifications');
+  const [n, ann] = await Promise.all([api('/api/notifications'), api('/api/announcements')]);
   $('#page').innerHTML = page('NOTIFIKASI', '', `
+  <div class="panel"><h3>📣 APA YANG BARU</h3>
+    ${ann.announcements.length ? ann.announcements.map((a) => `
+      <div class="${a.read ? '' : 'announce-unread'}" style="margin-bottom:14px">
+        <div class="kv"><span class="k"><span class="chip">Update #${a.num}</span> <b>${esc(a.title)}</b><br><small class="muted">${fmtDate(a.created_at)}</small></span>
+        <span class="v small">${a.read ? '<span class="muted">Dibaca</span>' : `<button class="btn-gold btn-sm" data-ann-read="${a.id}">Tandai Dibaca</button>`}</span></div>
+        <p class="announce-body">${esc(a.body)}</p>
+      </div>`).join('')
+      : '<p class="muted">Belum ada pengumuman.</p>'}
+  </div>
   <div class="panel">
     <div class="panel-head"><h3>🔔 Pusat Notifikasi</h3><button class="btn-ghost btn-sm" id="btn-read-all">Tandai Semua Dibaca</button></div>
     ${n.notifications.length ? n.notifications.map((x) => `
@@ -542,6 +591,10 @@ ROUTES.notifications = async () => {
       <span class="v small muted" style="white-space:nowrap;flex-shrink:0">${ago(x.created_at)}</span></div>`).join('')
       : '<p class="muted">Belum ada notifikasi.</p>'}
   </div>`);
+  $$('[data-ann-read]').forEach((b) => b.onclick = async () => {
+    try { await post('/api/announcements/read', { id: Number(b.dataset.annRead) }); route(); }
+    catch (e) { toast(e.message); }
+  });
   $('#btn-read-all').onclick = async () => { await post('/api/notifications/read'); await refreshMe(); route(); };
 };
 
@@ -680,6 +733,10 @@ ROUTES.settings = async () => {
     <p class="muted small">Biaya 50 emas. Nama 3–24 karakter (huruf, angka, underscore).</p>
     <div class="row"><input id="set-name" placeholder="Nama baru" style="flex:2"><button class="btn-gold" id="btn-rename">Ganti (50 emas)</button></div>
   </div>
+  <div class="panel"><h3>🔊 SUARA</h3>
+    <p class="muted small">Suara ketukan halus setiap kali menekan tombol. Preferensi tersimpan di perangkat ini.</p>
+    <button class="btn-gold" id="btn-sound-toggle">${soundEnabled() ? '🔊 Suara: NYALA — ketuk untuk mematikan' : '🔇 Suara: MATI — ketuk untuk menyalakan'}</button>
+  </div>
   <div class="panel"><h3>👤 AKUN</h3>
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(pubId(ME.user.id))}</b></span></div>
     <div class="kv"><span class="k">Email</span><span class="v">${esc(c.email)}</span></div>
@@ -690,6 +747,13 @@ ROUTES.settings = async () => {
   $('#btn-save-bio').onclick = async () => {
     try { await post('/api/profile/bio', { bio: $('#set-bio').value }); toast('Biografi disimpan.'); }
     catch (e) { toast(e.message); }
+  };
+  $('#btn-sound-toggle').onclick = () => {
+    const on = !soundEnabled();
+    setSoundEnabled(on);
+    $('#btn-sound-toggle').textContent = on ? '🔊 Suara: NYALA — ketuk untuk mematikan' : '🔇 Suara: MATI — ketuk untuk menyalakan';
+    if (on) playTap();
+    toast(on ? 'Suara ketukan dinyalakan.' : 'Suara ketukan dimatikan.');
   };
   $('#btn-rename').onclick = async () => {
     try { await post('/api/profile/rename', { name: $('#set-name').value.trim() }); toast('Nama berhasil diganti.'); await refreshMe(); route(); }
@@ -703,6 +767,8 @@ ROUTES.admin = async (q) => {
   if (q === 'appeals') return renderAdminAppeals();
   if (q && q.startsWith('appeal-')) return renderAdminAppealDetail(Number(q.slice(7)));
   if (q === 'gift-all') return renderAdminGiftAll();
+  if (q === 'announcements') return renderAdminAnnouncements();
+  if (q === 'flags') return renderAdminFlags();
   if (q === 'inbox' || (q && q.startsWith('inbox?'))) {
     const params = new URLSearchParams((q.split('?')[1] || ''));
     return renderAdminInbox(params.get('status') || '');
@@ -720,6 +786,8 @@ ROUTES.admin = async (q) => {
     <button class="tab" onclick="location.hash='#/admin/appeals'">📬 Banding${pendingAppeals ? ` <span class="chip">${pendingAppeals} menunggu</span>` : ''}</button>
     <button class="tab" onclick="location.hash='#/admin/gift-all'">🎁 Hadiah Massal</button>
     <button class="tab" onclick="location.hash='#/admin/inbox'">📥 Laporan &amp; Saran</button>
+    <button class="tab" onclick="location.hash='#/admin/announcements'">📣 Pengumuman</button>
+    <button class="tab" onclick="location.hash='#/admin/flags'">🚩 Tanda Pasar</button>
   </div>
   <div class="panel"><h3>🔍 CARI PEMAIN</h3>
     <div class="row"><input id="adm-q" placeholder="Nama / email / ID (cth: PL-000001)" value="${esc(query)}" style="flex:2">
@@ -809,6 +877,52 @@ ROUTES.admin = async (q) => {
 };
 
 // ---------- PANEL ADMIN: TAB BANDING ----------
+async function renderAdminAnnouncements() {
+  const data = await api('/api/admin/announcements');
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Pengumuman update untuk semua pemain.', `
+  <div class="tabs">
+    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
+    <button class="tab active">📣 Pengumuman</button>
+    <button class="tab" onclick="location.hash='#/admin/flags'">🚩 Tanda Pasar</button>
+  </div>
+  <div class="panel"><h3>📣 BUAT PENGUMUMAN BARU</h3>
+    <p class="muted small">Pengumuman tampil di Notifikasi pemain, sebagai modal saat login (bila belum dibaca), dan di arsip Buku Panduan → Riwayat Update. Nomor update terisi otomatis sesuai urutan terbit.</p>
+    <label>JUDUL<input id="ann-title" placeholder="cth: Update Pasar & Perbaikan Bug"></label>
+    <label>ISI (apa yang di-update + bug apa yang di-fix)<textarea id="ann-body" rows="6" placeholder="Tulis ringkasan update di sini..."></textarea></label>
+    <button class="btn-gold" id="btn-ann-create">TERBITKAN PENGUMUMAN</button>
+  </div>
+  <div class="panel"><h3>📜 PENGUMUMAN TERBIT</h3>
+    ${data.announcements.length ? data.announcements.map((a) => `
+      <div class="kv"><span class="k"><b>${esc(a.title)}</b><br><small class="muted">${fmtDate(a.created_at)}</small></span>
+      <span class="v"><button class="btn-danger btn-sm" data-ann-del="${a.id}">Hapus</button></span></div>
+      <p class="announce-body muted small" style="margin-bottom:10px">${esc(a.body)}</p>`).join('')
+      : '<p class="muted">Belum ada pengumuman.</p>'}
+  </div>`);
+  $('#btn-ann-create').onclick = async () => {
+    try { await post('/api/admin/announcements', { title: $('#ann-title').value.trim(), body: $('#ann-body').value.trim() }); toast('Pengumuman diterbitkan.'); route(); }
+    catch (e) { toast(e.message); }
+  };
+  $$('[data-ann-del]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Hapus pengumuman ini? Pemain tidak lagi melihatnya di Notifikasi/Buku.')) return;
+    try { await post(`/api/admin/announcements/${b.dataset.annDel}/delete`); toast('Pengumuman dihapus.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+}
+
+async function renderAdminFlags() {
+  const data = await api('/api/admin/market-flags');
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Tanda pasar: heuristik harga di luar batas wajar + pola perdagangan bolak-balik. Hanya log untuk ditinjau — bukan bukti pelanggaran otomatis.', `
+  <div class="tabs">
+    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
+    <button class="tab" onclick="location.hash='#/admin/announcements'">📣 Pengumuman</button>
+    <button class="tab active">🚩 Tanda Pasar</button>
+  </div>
+  <div class="panel"><h3>🚩 TANDA PASAR</h3>
+    ${data.flags.length ? data.flags.map((f) => `<div class="kv"><span class="k"><span class="chip">${esc(f.kind)}</span> ${esc(f.detail)}<br><small class="muted">${esc(f.buyer_name || '')}${f.buyer_name && f.seller_name ? ' ↔ ' : ''}${esc(f.seller_name || '')}${f.commodity_name ? ' · ' + esc(f.commodity_name) : ''} · ${ago(f.created_at)}</small></span></div>`).join('')
+      : '<p class="muted">Belum ada tanda pasar.</p>'}
+  </div>`);
+}
+
 async function renderAdminAppeals() {
   const data = await api('/api/admin/appeals');
   const pending = data.appeals.filter((a) => a.status === 'menunggu').length;
@@ -1037,6 +1151,33 @@ function marketPage(scope) {
       </table>
     </div>
     <div class="panel" id="offer-detail"><h3>📋 PENAWARAN</h3><p class="muted">Pilih komoditas di atas untuk melihat penawaran.</p></div>
+    <div class="panel"><h3>📈 GRAFIK HARGA — 14 HARI</h3>
+      <p class="muted small">Harga rata-rata harian dari transaksi nyata antar pemain.</p>
+      <label>KOMODITAS<select id="chart-com">${data.commodities.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
+      <div id="price-chart" style="margin-top:10px"><p class="muted">Memuat grafik…</p></div>
+    </div>
+    <div class="panel"><h3>🛒 ORDER BELI</h3>
+      <p class="muted small">Pembeli memasang harga yang mereka mau. Punya barangnya? Jual langsung ke order mereka — dana pembeli sudah dikunci, jadi kamu pasti dibayar (dikurangi pajak 2% ke kas negara).</p>
+      ${data.buyOrders.length ? data.buyOrders.map((o) => `<div class="kv"><span class="k">🧑 ${esc(o.buyer)} · ${esc(o.commodity_name)} T${o.tier} · butuh ${o.qty - o.qty_filled}/${o.qty}<br><small class="muted">${fmt(o.price, 2)} ${cur}/unit</small></span>
+        <span class="v"><input type="number" value="${Math.min(o.qty - o.qty_filled, 10)}" min="1" max="${o.qty - o.qty_filled}" style="width:70px" id="qo-${o.id}">
+        <button class="btn-gold btn-sm" data-sell-order="${o.id}">JUAL</button></span></div>`).join('')
+        : '<p class="muted">Belum ada order beli. Jadilah pembeli pertama!</p>'}
+    </div>
+    <div class="panel"><h3>📥 PASANG ORDER BELI</h3>
+      <label>KOMODITAS<select id="buy-com">${data.commodities.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
+      <div class="row">
+        <label>TINGKAT<select id="buy-tier"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+        <label>JUMLAH (min 10)<input id="buy-qty" type="number" value="10" min="10"></label>
+        <label>HARGA / UNIT (${cur})<input id="buy-price" type="number" step="0.01" placeholder="cth: 9.00"></label>
+      </div>
+      <p class="muted small">Dana sebesar harga × jumlah langsung dikunci dari saldomu (escrow). Bila order dibatalkan, sisa dana kembali utuh.</p>
+      <button class="btn-gold" id="btn-buy-order">PASANG ORDER BELI</button>
+    </div>
+    <div class="panel"><h3>🧾 ORDER BELIKU</h3>
+      ${data.myBuyOrders.length ? data.myBuyOrders.map((o) => `<div class="kv"><span class="k">${esc(o.commodity_name)} T${o.tier} · ${o.qty_filled}/${o.qty} terpenuhi · ${fmt(o.price, 2)} ${cur}</span>
+        <span class="v"><button class="btn-danger btn-sm" data-cancel-order="${o.id}">Batalkan</button></span></div>`).join('')
+        : '<p class="muted">Belum ada order beli aktif.</p>'}
+    </div>
     <div class="panel"><h3>💰 JUAL BARANG</h3>
       <label>KOMODITAS<select id="sell-com">${data.commodities.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
       <div class="row">
@@ -1044,7 +1185,7 @@ function marketPage(scope) {
         <label>JUMLAH (min 10)<input id="sell-qty" type="number" value="10" min="10"></label>
         <label>HARGA / UNIT (${cur})<input id="sell-price" type="number" step="0.01" placeholder="cth: 10.80"></label>
       </div>
-      <p class="muted small">Pajak penghasilan 2% dipotong saat barang terjual. Contoh: jual 10,00 → diterima 9,80.</p>
+      <p class="muted small">Pajak penghasilan 2% dipotong saat barang terjual dan masuk kas negara (lihat halaman Negara). Contoh: jual 10,00 → diterima 9,80.</p>
       <button class="btn-gold" id="btn-sell">PAJANG PENAWARAN</button>
     </div>
     <div class="panel"><h3>🧾 PENAWARANKU</h3>
@@ -1072,6 +1213,59 @@ function marketPage(scope) {
           await refreshMe(); route(); }
         catch (e) { toast(e.message); }
       });
+    });
+    // Grafik harga (Tahap 4): batang harian dari /api/market/prices.
+    async function renderPriceChart(commodityId) {
+      const el = $('#price-chart');
+      const com = data.commodities.find((c) => c.id === commodityId);
+      let prices;
+      try { prices = await api(`/api/market/prices?scope=${scope}&commodity_id=${commodityId}&days=14`); }
+      catch (e) { el.innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
+      const days = prices.days;
+      if (!days.length) {
+        el.innerHTML = `<p class="muted">Belum ada transaksi ${esc(com?.name || '')} dalam 14 hari terakhir — grafik muncul setelah ada yang berdagang.</p>`;
+        return;
+      }
+      const max = Math.max(...days.map((d) => d.max));
+      const min = Math.min(...days.map((d) => d.min));
+      const span = (max - min) || 1;
+      const last = days[days.length - 1];
+      el.innerHTML = `
+        <div class="price-chart">${days.map((d) => {
+          const h = Math.max(4, Math.round(((d.avg - min) / span) * 100));
+          return `<div class="bar-col" title="${d.date}: rata-rata ${fmt(d.avg, 2)} ${cur} · ${d.tx} transaksi"><i style="height:${h}%"></i><span>${d.date.slice(5)}</span></div>`;
+        }).join('')}</div>
+        <p class="muted small" style="margin-top:8px">Terakhir (${last.date}): rata-rata ${fmt(last.avg, 2)} ${cur} · tertinggi ${fmt(last.max, 2)} · terendah ${fmt(last.min, 2)} · ${fmt(last.volume)} unit · ${last.tx} transaksi.</p>`;
+    }
+    const chartDefault = data.recentTx[0]?.commodity_id || data.commodities[0]?.id;
+    if (chartDefault) {
+      $('#chart-com').value = String(chartDefault);
+      $('#chart-com').onchange = () => renderPriceChart(Number($('#chart-com').value));
+      renderPriceChart(chartDefault);
+    }
+    $$('[data-sell-order]').forEach((b) => b.onclick = async () => {
+      const qty = Number($('#qo-' + b.dataset.sellOrder)?.value || 1);
+      try {
+        const r = await post('/api/market/sell-to-order', { order_id: Number(b.dataset.sellOrder), qty });
+        toast(`Terjual ${qty} unit (diterima ${fmt(r.sellerReceives, 2)} ${r.currency === 'gold' ? 'emas' : 'USD'} setelah pajak).`);
+        await refreshMe(); route();
+      } catch (e) { toast(e.message); }
+    });
+    $('#btn-buy-order').onclick = async () => {
+      try {
+        await post('/api/market/buy-order', { scope, commodity_id: Number($('#buy-com').value), tier: Number($('#buy-tier').value), qty: Number($('#buy-qty').value), price: Number($('#buy-price').value) });
+        toast('Order beli dipasang — dana dikunci.');
+        await refreshMe(); route();
+      } catch (e) { toast(e.message); }
+    };
+    $$('[data-cancel-order]').forEach((b) => b.onclick = async () => {
+      // Tahap 3: batal itu destruktif (order hilang; dana sisa kembali).
+      if (!confirm('Batalkan order beli ini? Sisa dana yang dikunci kembali ke saldomu.')) return;
+      try {
+        const r = await post('/api/market/buy-order/cancel', { order_id: Number(b.dataset.cancelOrder) });
+        toast(`Order dibatalkan, ${fmt(r.refund, 2)} ${r.currency === 'gold' ? 'emas' : 'USD'} kembali.`);
+        route();
+      } catch (e) { toast(e.message); }
     });
     $('#btn-sell').onclick = async () => {
       try {
@@ -1364,10 +1558,15 @@ ROUTES.country = async () => {
   </div>
   <div class="panel"><h3>💰 KAS NEGARA</h3>
     <div class="kv"><span class="k">Kas negara</span><span class="v gold-text">${fmt(c.treasury)} emas</span></div>
+    <div class="kv"><span class="k">Kas negara (USD)</span><span class="v gold-text">${fmtUSD(c.treasury_usd || 0)} USD</span></div>
     <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${c.tax_income}%</span></div>
     <div class="kv"><span class="k">Pajak produksi</span><span class="v">${c.tax_production}%</span></div>
     <div class="kv"><span class="k">Pajak impor / ekspor</span><span class="v">${c.tax_import}% / ${c.tax_export}%</span></div>
-    <p class="muted small">Pajak dikelola parlemen. Gaji menteri 113 emas/hari (dicetak permainan).</p>
+    <p class="muted small">Pajak dikelola parlemen. Gaji menteri 113 emas/hari (dicetak permainan). Pajak pasar 2% masuk ke kas ini.</p>
+    ${d.treasuryTx?.length ? `<h3 style="margin-top:12px">📒 ARUS KAS (20 TERAKHIR)</h3>
+      ${d.treasuryTx.map((t) => `<div class="kv"><span class="k">${esc(t.note || t.kind)}<br><small class="muted">${ago(t.created_at)}</small></span>
+      <span class="v">+${fmt(t.amount, 2)} ${t.currency === 'gold' ? 'emas' : 'USD'}</span></div>`).join('')}`
+      : '<p class="muted small" style="margin-top:8px">Belum ada pemasukan pajak — kas negara masih 0 sampai ada yang berdagang.</p>'}
   </div>
   <div class="panel"><h3>🔥 PEMBERONTAKAN IBU KOTA</h3>
     <p class="muted small">Dukungan ibu kota: ${d.capitalRebellion}/5 · Dukung: 100 emas hangus.</p>
@@ -2007,6 +2206,8 @@ ROUTES.contact = async () => {
 };
 
 ROUTES.book = async () => {
+  let ann = { announcements: [] };
+  try { ann = await api('/api/announcements'); } catch { /* panduan tetap tampil walau pengumuman gagal dimuat */ }
   $('#page').innerHTML = page('BUKU PANDUAN', 'Cara bermain Parlementer.', `
   <div class="panel"><h3>🎯 ALUR INTI</h3>
     <p>1) Habiskan energi untuk bekerja (shift) atau berperang.<br>
@@ -2020,7 +2221,17 @@ ROUTES.book = async () => {
   <div class="panel"><h3>⚔️ PERANG</h3>
     <p>Dukung pemberontakan di wilayah (50 emas; 100 emas untuk ibu kota). 5 pendukung menyulut perang. Serang dari garis depan: harus berada di wilayah perang, butuh 10 energi + 1 senjata.</p></div>
   <div class="panel"><h3>📰 PERS</h3>
-    <p>Dirikan koran (5 emas), tulis artikel, kumpulkan pembaca dan reaksi. Skor liga = 3 × reaksi bersih + penonton unik.</p></div>`);
+    <p>Dirikan koran (5 emas), tulis artikel, kumpulkan pembaca dan reaksi. Skor liga = 3 × reaksi bersih + penonton unik.</p></div>
+  <div class="panel"><h3>📜 RIWAYAT UPDATE</h3>
+    <p class="muted small">Semua pengumuman update, dari yang terbaru ke yang terlama. Nomor urut mengikuti urutan terbit (Update #1 = pengumuman pertama).</p>
+    ${ann.announcements.length ? ann.announcements.map((a) => `
+      <div style="margin-bottom:16px">
+        <div class="kv"><span class="k"><span class="chip">Update #${a.num}</span> <b>${esc(a.title)}</b></span>
+        <span class="v small muted" style="white-space:nowrap">${fmtDate(a.created_at)}</span></div>
+        <p class="announce-body">${esc(a.body)}</p>
+      </div>`).join('')
+      : '<p class="muted">Belum ada pengumuman.</p>'}
+  </div>`);
 };
 
 // ---------- MODAL LAPOR ----------
@@ -2053,6 +2264,32 @@ $('#report-submit').onclick = async () => {
   } catch (e) { toast(e.message); }
 };
 $('#report-modal').addEventListener('click', (e) => { if (e.target.id === 'report-modal') e.target.hidden = true; });
+
+// ---------- MODAL PENGUMUMAN UPDATE ("Apa yang Baru", Tahap 4) ----------
+// Sekali per sesi login: bila ada pengumuman yang belum dibaca, tampilkan
+// yang terbaru sebagai modal. "SUDAH DIBACA" menandai dibaca di server;
+// "NANTI" hanya menutup (muncul lagi di sesi berikut). Akun banned tidak
+// mendapat modal ini.
+let __announceShown = false;
+async function maybeShowAnnouncement() {
+  if (__announceShown || ME?.user?.is_banned) return;
+  __announceShown = true;
+  let data;
+  try { data = await api('/api/announcements'); } catch { return; }
+  const unread = (data.announcements || []).filter((a) => !a.read);
+  if (!unread.length) return;
+  const a = unread[0]; // terbaru dulu (server mengurutkan DESC)
+  $('#announce-modal-sub').textContent = `Update #${a.num} · ${fmtDate(a.created_at)} — ${a.title}`;
+  $('#announce-modal-body').textContent = a.body;
+  $('#announce-modal').hidden = false;
+  $('#announce-modal-read').onclick = async () => {
+    try { await post('/api/announcements/read', { id: a.id }); } catch { /* abaikan */ }
+    $('#announce-modal').hidden = true;
+    await refreshMe();
+  };
+  $('#announce-modal-later').onclick = () => { $('#announce-modal').hidden = true; };
+  $('#announce-modal').addEventListener('click', (e) => { if (e.target.id === 'announce-modal') e.target.hidden = true; }, { once: true });
+}
 
 // ---------- ROUTE KHUSUS: press/:id & chat sub-room ----------
 const _route = route;

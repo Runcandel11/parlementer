@@ -283,6 +283,55 @@ async function main() {
     await sleep(100);
     check('konfirmasi disetujui: demolish dipanggil', apiCalls.includes('/api/convoy/demolish'), apiCalls.join(','));
 
+    // 11) Buku Panduan: panel RIWAYAT UPDATE (Tahap 4) — nomor stabil
+    // berdasarkan urutan terbit, tampil terbaru dulu.
+    const annMock = [
+      { id: 1, num: 1, title: 'Pasar Lebih Dalam, Energi Pulih Otomatis & Tampilan Baru', body: 'Pasar lebih dalam. Energi pulih +2/menit.', created_at: Date.now() - 86400000, read: true },
+      { id: 2, num: 2, title: 'Update Tes Kedua', body: 'Isi update kedua.', created_at: Date.now(), read: false },
+    ];
+    window.api = async (path) => {
+      if (path === '/api/announcements') return { announcements: [...annMock].reverse(), unreadCount: 1 };
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/book';
+    window.eval('route()');
+    await sleep(300);
+    const bookText = document.querySelector('#page').textContent;
+    check('Buku: panel RIWAYAT UPDATE tampil', bookText.includes('RIWAYAT UPDATE'));
+    check('Buku: Update #1 (terlama) + Update #2 (terbaru) keduanya tampil', bookText.includes('Update #1') && bookText.includes('Update #2'));
+    check('Buku: entri terbaru di atas (judul Update #2 sebelum judul Update #1)', bookText.indexOf('Update Tes Kedua') < bookText.indexOf('Pasar Lebih Dalam'));
+    check('Buku: judul Update #1 tampil', bookText.includes('Pasar Lebih Dalam'));
+
+    // 12) Toggle suara di Pengaturan (Tahap 4) tersimpan di localStorage.
+    window.localStorage.removeItem('parlementer_sound');
+    window.location.hash = '#/settings';
+    window.eval('route()');
+    await sleep(300);
+    const soundBtn = document.querySelector('#btn-sound-toggle');
+    check('Pengaturan: tombol suara tampil (awal NYALA)', !!soundBtn && soundBtn.textContent.includes('NYALA'));
+    soundBtn.click();
+    check('Toggle suara: klik mematikan + tersimpan "off"', window.localStorage.getItem('parlementer_sound') === 'off' && document.querySelector('#btn-sound-toggle').textContent.includes('MATI'));
+    document.querySelector('#btn-sound-toggle').click();
+    check('Toggle suara: klik lagi menyalakan + tersimpan "on"', window.localStorage.getItem('parlementer_sound') === 'on' && document.querySelector('#btn-sound-toggle').textContent.includes('NYALA'));
+
+    // 13) Modal pengumuman saat login (Tahap 4): tampil sekali bila ada
+    // yang belum dibaca; SUDAH DIBACA menandai + menutup, NANTI hanya menutup.
+    const annCalls = [];
+    window.api = async (path, opts) => {
+      if (path === '/api/announcements') return { announcements: [{ id: 3, num: 3, title: 'Update Tes Modal', body: 'Isi modal.', created_at: Date.now(), read: false }], unreadCount: 1 };
+      if (path === '/api/announcements/read' && opts?.method === 'POST') { annCalls.push(path); return { ok: true }; }
+      if (path === '/api/me') return ME;
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.eval('maybeShowAnnouncement()');
+    await sleep(300);
+    const annModal = document.querySelector('#announce-modal');
+    check('Modal pengumuman tampil saat ada yang belum dibaca', !!annModal && !annModal.hidden);
+    check('Modal pengumuman berisi nomor + judul', document.querySelector('#announce-modal-sub').textContent.includes('Update #3') && document.querySelector('#announce-modal-sub').textContent.includes('Update Tes Modal'));
+    document.querySelector('#announce-modal-read').click();
+    await sleep(300);
+    check('SUDAH DIBACA: menandai dibaca + menutup modal', annCalls.includes('/api/announcements/read') && document.querySelector('#announce-modal').hidden);
+
     dom.window.close();
   } finally {
     stop();

@@ -147,6 +147,24 @@ async function main() {
   const hasCk = await pool.query("SELECT 1 FROM pg_constraint WHERE conname = 'ck_jobs_seats_nonneg'");
   check('constraint ck_jobs_seats_nonneg terpasang kembali (tepat 1)', hasCk.rowCount === 1);
 
+  console.log('\n[7] Tabel + kolom Tahap 4 + seed pengumuman');
+  const t4tables = await pool.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads')");
+  check('5 tabel Tahap 4 ada', t4tables.rowCount === 5, `n=${t4tables.rowCount}`);
+  const t4cols = await pool.query("SELECT table_name, column_name FROM information_schema.columns WHERE (table_name = 'country' AND column_name = 'treasury_usd') OR (table_name = 'citizens' AND column_name = 'energy_updated_at')");
+  check('Kolom treasury_usd + energy_updated_at ada', t4cols.rowCount === 2);
+  const t4checks = await pool.query("SELECT conname FROM pg_constraint WHERE contype = 'c' AND conname IN ('ck_buy_orders_qty_pos', 'ck_buy_orders_price_pos', 'ck_buy_orders_filled_nonneg', 'ck_buy_orders_filled_lte')");
+  check('4 CHECK order beli terpasang', t4checks.rowCount === 4, `n=${t4checks.rowCount}`);
+  const anns = await pool.query('SELECT COUNT(*) AS n FROM announcements');
+  check('Seed pengumuman Update #1 ada', Number(anns.rows[0].n) >= 1, `n=${anns.rows[0].n}`);
+  const ann1 = await pool.query('SELECT title, body FROM announcements ORDER BY created_at ASC LIMIT 1');
+  check('Update #1 berisi regen + hadiah barang tanpa batas', /\+2/.test(ann1.rows[0]?.body || '') && /tanpa batas/.test(ann1.rows[0]?.body || ''), ann1.rows[0]?.title || '');
+  // Migrasi kolom lama: hapus kolom, initDb menambahkannya kembali.
+  await pool.query('ALTER TABLE country DROP COLUMN treasury_usd');
+  await pool.query('ALTER TABLE citizens DROP COLUMN energy_updated_at');
+  await initDb();
+  const t4cols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE (table_name = 'country' AND column_name = 'treasury_usd') OR (table_name = 'citizens' AND column_name = 'energy_updated_at')");
+  check('Migrasi: kolom Tahap 4 ditambah kembali', Number(t4cols2.rows[0].n) === 2);
+
   await pool.end();
   console.log(`\n[pg-verify] SELESAI: ${passed} lolos, ${failed} gagal`);
   process.exit(failed ? 1 : 0);

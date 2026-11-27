@@ -107,9 +107,19 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
 }
 .hud-icon { position: relative; background: #0a0f1c; border: 1px solid var(--line); color: var(--gold-bright); border-radius: 10px; width: 40px; height: 40px; font-size: 18px; flex: none; }
 .badge { position: absolute; top: -6px; right: -6px; background: var(--danger); color: #fff; border-radius: 999px; min-width: 18px; height: 18px; font-size: 11px; line-height: 18px; text-align: center; padding: 0 4px; font-weight: 700; }
-.hud-shield { position: relative; flex: none; width: 52px; height: 58px; background: linear-gradient(180deg, #1a2c4d, #0d1526); border: 2px solid var(--gold); clip-path: polygon(50% 0, 100% 18%, 100% 62%, 50% 100%, 0 62%, 0 18%); display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.hud-shield-xp { font-family: 'Oswald', sans-serif; font-size: 22px; font-weight: 700; color: var(--gold-bright); line-height: 1; }
-.hud-shield-lv { position: absolute; bottom: -9px; left: 50%; transform: translateX(-50%); background: var(--gold); color: #1a1206; border-radius: 999px; width: 20px; height: 20px; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+/* Perisai HUD (diperbaiki Tahap 4): bentuk perisai TIDAK LAGI dibuat dengan
+   clip-path pada elemennya sendiri — clip-path memotong anak-anaknya
+   (teks XP + lencana level jadi bentuk kipas terpotong) dan memotong border
+   persegi menjadi segitiga emas yang terlepas, sehingga ujung perisai tampak
+   "terpotong" di HP. Bentuk kini digambar dua lapis semu: ::before emas
+   (garis tepi) + ::after isi gradasi, keduanya ber-clip-path, sedangkan
+   elemen + anak-anaknya tidak ter-clip sehingga teks & lencana tampil utuh. */
+.hud-shield { position: relative; flex: none; width: 52px; height: 58px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.hud-shield::before, .hud-shield::after { content: ''; position: absolute; inset: 0; clip-path: polygon(50% 0, 100% 18%, 100% 62%, 50% 100%, 0 62%, 0 18%); pointer-events: none; }
+.hud-shield::before { background: var(--gold); }
+.hud-shield::after { inset: 2px; background: linear-gradient(180deg, #1a2c4d, #0d1526); }
+.hud-shield-xp { position: relative; z-index: 1; font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700; color: var(--gold-bright); line-height: 1; white-space: nowrap; }
+.hud-shield-lv { position: absolute; bottom: -9px; left: 50%; transform: translateX(-50%); z-index: 2; background: var(--gold); color: #1a1206; border-radius: 999px; width: 20px; height: 20px; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .hud-identity { flex: 1; min-width: 0; }
 .hud-name { font-family: 'Oswald', sans-serif; font-size: 17px; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hud-region { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -234,7 +244,7 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
 
 /* ---------- modal & toast ---------- */
 .modal { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.7); display: flex; align-items: center; justify-content: center; padding: 16px; }
-.modal-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; width: 100%; max-width: 420px; }
+.modal-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; width: 100%; max-width: 420px; max-height: calc(100vh - 32px); overflow-y: auto; }
 .modal-card h3 { font-size: 20px; margin-bottom: 4px; }
 .modal-sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
 .report-reasons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
@@ -280,6 +290,45 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
 .panel-head h3 .avatar-img,
 .panel-head h3 .avatar-initial { vertical-align: middle; margin-right: 2px; }
 
+/* ---------- polish UI/UX (Tahap 4) ----------
+   Halaman masuk dengan fade/slide ringan (diterapkan ke anak langsung
+   #page karena #page-nya sendiri tidak pernah diganti — kontennya yang
+   diganti tiap route); tombol memberi umpan balik tekan (scale) + hover
+   jelas di desktop; transisi halus di elemen interaktif. Identitas dan
+   warna dasar tidak berubah. Semua animasi dimatikan bila pengguna
+   memilih reduced motion. */
+.page > * { animation: pageIn .22s ease; }
+@keyframes pageIn { from { opacity: 0; transform: translateY(6px); } }
+.modal-card { animation: popIn .18s ease; }
+@keyframes popIn { from { opacity: 0; transform: scale(.97); } }
+.btn-gold, .btn-ghost, .btn-danger, .hud-icon, .nav-item, .tab { transition: transform .12s ease, background-color .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.btn-gold:active, .btn-ghost:active, .btn-danger:active, .hud-icon:active, .nav-item:active, .tab:active { transform: scale(.96); }
+:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+.toast { animation: toastIn .2s ease; }
+@keyframes toastIn { from { opacity: 0; transform: translate(-50%, 8px); } }
+@media (hover: hover) {
+  .btn-gold:hover { box-shadow: 0 4px 18px rgba(217,164,65,.35); }
+  .btn-ghost:hover, .btn-danger:hover { background: #131c2e; }
+  .hud-icon:hover { border-color: var(--gold-dim); color: var(--gold-bright); }
+  .nav-item:hover { background: #141f33; }
+  .tab:hover { color: var(--text); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page > *, .modal-card, .toast { animation: none; }
+  .btn-gold, .btn-ghost, .btn-danger, .hud-icon, .nav-item, .tab { transition: none; }
+}
+
+/* ---------- grafik harga pasar (Tahap 4): batang CSS, tanpa dependensi ---------- */
+.price-chart { display: flex; align-items: flex-end; gap: 3px; height: 110px; padding: 6px 2px 0; border-bottom: 1px solid var(--line); }
+.price-chart .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-width: 0; height: 100%; }
+.price-chart .bar-col i { display: block; width: 100%; max-width: 24px; background: linear-gradient(180deg, var(--gold-bright), var(--gold)); border-radius: 3px 3px 0 0; min-height: 3px; }
+.price-chart .bar-col span { font-size: 10px; color: var(--muted2); margin-top: 4px; white-space: nowrap; }
+
+/* ---------- pengumuman update ("Apa yang Baru", Tahap 4) ---------- */
+/* Isi pengumuman memakai baris baru (\n) — tampilkan apa adanya. */
+.announce-body { white-space: pre-line; font-size: 14px; line-height: 1.6; }
+.announce-unread { border-left: 3px solid var(--gold); padding-left: 10px; }
+
 /* ---------- perbaikan layar kecil (audit HP portrait) ---------- */
 /* Tabel panjang (pasar, parlemen) bisa di-scroll horizontal, bukan meluber. */
 .table { display: block; overflow-x: auto; }
@@ -293,7 +342,7 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
   .hud { gap: 6px; padding: 6px 8px; flex-wrap: wrap; row-gap: 12px; }
   .hud-icon { width: 36px; height: 36px; font-size: 16px; border-radius: 8px; }
   .hud-shield { width: 44px; height: 50px; }
-  .hud-shield-xp { font-size: 18px; }
+  .hud-shield-xp { font-size: 16px; }
   .hud-identity { order: 5; flex: 1 1 100%; }
   .hud-name { font-size: 15px; }
   .hud-region { font-size: 11px; }
@@ -301,11 +350,13 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
   .hud-actions { gap: 4px; }
   .page { padding: 12px 10px 180px; }
   .page h2 { font-size: 22px; }
-  .panel { padding: 12px; }
+  /* Polish Tahap 4: panel sedikit lebih lega di HP (14px) supaya hierarki
+     visual tidak terlalu rapat; banner toko menyesuaikan margin negatifnya. */
+  .panel { padding: 14px; }
   /* Banner toko: margin negatif harus sama dengan padding panel mobile
-     (12px), bukan 16px — kalau tidak, banner menjorok keluar panel dan
+     (14px), bukan 16px — kalau tidak, banner menjorok keluar panel dan
      terpotong oleh overflow:hidden (bug "★ PALING DIMINATI" kepotong). */
-  .shop-banner { margin: -12px -12px 10px; }
+  .shop-banner { margin: -14px -14px 10px; }
   .stat-num { font-size: 24px; }
   .row > * { min-width: 120px; }
 }

@@ -4,9 +4,10 @@
 // admin adalah mendaftar dengan kode bootstrap ADMIN_BOOTSTRAP_CODE yang
 // benar (lihat api-core.js), atau migrasi initDb yang menjaga akun admin
 // Khalid yang sudah ada (koboijuniorkhalid@gmail.com).
-import { sql, one, run, tx } from './db.js';
+import { sql, one, run, tx, convoyBuildings } from './db.js';
 import { authRequired, publicId } from './util.js';
 import { checkRateLimit } from './rate-limit.js';
+import { energyCapFor } from './game.js';
 
 const PREMIUM_MONTHS = [1, 3, 6, 12];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -218,8 +219,11 @@ export function registerAdmin(app) {
     const { user_id, commodity, tier, qty } = req.body || {};
     if (!GRANT_ITEMS.includes(commodity)) return res.status(400).json({ error: 'Barang harus Makanan, Senjata, Tiket, atau bahan mentah (Gandum/Besi/Minyak/Kapas Mentah, Kayu, Batu Bara, Tembaga Mentah).' });
     const t = Math.max(1, Math.min(5, Number(tier) || 1));
-    const q = Math.floor(Number(qty) || 0);
-    if (q <= 0 || q > 10000) return res.status(400).json({ error: 'Jumlah barang harus 1–10000.' });
+    // Tahap 4: hadiah barang TANPA batas jumlah — syarat hanya bilangan
+    // bulat positif yang valid (emas/USD tetap maks 1.000.000).
+    const qRaw = Number(qty);
+    if (!Number.isSafeInteger(qRaw) || qRaw <= 0) return res.status(400).json({ error: 'Jumlah barang harus bilangan bulat lebih dari 0.' });
+    const q = qRaw;
     const target = await one('SELECT u.*, c.id AS citizen_id FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.id = ?', [Number(user_id)]);
     if (!target) return res.status(404).json({ error: 'Pemain tidak ditemukan.' });
     const com = await one('SELECT id FROM commodities WHERE name = ?', [commodity]);
@@ -238,9 +242,12 @@ export function registerAdmin(app) {
   // ---------- ISI ENERGI ----------
   app.post('/api/admin/energy', authRequired, admin, r(async (req, res) => {
     const { user_id } = req.body || {};
-    const target = await one('SELECT u.*, c.id AS citizen_id FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.id = ?', [Number(user_id)]);
+    const target = await one('SELECT u.*, c.id AS citizen_id, c.level FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.id = ?', [Number(user_id)]);
     if (!target) return res.status(404).json({ error: 'Pemain tidak ditemukan.' });
-    const cap = target.premium_until > Date.now() ? 120 : 100;
+    // Tahap 4: isi sampai batas energi pemain (100 + 5×(level−1), +20
+    // Premium, +10 RS Lapangan) — bukan lagi hardcode 100/120.
+    const buildings = await convoyBuildings(target.citizen_id);
+    const cap = energyCapFor(target.level, target.premium_until > Date.now(), buildings.has('health'));
     const kind = grantKind(req.body);
     await tx(async (t) => {
       await t.run('UPDATE citizens SET energy = ? WHERE id = ?', [cap, target.citizen_id]);
@@ -257,8 +264,8 @@ export function registerAdmin(app) {
   // POST /api/admin/gift-all { kind: 'gold'|'usd'|'item'|'premium'|'energy', amount, commodity?, tier?, message? }
   // Diterapkan ke SEMUA pemain yang TIDAK di-ban, dalam satu transaksi
   // database (semua berhasil atau semua batal). Tiap pemain dapat notifikasi
-  // hadiah; aksi dicatat sekali di log admin. Batas jumlah sama seperti
-  // grant tunggal (maks 1.000.000; barang 1–10000; premium 1–365 hari).
+  // hadiah; aksi dicatat sekali di log admin. Batas jumlah: emas/USD maks
+  // 1.000.000; barang TANPA batas jumlah (Tahap 4); premium 1–365 hari.
   // Notifikasi selalu berbunyi hadiah ("Hadiah dari admin") — karena memang hadiah.
   app.post('/api/admin/gift-all', authRequired, admin, r(async (req, res) => {
     const { kind, amount, commodity, tier, message } = req.body || {};
@@ -273,7 +280,10 @@ export function registerAdmin(app) {
     } else if (kind === 'item') {
       if (!GRANT_ITEMS.includes(commodity)) return res.status(400).json({ error: 'Barang harus Makanan, Senjata, Tiket, atau bahan mentah.' });
       t = Math.max(1, Math.min(5, Number(tier) || 1));
-      if (amt <= 0 || amt > 10000) return res.status(400).json({ error: 'Jumlah barang harus 1–10000.' });
+      // Tahap 4: hadiah barang TANPA batas jumlah — syarat hanya bilangan
+      // bulat positif yang valid (emas/USD tetap maks 1.000.000).
+      const rawAmt = Number(amount);
+      if (!Number.isSafeInteger(rawAmt) || rawAmt <= 0) return res.status(400).json({ error: 'Jumlah barang harus bilangan bulat lebih dari 0.' });
       com = await one('SELECT id FROM commodities WHERE name = ?', [commodity]);
       if (!com) return res.status(400).json({ error: 'Barang tidak ditemukan.' });
     } else if (kind === 'premium') {
@@ -282,8 +292,11 @@ export function registerAdmin(app) {
     const msg = String(message || '').trim().slice(0, 200);
     const now = Date.now();
     const recipients = await sql(
-      'SELECT u.id AS user_id, u.premium_until, c.id AS citizen_id FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.is_banned = 0');
+      'SELECT u.id AS user_id, u.premium_until, c.id AS citizen_id, c.level FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.is_banned = 0');
     if (!recipients.length) return res.status(400).json({ error: 'Tidak ada pemain yang bisa menerima hadiah.' });
+    // Pemilik RS Lapangan (untuk batas energi per pemain, Tahap 4).
+    const healthOwners = new Set((await sql("SELECT citizen_id FROM convoys WHERE building = 'health' AND expires_at > ?", [now]))
+      .map((x) => x.citizen_id));
     const label = kind === 'gold' ? `+${amt} emas`
       : kind === 'usd' ? `+${amt} USD`
       : kind === 'item' ? `+${amt}× ${commodity} T${t}`
@@ -298,7 +311,9 @@ export function registerAdmin(app) {
           const until = Math.max(now, rc.premium_until || 0) + amt * DAY_MS;
           await tt.run('UPDATE users SET premium_until = ? WHERE id = ?', [until, rc.user_id]);
         } else {
-          const cap = rc.premium_until > now ? 120 : 100;
+          // Tahap 4: isi sampai batas energi masing-masing pemain
+          // (100 + 5×(level−1), +20 Premium, +10 RS Lapangan).
+          const cap = energyCapFor(rc.level, rc.premium_until > now, healthOwners.has(rc.citizen_id));
           await tt.run('UPDATE citizens SET energy = ? WHERE id = ?', [cap, rc.citizen_id]);
         }
         const content = kind === 'energy'
@@ -398,5 +413,51 @@ export function registerAdmin(app) {
       if (reporter) await logAction(t, req.userId, reporter.user_id, 'report_review', `Laporan chat #${id} ditinjau (${rep.reason})`);
     });
     res.json({ ok: true, status: 'reviewed' });
+  }));
+
+  // ---------- PENGUMUMAN UPDATE ("Apa yang Baru", Tahap 4) ----------
+  // Hanya admin (middleware `admin`: adminOnly + rate limit 120 POST/jam).
+  // Nomor update dihitung pemain dari urutan terbit — admin tidak mengisinya.
+  app.get('/api/admin/announcements', authRequired, admin, r(async (req, res) => {
+    const rows = await sql('SELECT * FROM announcements ORDER BY created_at DESC, id DESC');
+    res.json({ announcements: rows });
+  }));
+  app.post('/api/admin/announcements', authRequired, admin, r(async (req, res) => {
+    const { title, body } = req.body || {};
+    if (!title || !String(title).trim()) return res.status(400).json({ error: 'Judul pengumuman wajib diisi.' });
+    if (!body || !String(body).trim()) return res.status(400).json({ error: 'Isi pengumuman wajib diisi.' });
+    const a = await tx(async (t) => {
+      const ins = await t.run('INSERT INTO announcements (title, body, created_at, created_by) VALUES (?,?,?,?) RETURNING id',
+        [String(title).trim().slice(0, 120), String(body).trim().slice(0, 5000), Date.now(), req.userId]);
+      await logAction(t, req.userId, req.userId, 'announcement_create', `Pengumuman dibuat: "${String(title).trim().slice(0, 80)}"`);
+      return ins;
+    });
+    res.json({ ok: true, id: a.id });
+  }));
+  app.post('/api/admin/announcements/:id/delete', authRequired, admin, r(async (req, res) => {
+    const id = Number(req.params.id);
+    const a = await one('SELECT * FROM announcements WHERE id = ?', [id]);
+    if (!a) return res.status(404).json({ error: 'Pengumuman tidak ditemukan.' });
+    await tx(async (t) => {
+      await t.run('DELETE FROM announcement_reads WHERE announcement_id = ?', [id]);
+      await t.run('DELETE FROM announcements WHERE id = ?', [id]);
+      await logAction(t, req.userId, req.userId, 'announcement_delete', `Pengumuman dihapus: "${(a.title || '').slice(0, 80)}"`);
+    });
+    res.json({ ok: true });
+  }));
+
+  // ---------- TANDA PASAR (Tahap 4) ----------
+  // Daftar heuristik harga di luar batas wajar + pola wash trading, terbaru
+  // dulu. Hanya log untuk ditinjau — bukan bukti pelanggaran otomatis.
+  app.get('/api/admin/market-flags', authRequired, admin, r(async (req, res) => {
+    const rows = await sql(
+      `SELECT f.*, c.name AS commodity_name,
+         bu.username AS buyer_name, su.username AS seller_name
+       FROM market_flags f
+       LEFT JOIN commodities c ON c.id = f.commodity_id
+       LEFT JOIN citizens bc ON bc.id = f.buyer_id LEFT JOIN users bu ON bu.id = bc.user_id
+       LEFT JOIN citizens sc ON sc.id = f.seller_id LEFT JOIN users su ON su.id = sc.user_id
+       ORDER BY f.created_at DESC, f.id DESC LIMIT 100`);
+    res.json({ flags: rows });
   }));
 }

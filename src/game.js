@@ -153,13 +153,44 @@ export const SHOP_PREMIUM = [
 ];
 export const PREMIUM_PERKS = 'Batas energi 120 (bukan 100), slot konvoi keempat, dan namamu berwarna Premium di chat.';
 
+// --- Batas energi & regen (Tahap 4) ---
+// Batas dasar naik 5 per level: 100 + 5×(level−1). Bonus lama tetap
+// menumpuk di atasnya: Premium +20, Rumah Sakit Lapangan +10.
+// Dulu (Tahap 3) batas di-hardcode 100/110/120 — kini satu rumus ini
+// satu-satunya sumber kebenaran (dipakai /api/me, eat, tick, regen).
+export function energyCapFor(level, isPremium, hasHealth) {
+  return 100 + 5 * (Math.max(1, level) - 1) + (isPremium ? 20 : 0) + (hasHealth ? 10 : 0);
+}
+// Regen energi: +2 tiap 1 menit, dihitung malas (lazy) dari waktu berlalu
+// saat data warga dibaca — pemain offline pun pulih saat kembali.
+export const ENERGY_REGEN_PER_MIN = 2;
+export const ENERGY_REGEN_MS = 60 * 1000;
+
+// --- Rantai produksi tahap 1 (Tahap 4) ---
+// Pabrik tidak lagi mencetak Bahan Bangunan gratis: tiap 1 unit Bahan
+// Bangunan butuh 2× Besi Mentah dari inventaris pemilik. Bila bahan kurang,
+// produksi hari itu hanya sebanyak yang bahannya cukup (bisa 0).
+export const FACTORY_INPUT = { commodity: 'Besi Mentah', perUnit: 2 };
+
+// --- Batas harga wajar (Tahap 4) ---
+// Harga jual/order beli ditolak bila di luar 0,25×–4× median harga transaksi
+// 14 hari terakhir (butuh ≥3 transaksi sebagai pembanding; pasar yang masih
+// kosong tidak dibatasi). Penolakan dicatat di market_flags (bukan ban).
+export const PRICE_BAND = { minMult: 0.25, maxMult: 4, minTx: 3, days: 14 };
+// Wash trading: ≥3 transaksi bolak-balik antara pasangan pembeli↔penjual
+// yang sama dalam 24 jam → dicatat di market_flags (log saja, bukan ban).
+export const WASH_TRADE = { minTx: 3, hours: 24 };
+
+// --- Retensi data (Tahap 4, audit §5.6) ---
+// Dijalankan tiap tick harian. Notifikasi yang belum dibaca TIDAK dihapus;
+// riwayat kas negara (treasury_tx) + pengumuman disimpan selamanya.
+export const RETENTION = { chatDays: 90, notifReadDays: 30, txDays: 180 };
+
 // --- Bonus bangunan konvoi (Tahap 3 — BUG-7: janji kini DITERAPKAN) ---
 // Sebelum Tahap 3, CONVOY_BUILDINGS hanya teks di toko/konvoi tanpa efek
 // mekanik. Sekarang tiap bangunan aktif memberi bonus nyata (lihat tick.js,
 // api-core.js latih/makan, api-civic.js serang):
-export const ENERGY_DAILY = 100;        // pemulihan energi harian dasar
-export const ENERGY_DAILY_HEALTH = 110; // Rumah Sakit Lapangan: +10%
-export const ENERGY_CAP_PREMIUM = 120;  // batas energi Premium
+export const ENERGY_DAILY = 100;        // pemulihan energi harian dasar (level 1, tanpa bonus)
 // Sekolah Keliling: latihan 10% lebih murah (minimal 1 emas).
 export function trainCostDiscounted(cost) { return Math.max(1, Math.floor(cost * 0.9)); }
 // Gudang Industri: produksi perusahaan +10% (dibulatkan).

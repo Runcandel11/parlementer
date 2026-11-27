@@ -11,9 +11,10 @@ import { dbRateLimit } from './rate-limit.js';
 import {
   WA_TOPUP_URL, MINT_RATE, INCOME_TAX, IMPORT_TAX, MIN_OFFER_QTY,
   xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, foodEnergy,
-  ENERGY_CAP_PREMIUM, ENERGY_DAILY_HEALTH, DAILY_MISSIONS, CHRONICLE,
+  energyCapFor, DAILY_MISSIONS, CHRONICLE,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
+  PRICE_BAND, WASH_TRADE,
 } from './game.js';
 
 export function registerCore(app) {
@@ -148,6 +149,61 @@ export function registerCore(app) {
     }
   }
 
+  // ---------- EKONOMI TAHAP 4: kas negara, batas harga, tanda pasar ----------
+  const round2 = (n) => Math.round(n * 100) / 100;
+  // Pajak pasar -> kas negara (BUG-8). Dipanggil DI DALAM tx yang sama
+  // dengan transaksinya. amount dibulatkan ke 2 desimal; nol dilewati.
+  async function recordTreasury(t, currency, amount, note) {
+    const a = round2(amount);
+    if (a <= 0) return;
+    const col = currency === 'gold' ? 'treasury' : 'treasury_usd';
+    await t.run(`UPDATE country SET ${col} = ${col} + ? WHERE id = 1`, [a]);
+    await t.run('INSERT INTO treasury_tx (kind, currency, amount, note, created_at) VALUES (?,?,?,?,?) RETURNING id',
+      ['pajak_pasar', currency, a, note, Date.now()]);
+  }
+  // Batas harga wajar: median harga transaksi 14 hari terakhir untuk
+  // komoditas+tier yang sama. Butuh ≥3 transaksi pembanding; pasar yang
+  // masih kosong tidak dibatasi.
+  async function checkPriceBand(db, commodityId, tier, price) {
+    const since = Date.now() - PRICE_BAND.days * 86400000;
+    const rows = await db.sql('SELECT price_each FROM market_tx WHERE commodity_id = ? AND tier = ? AND created_at > ? ORDER BY price_each',
+      [commodityId, tier, since]);
+    if (rows.length < PRICE_BAND.minTx) return { ok: true, median: null, n: rows.length };
+    const mid = Math.floor(rows.length / 2);
+    const median = rows.length % 2 ? rows[mid].price_each : (rows[mid - 1].price_each + rows[mid].price_each) / 2;
+    const lo = median * PRICE_BAND.minMult;
+    const hi = median * PRICE_BAND.maxMult;
+    if (price < lo || price > hi) return { ok: false, median, n: rows.length, lo, hi };
+    return { ok: true, median, n: rows.length };
+  }
+  async function flagMarket(db, kind, buyerId, sellerId, commodityId, detail) {
+    await db.run('INSERT INTO market_flags (kind, buyer_id, seller_id, commodity_id, detail, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
+      [kind, buyerId, sellerId, commodityId, detail, Date.now()]);
+  }
+  // Tolak harga di luar batas wajar SEBELUM transaksi (cek di luar tx agar
+  // catatan market_flags tidak ikut ter-rollback saat penolakan).
+  // Mengembalikan objek band bila ditolak, null bila lolos.
+  async function enforcePriceBand(commodityId, tier, price, actorId) {
+    const band = await checkPriceBand({ sql }, commodityId, tier, price);
+    if (band.ok) return null;
+    await flagMarket({ run }, 'price_band', null, actorId, commodityId,
+      `Harga ${price} di luar batas wajar ${band.lo.toFixed(2)}–${band.hi.toFixed(2)} (median 14 hari ${band.median.toFixed(2)}, ${band.n} transaksi).`);
+    return band;
+  }
+  // Wash trading: ≥3 transaksi antara pasangan pembeli↔penjual yang sama
+  // dalam 24 jam (dua arah) → catat saja untuk ditinjau admin (bukan ban).
+  async function checkWashTrade(t, buyerId, sellerId, commodityId) {
+    const since = Date.now() - WASH_TRADE.hours * 3600000;
+    const row = await t.one(
+      `SELECT COUNT(*) AS n FROM market_tx WHERE created_at > ? AND
+       ((buyer_id = ? AND seller_id = ?) OR (buyer_id = ? AND seller_id = ?))`,
+      [since, buyerId, sellerId, sellerId, buyerId]);
+    if (Number(row.n) >= WASH_TRADE.minTx) {
+      await flagMarket(t, 'wash_trade', buyerId, sellerId, commodityId,
+        `${row.n} transaksi antara pasangan yang sama dalam 24 jam terakhir.`);
+    }
+  }
+
   // ---------- AUTH (email + password) ----------
   // Bonus referral: pemilik kode +100 emas + 2 hari premium; pendaftar baru
   // +50 emas + 1 hari premium — dibayar saat pendaftar mencapai Level 3
@@ -207,9 +263,9 @@ export function registerCore(app) {
         'INSERT INTO users (email, username, pass_hash, referred_by, referral_code, premium_until, is_admin, created_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id',
         [email.toLowerCase(), username, hash, referredBy, myCode, 0, isAdmin, now]);
       const citizen = await t.run(
-        `INSERT INTO citizens (user_id, level, xp, energy, gold, usd, region_id, home_region_id, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?) RETURNING id`,
-        [user.id, 1, 0, 100, 50, 500, 1, 1, now]);
+        `INSERT INTO citizens (user_id, level, xp, energy, energy_updated_at, gold, usd, region_id, home_region_id, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+        [user.id, 1, 0, 100, now, 50, 500, 1, 1, now]);
       // Paket awal: 3 Makanan T1, 3 Senjata T1, 3 Tiket T1.
       for (const name of ['Makanan', 'Senjata', 'Tiket']) {
         const com = await t.one('SELECT id FROM commodities WHERE name = ?', [name]);
@@ -290,13 +346,13 @@ export function registerCore(app) {
     const activeWars = await sql("SELECT w.*, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active' ORDER BY w.created_at DESC");
     const votingLaws = await sql("SELECT l.*, u.username AS proposer FROM laws l JOIN citizens c ON c.id = l.proposer_id JOIN users u ON u.id = c.user_id WHERE l.status = 'voting' AND l.ends_at > ? ORDER BY l.ends_at ASC", [Date.now()]);
     const isPremium = c.premium_until > Date.now();
-    // Batas energi & biaya latihan yang berlaku SAAT INI (Tahap 3, BUG-7):
-    // Premium 120, Rumah Sakit Lapangan 110, normal 100; Sekolah Keliling
-    // memotong biaya latihan 10%. Dashboard memakai angka ini supaya yang
-    // ditampilkan sama dengan yang dibebankan server.
+    // Batas energi & biaya latihan yang berlaku SAAT INI (Tahap 4):
+    // 100 + 5×(level−1), +20 Premium, +10 Rumah Sakit Lapangan
+    // (energyCapFor — satu rumus, dipakai juga eat + tick + regen).
+    // Sekolah Keliling memotong biaya latihan 10%. Dashboard memakai angka
+    // ini supaya yang ditampilkan sama dengan yang dibebankan server.
     const buildings = await convoyBuildings(c.id);
-    const energyCap = isPremium ? ENERGY_CAP_PREMIUM
-      : buildings.has('health') ? ENERGY_DAILY_HEALTH : 100;
+    const energyCap = energyCapFor(c.level, isPremium, buildings.has('health'));
     const trainCosts = {};
     for (const [key, col] of [['strength', 'attr_str'], ['strategy', 'attr_edu'], ['charisma', 'attr_eco']]) {
       const base = trainCost(c[col]);
@@ -375,11 +431,10 @@ export function registerCore(app) {
       const ok = await takeItem(locked.id, food.id, t, 1, tx);
       if (!ok) throw Object.assign(new Error(`Tidak ada Makanan T${t} di inventaris.`), { status: 400 });
       const gain = foodEnergy(t);
-      // Batas energi: Premium 120; Rumah Sakit Lapangan aktif 110; normal
-      // 100. Selaras dengan reset harian di tick.js (Tahap 3, BUG-7).
+      // Batas energi (Tahap 4): energyCapFor — 100 + 5×(level−1), +20
+      // Premium, +10 RS Lapangan. Selaras dengan /api/me dan tick harian.
       const buildings = await convoyBuildings(locked.id, tx);
-      const cap = locked.premium_until > Date.now() ? ENERGY_CAP_PREMIUM
-        : buildings.has('health') ? ENERGY_DAILY_HEALTH : 100;
+      const cap = energyCapFor(locked.level, locked.premium_until > Date.now(), buildings.has('health'));
       const energy = Math.min(cap, locked.energy + gain);
       const upd = await tx.run('UPDATE citizens SET energy = ?, bread_today = bread_today + 1 WHERE id = ? AND bread_today < 10', [energy, locked.id]);
       if (!upd.changes) throw Object.assign(new Error('Jatah roti harian (10) sudah habis.'), { status: 400 });
@@ -523,6 +578,41 @@ export function registerCore(app) {
   }));
   app.post('/api/notifications/read', authRequired, citizenRequired, r(async (req, res) => {
     await run('UPDATE notifications SET is_read = 1 WHERE citizen_id = ?', [req.citizen.id]);
+    res.json({ ok: true });
+  }));
+
+  // ---------- PENGUMUMAN UPDATE ("Apa yang Baru", Tahap 4) ----------
+  // Nomor update stabil = urutan created_at menaik (Update #1 = yang
+  // pertama diterbitkan). Diambil dari tabel announcements, bukan hardcode.
+  function numberAnnouncements(rows) {
+    const asc = [...rows].sort((a, b) => a.created_at - b.created_at || a.id - b.id);
+    const num = new Map(asc.map((a, i) => [a.id, i + 1]));
+    return rows.map((a) => ({ ...a, num: num.get(a.id) }));
+  }
+  app.get('/api/announcements', authRequired, citizenRequired, r(async (req, res) => {
+    const rows = await sql('SELECT * FROM announcements ORDER BY created_at DESC, id DESC');
+    const reads = await sql('SELECT announcement_id FROM announcement_reads WHERE citizen_id = ?', [req.citizen.id]);
+    const readSet = new Set(reads.map((x) => x.announcement_id));
+    const list = numberAnnouncements(rows).map((a) => ({ ...a, read: readSet.has(a.id) }));
+    res.json({ announcements: list, unreadCount: list.filter((a) => !a.read).length });
+  }));
+  app.post('/api/announcements/read', authRequired, citizenRequired, r(async (req, res) => {
+    const { id, all } = req.body || {};
+    const now = Date.now();
+    if (all) {
+      const rows = await sql('SELECT id FROM announcements');
+      for (const a of rows) {
+        await run('INSERT INTO announcement_reads (announcement_id, citizen_id, read_at) VALUES (?,?,?) ON CONFLICT (announcement_id, citizen_id) DO NOTHING',
+          [a.id, req.citizen.id, now]);
+      }
+    } else if (id) {
+      const a = await one('SELECT id FROM announcements WHERE id = ?', [Number(id)]);
+      if (!a) return res.status(404).json({ error: 'Pengumuman tidak ditemukan.' });
+      await run('INSERT INTO announcement_reads (announcement_id, citizen_id, read_at) VALUES (?,?,?) ON CONFLICT (announcement_id, citizen_id) DO NOTHING',
+        [a.id, req.citizen.id, now]);
+    } else {
+      return res.status(400).json({ error: 'id atau all wajib diisi.' });
+    }
     res.json({ ok: true });
   }));
 
@@ -800,10 +890,49 @@ export function registerCore(app) {
       `SELECT t.*, c.name AS commodity_name FROM market_tx t JOIN commodities c ON c.id = t.commodity_id
        WHERE t.scope = ? ORDER BY t.created_at DESC LIMIT 20`,
       [scope]);
+    // Order beli terbuka (Tahap 4): yang bisa dipenuhi penjual + milik sendiri.
+    const buyOrders = await sql(
+      `SELECT o.*, u.username AS buyer, c.name AS commodity_name FROM market_buy_orders o
+       JOIN citizens sc ON sc.id = o.buyer_id JOIN users u ON u.id = sc.user_id
+       JOIN commodities c ON c.id = o.commodity_id
+       WHERE o.scope = ? AND o.qty_filled < o.qty ORDER BY o.price DESC LIMIT 100`,
+      [scope]);
+    const myBuyOrders = await sql(
+      `SELECT o.*, c.name AS commodity_name FROM market_buy_orders o JOIN commodities c ON c.id = o.commodity_id
+       WHERE o.buyer_id = ? AND o.scope = ? ORDER BY o.created_at DESC`,
+      [req.citizen.id, scope]);
     res.json({
       scope, commodities: coms.map((c) => ({ ...c, best: bestMap[c.id]?.best ?? null, offers: bestMap[c.id]?.n ?? 0 })),
       stats: { offers: Number(stats.offers), tx: Number(txStats.tx), units: Number(txStats.units), turnover: Number(txStats.turnover) },
-      offers, mine, recentTx,
+      offers, mine, recentTx, buyOrders, myBuyOrders,
+    });
+  }));
+
+  // Grafik harga per komoditas (Tahap 4): agregasi harian dari market_tx —
+  // data nyata antar pemain, bukan harga acuan. Rata-rata tertimbang volume.
+  app.get('/api/market/prices', authRequired, citizenRequired, r(async (req, res) => {
+    const scope = req.query.scope === 'global' ? 'global' : 'local';
+    const commodityId = Number(req.query.commodity_id) || 0;
+    const days = Math.max(1, Math.min(30, Number(req.query.days) || 14));
+    if (!commodityId) return res.status(400).json({ error: 'commodity_id wajib diisi.' });
+    const since = Date.now() - days * 86400000;
+    const rows = await sql(
+      'SELECT price_each, qty, created_at FROM market_tx WHERE scope = ? AND commodity_id = ? AND created_at > ? ORDER BY created_at ASC LIMIT 5000',
+      [scope, commodityId, since]);
+    const byDay = new Map();
+    for (const r of rows) {
+      const d = new Date(r.created_at).toISOString().slice(0, 10);
+      const b = byDay.get(d) || { date: d, tx: 0, volume: 0, sum: 0, min: Infinity, max: -Infinity };
+      b.tx += 1; b.volume += r.qty; b.sum += r.price_each * r.qty;
+      b.min = Math.min(b.min, r.price_each); b.max = Math.max(b.max, r.price_each);
+      byDay.set(d, b);
+    }
+    res.json({
+      scope, commodity_id: commodityId,
+      days: [...byDay.values()].map((b) => ({
+        date: b.date, tx: b.tx, volume: b.volume,
+        avg: round2(b.sum / b.volume), min: b.min, max: b.max,
+      })),
     });
   }));
 
@@ -832,6 +961,17 @@ export function registerCore(app) {
       const pay = await t.run(`UPDATE citizens SET ${currency} = ${currency} - ? WHERE id = ? AND ${currency} >= ?`, [total, buyer.id, total]);
       if (!pay.changes) throw Object.assign(new Error(`Saldo ${currency === 'gold' ? 'emas' : 'USD'} tidak cukup.`), { status: 400 });
       await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [sellerReceives, seller.id]);
+      // Tahap 4 (BUG-8): pajak masuk kas negara, bukan menguap.
+      // Lokal (USD): 2% dari harga jual. Global (emas): 2% pajak penjual
+      // + 2% pajak impor yang dibayar pembeli.
+      const gross = offer.price * q;
+      if (offer.scope === 'global') {
+        await recordTreasury(t, 'gold', gross * INCOME_TAX + gross * IMPORT_TAX,
+          `Pajak penjualan ${q} unit (global)`);
+      } else {
+        await recordTreasury(t, 'usd', gross * INCOME_TAX,
+          `Pajak penjualan ${q} unit (lokal)`);
+      }
       if (offer.qty === q) {
         const del = await t.run('DELETE FROM market_offers WHERE id = ? AND qty >= ?', [offer.id, q]);
         if (!del.changes) throw Object.assign(new Error('Jumlah penawaran tidak mencukupi.'), { status: 400 });
@@ -843,6 +983,8 @@ export function registerCore(app) {
       await t.run('INSERT INTO market_tx (buyer_id, seller_id, scope, commodity_id, tier, qty, price_each, total, created_at) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id',
         [buyer.id, seller.id, offer.scope, offer.commodity_id, offer.tier, q, offer.price, total, Date.now()]);
       await t.run('UPDATE citizens SET purchases = purchases + 1 WHERE id = ?', [buyer.id]);
+      // Tahap 4: pola bolak-balik mencurigakan dicatat untuk ditinjau admin.
+      await checkWashTrade(t, buyer.id, seller.id, offer.commodity_id);
       return { total, sellerReceives, currency };
     });
     await chronicleDone(req.citizen, 'buy');
@@ -856,6 +998,9 @@ export function registerCore(app) {
     if (q < MIN_OFFER_QTY) return res.status(400).json({ error: `Penawaran minimum ${MIN_OFFER_QTY} unit.` });
     if (!p || p <= 0) return res.status(400).json({ error: 'Harga harus lebih dari 0.' });
     const t = Math.max(1, Math.min(5, Number(tier) || 1));
+    // Tahap 4: harga di luar batas wajar ditolak + dicatat di market_flags.
+    const bad = await enforcePriceBand(commodity_id, t, p, req.citizen.id);
+    if (bad) return res.status(400).json({ error: `Harga di luar batas wajar (median 14 hari ${bad.median.toFixed(2)} — batas ${bad.lo.toFixed(2)}–${bad.hi.toFixed(2)}).` });
     // Atomik: kunci baris warga, ambil barang di dalam tx, lalu pasang
     // penawaran — dua jual paralel tidak bisa mengambil stok yang sama.
     const offerId = await tx(async (tx) => {
@@ -880,6 +1025,95 @@ export function registerCore(app) {
       await addItem(req.citizen.id, offer.commodity_id, offer.tier, offer.qty, t);
     });
     res.json({ ok: true });
+  }));
+
+  // ---------- ORDER BELI / ORDER BOOK (Tahap 4) ----------
+  // Dana pembeli dikunci (escrow) saat order dipasang; penjual memenuhi
+  // order lewat sell-to-order (penuh atau sebagian). Tanpa mesin pencocokan
+  // otomatis — penjual memilih order yang mau dipenuhi. Semua langkah
+  // atomik (pola Tahap 2: FOR UPDATE + UPDATE bersyarat + cek changes).
+  app.post('/api/market/buy-order', authRequired, citizenRequired, r(async (req, res) => {
+    const { scope, commodity_id, tier, qty, price } = req.body || {};
+    const q = Math.floor(Number(qty) || 0);
+    const p = Number(price);
+    if (q < MIN_OFFER_QTY) return res.status(400).json({ error: `Order beli minimum ${MIN_OFFER_QTY} unit.` });
+    if (!p || p <= 0) return res.status(400).json({ error: 'Harga harus lebih dari 0.' });
+    const t = Math.max(1, Math.min(5, Number(tier) || 1));
+    const sc = scope === 'global' ? 'global' : 'local';
+    const bad = await enforcePriceBand(commodity_id, t, p, req.citizen.id);
+    if (bad) return res.status(400).json({ error: `Harga di luar batas wajar (median 14 hari ${bad.median.toFixed(2)} — batas ${bad.lo.toFixed(2)}–${bad.hi.toFixed(2)}).` });
+    const currency = sc === 'global' ? 'gold' : 'usd';
+    const escrow = p * q;
+    const orderId = await tx(async (tx) => {
+      const locked = await tx.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      const bal = currency === 'gold' ? locked.gold : locked.usd;
+      if (bal < escrow) throw Object.assign(new Error(`Saldo ${currency === 'gold' ? 'emas' : 'USD'} tidak cukup untuk mengunci ${escrow.toFixed(2)} ${currency}.`), { status: 400 });
+      const upd = await tx.run(`UPDATE citizens SET ${currency} = ${currency} - ? WHERE id = ? AND ${currency} >= ?`, [escrow, req.citizen.id, escrow]);
+      if (!upd.changes) throw Object.assign(new Error('Saldo tidak cukup.'), { status: 400 });
+      const o = await tx.run(
+        'INSERT INTO market_buy_orders (buyer_id, scope, commodity_id, tier, qty, qty_filled, price, created_at) VALUES (?,?,?,?,?,0,?,?) RETURNING id',
+        [req.citizen.id, sc, commodity_id, t, q, p, Date.now()]);
+      return o.id;
+    });
+    res.json({ ok: true, orderId, escrow });
+  }));
+
+  app.post('/api/market/sell-to-order', authRequired, citizenRequired, r(async (req, res) => {
+    const { order_id, qty } = req.body || {};
+    const q = Math.max(1, Math.floor(Number(qty) || 1));
+    const result = await tx(async (t) => {
+      const order = await t.one(forUpdate('SELECT * FROM market_buy_orders WHERE id = ?'), [order_id]);
+      if (!order) throw Object.assign(new Error('Order beli tidak ditemukan.'), { status: 404 });
+      const remaining = order.qty - order.qty_filled;
+      if (remaining <= 0) throw Object.assign(new Error('Order beli sudah terpenuhi.'), { status: 400 });
+      if (q > remaining) throw Object.assign(new Error(`Order ini tinggal butuh ${remaining} unit.`), { status: 400 });
+      const sellerId = req.citizen.id;
+      const buyerId = order.buyer_id;
+      if (sellerId === buyerId) throw Object.assign(new Error('Tidak bisa menjual ke order beli sendiri.'), { status: 400 });
+      const [firstId, secondId] = buyerId < sellerId ? [buyerId, sellerId] : [sellerId, buyerId];
+      const firstRow = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [firstId]);
+      const secondRow = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [secondId]);
+      const buyer = buyerId === firstId ? firstRow : secondRow;
+      const seller = sellerId === firstId ? firstRow : secondRow;
+      const ok = await takeItem(sellerId, order.commodity_id, order.tier, q, t);
+      if (!ok) throw Object.assign(new Error('Jumlah di inventaris tidak mencukupi.'), { status: 400 });
+      const currency = order.scope === 'global' ? 'gold' : 'usd';
+      const gross = order.price * q;
+      const sellerReceives = gross * (1 - INCOME_TAX);
+      await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [sellerReceives, seller.id]);
+      // Dana pembeli sudah dikunci saat order dipasang — tidak ada tagihan lagi.
+      const upd = await t.run('UPDATE market_buy_orders SET qty_filled = qty_filled + ? WHERE id = ? AND qty_filled + ? <= qty', [q, order.id, q]);
+      if (!upd.changes) throw Object.assign(new Error('Order beli sudah berubah.'), { status: 400 });
+      // Terisi penuh: order selesai dan dihapus dari order book (seperti
+      // penawaran pasar yang habis dibeli) — tidak ditinggalkan sebagai baris mati.
+      if (order.qty_filled + q >= order.qty) {
+        await t.run('DELETE FROM market_buy_orders WHERE id = ?', [order.id]);
+      }
+      await addItem(buyer.id, order.commodity_id, order.tier, q, t);
+      await t.run('INSERT INTO market_tx (buyer_id, seller_id, scope, commodity_id, tier, qty, price_each, total, created_at) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id',
+        [buyer.id, seller.id, order.scope, order.commodity_id, order.tier, q, order.price, gross, Date.now()]);
+      // Pajak 2% -> kas negara (BUG-8).
+      await recordTreasury(t, currency, gross * INCOME_TAX, `Pajak penjualan ${q} unit via order beli`);
+      await t.run('UPDATE citizens SET purchases = purchases + 1 WHERE id = ?', [buyer.id]);
+      await checkWashTrade(t, buyer.id, seller.id, order.commodity_id);
+      return { total: gross, sellerReceives, currency, filled: order.qty_filled + q, qty: order.qty };
+    });
+    await chronicleDone(req.citizen, 'sell');
+    res.json({ ok: true, ...result });
+  }));
+
+  app.post('/api/market/buy-order/cancel', authRequired, citizenRequired, r(async (req, res) => {
+    const { order_id } = req.body || {};
+    const result = await tx(async (t) => {
+      const order = await t.one(forUpdate('SELECT * FROM market_buy_orders WHERE id = ? AND buyer_id = ?'), [order_id, req.citizen.id]);
+      if (!order) throw Object.assign(new Error('Order beli tidak ditemukan.'), { status: 404 });
+      const refund = order.price * (order.qty - order.qty_filled);
+      const currency = order.scope === 'global' ? 'gold' : 'usd';
+      await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [refund, req.citizen.id]);
+      await t.run('DELETE FROM market_buy_orders WHERE id = ?', [order.id]);
+      return { refund, currency };
+    });
+    res.json({ ok: true, ...result });
   }));
 
   // ---------- VALAS ----------

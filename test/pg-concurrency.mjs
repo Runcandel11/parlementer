@@ -174,7 +174,48 @@ async function main() {
     const blocked = await pool.query('SELECT COUNT(*) AS n FROM blocked WHERE blocker_id = (SELECT id FROM citizens WHERE user_id = (SELECT id FROM users WHERE username = $1))', ['pemblokir_race']);
     check('Hanya 1 baris blokir tercatat', Number(blocked.rows[0].n) === 1, `n=${blocked.rows[0].n}`);
 
-    console.log('\n[6] Invarian akhir: tidak ada saldo/stok negatif');
+    console.log('\n[6] Race: dua penjual berebut 1 order beli (Tahap 4)');
+    const U = await register('pembeli-order@conc.local', 'pembeli_order');
+    const S1 = await register('penjual-order1@conc.local', 'penjual_order_satu');
+    const S2 = await register('penjual-order2@conc.local', 'penjual_order_dua');
+    const uId = await citizenIdOf(U);
+    const s1Id = await citizenIdOf(S1);
+    const s2Id = await citizenIdOf(S2);
+    const besiCom = await pool.query("SELECT id FROM commodities WHERE name = 'Besi Mentah'");
+    const besiCid = besiCom.rows[0].id;
+    for (const sid of [s1Id, s2Id]) {
+      await pool.query(
+        'INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES ($1, $2, 1, 10) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = 10',
+        [sid, besiCid]);
+    }
+    r = await U.post('/api/market/buy-order', { scope: 'local', commodity_id: besiCid, tier: 1, qty: 10, price: 9 });
+    check('Pembeli memasang order beli 10× Besi @ 9 USD', r.status === 200 && !!r.data.orderId, `orderId=${r.data.orderId} ${JSON.stringify(r.data)}`);
+    const orderId = r.data.orderId;
+    const treBefore = await pool.query('SELECT treasury_usd FROM country WHERE id = 1');
+    const usdS1Before = await goldUsdOf(S1);
+    const usdS2Before = await goldUsdOf(S2);
+    const [fill1, fill2] = await Promise.all([
+      S1.post('/api/market/sell-to-order', { order_id: orderId, qty: 10 }),
+      S2.post('/api/market/sell-to-order', { order_id: orderId, qty: 10 }),
+    ]);
+    const fillWins = [fill1, fill2].filter((x) => x.status === 200).length;
+    // Yang kalah: 400 (sisa order habis) atau 404 (order sudah terisi penuh
+    // lalu dihapus pemenang) — keduanya benar, yang penting tepat 1 berhasil.
+    const fillLosses = [fill1, fill2].filter((x) => x.status === 400 || x.status === 404).length;
+    check('Tepat 1 penjual berhasil mengisi order, 1 ditolak (400/404)', fillWins === 1 && fillLosses === 1, `status=${fill1.status}/${fill2.status}`);
+    const besiU = await pool.query('SELECT qty FROM inventory WHERE citizen_id = $1 AND commodity_id = $2 AND tier = 1', [uId, besiCid]);
+    check('Pembeli menerima tepat 10× Besi sekali saja', Number(besiU.rows[0]?.qty) === 10, `besi=${besiU.rows[0]?.qty}`);
+    const usdS1After = await goldUsdOf(S1);
+    const usdS2After = await goldUsdOf(S2);
+    const paidSellers = (usdS1After.usd - usdS1Before.usd) + (usdS2After.usd - usdS2Before.usd);
+    check('Tepat 1 penjual dibayar 88,20 USD (90 − pajak 2%)', eq(paidSellers, 88.2), `dibayar=${paidSellers}`);
+    const treAfter = await pool.query('SELECT treasury_usd FROM country WHERE id = 1');
+    check('Pajak order beli tepat 1,80 USD masuk kas negara', eq(Number(treAfter.rows[0].treasury_usd) - Number(treBefore.rows[0].treasury_usd), 1.8),
+      `delta=${Number(treAfter.rows[0].treasury_usd) - Number(treBefore.rows[0].treasury_usd)}`);
+    const orderLeft = await pool.query('SELECT COUNT(*) AS n FROM market_buy_orders WHERE id = $1', [orderId]);
+    check('Order beli terisi penuh lalu terhapus', Number(orderLeft.rows[0].n) === 0);
+
+    console.log('\n[7] Invarian akhir: tidak ada saldo/stok negatif');
     const neg = await pool.query(
       `SELECT (SELECT COUNT(*) FROM citizens WHERE gold < 0 OR usd < 0 OR energy < 0) AS c1,
               (SELECT COUNT(*) FROM inventory WHERE qty < 0) AS c2,

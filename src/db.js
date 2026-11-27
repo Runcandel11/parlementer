@@ -270,6 +270,7 @@ CREATE TABLE IF NOT EXISTS citizens (
   level INTEGER NOT NULL DEFAULT 1,
   xp INTEGER NOT NULL DEFAULT 0,
   energy INTEGER NOT NULL DEFAULT 100 CHECK (energy >= 0),
+  energy_updated_at BIGINT NOT NULL DEFAULT 0,
   gold REAL NOT NULL DEFAULT 50 CHECK (gold >= 0),
   usd REAL NOT NULL DEFAULT 500 CHECK (usd >= 0),
   attr_str INTEGER NOT NULL DEFAULT 0,
@@ -351,6 +352,57 @@ CREATE TABLE IF NOT EXISTS market_tx (
   total REAL NOT NULL,
   created_at BIGINT NOT NULL
 );
+-- Order beli (Tahap 4): dana pembeli dikunci (escrow) saat order dipasang.
+-- qty_filled = yang sudah dipenuhi penjual; order terbuka selama
+-- qty_filled < qty. Dana sisa kembali saat dibatalkan.
+CREATE TABLE IF NOT EXISTS market_buy_orders (
+  id ${id},
+  buyer_id INTEGER NOT NULL REFERENCES citizens(id),
+  scope TEXT NOT NULL DEFAULT 'local',
+  commodity_id INTEGER NOT NULL REFERENCES commodities(id),
+  tier INTEGER NOT NULL DEFAULT 1,
+  qty INTEGER NOT NULL CHECK (qty > 0),
+  qty_filled INTEGER NOT NULL DEFAULT 0 CHECK (qty_filled >= 0),
+  price REAL NOT NULL CHECK (price > 0),
+  created_at BIGINT NOT NULL
+);
+-- Buku kas negara (Tahap 4, BUG-8): tiap pemasukan/pengeluaran kas negara
+-- dicatat — pajak pasar masuk sini, bukan menguap. Disimpan selamanya.
+CREATE TABLE IF NOT EXISTS treasury_tx (
+  id ${id},
+  kind TEXT NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'usd',
+  amount REAL NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at BIGINT NOT NULL
+);
+-- Tanda pasar (Tahap 4): heuristik deteksi harga di luar batas wajar +
+-- pola wash trading. Hanya LOG untuk ditinjau admin — bukan ban otomatis.
+CREATE TABLE IF NOT EXISTS market_flags (
+  id ${id},
+  kind TEXT NOT NULL,
+  buyer_id INTEGER,
+  seller_id INTEGER,
+  commodity_id INTEGER,
+  detail TEXT NOT NULL DEFAULT '',
+  created_at BIGINT NOT NULL
+);
+-- Pengumuman update game (Tahap 4, "Apa yang Baru"): ditulis admin,
+-- dibaca pemain. Nomor update stabil = urutan created_at (Update #1 =
+-- pengumuman pertama yang pernah diterbitkan).
+CREATE TABLE IF NOT EXISTS announcements (
+  id ${id},
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  created_by INTEGER
+);
+CREATE TABLE IF NOT EXISTS announcement_reads (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id),
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  read_at BIGINT NOT NULL,
+  UNIQUE(announcement_id, citizen_id)
+);
 CREATE TABLE IF NOT EXISTS fx_offers (
   id ${id},
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
@@ -402,6 +454,7 @@ CREATE TABLE IF NOT EXISTS country (
   capital TEXT NOT NULL DEFAULT 'Jakarta',
   founded TEXT NOT NULL DEFAULT '2026-09-23',
   treasury REAL NOT NULL DEFAULT 0,
+  treasury_usd REAL NOT NULL DEFAULT 0,
   tax_income REAL NOT NULL DEFAULT 2,
   tax_production REAL NOT NULL DEFAULT 1,
   tax_import REAL NOT NULL DEFAULT 2,
@@ -626,6 +679,12 @@ CREATE INDEX IF NOT EXISTS idx_articles_author ON articles(author_id);
 CREATE INDEX IF NOT EXISTS idx_articles_newspaper ON articles(newspaper_id);
 CREATE INDEX IF NOT EXISTS idx_market_tx_buyer ON market_tx(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_market_tx_seller ON market_tx(seller_id);
+CREATE INDEX IF NOT EXISTS idx_market_buy_orders ON market_buy_orders(scope, commodity_id);
+CREATE INDEX IF NOT EXISTS idx_market_buy_orders_buyer ON market_buy_orders(buyer_id);
+CREATE INDEX IF NOT EXISTS idx_treasury_tx_created ON treasury_tx(created_at);
+CREATE INDEX IF NOT EXISTS idx_market_flags_created ON market_flags(created_at);
+CREATE INDEX IF NOT EXISTS idx_announcement_reads_citizen ON announcement_reads(citizen_id);
+CREATE INDEX IF NOT EXISTS idx_convoys_citizen ON convoys(citizen_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_elections_status ON elections(status);
 CREATE INDEX IF NOT EXISTS idx_laws_status ON laws(status, ends_at);
 CREATE INDEX IF NOT EXISTS idx_appeals_user ON appeals(user_id, status);
@@ -679,8 +738,29 @@ export const COMMODITIES = [
 // unit `resource` (harga pasar bahan ~1–2 USD/unit, jadi jumlahnya puluhan
 // unit agar nilainya ≈ gaji lama ~48 USD/shift). Pekerjaan perusahaan pemain
 // tetap dibayar seperti semula (USD tetap / bagi hasil).
-export const ADMIN_JOBS = [
-  { title: 'Pekerja Gudang Pelabuhan', salary: 48, resource: 'Besi Mentah', qty: 44, region: 'Kepulauan Riau', desc: 'Bongkar muat peti kemas di pelabuhan. Kerja fisik, dibayar besi mentah.' },
+// Pengumuman pertama (Update #1, Tahap 4) — di-seed sekali saat tabel
+// announcements masih kosong. Isinya ringkasan semua perubahan Tahap 4;
+// pengumuman berikutnya ditulis admin lewat /api/admin/announcements.
+export const ANNOUNCEMENT_TAHAP4_TITLE = 'Pasar Lebih Dalam, Energi Pulih Otomatis & Tampilan Baru';
+export const ANNOUNCEMENT_TAHAP4_BODY = `PASAR & EKONOMI
+• Grafik harga: tiap komoditas kini punya grafik harga 14 hari dari transaksi nyata antar pemain.
+• Order beli: kamu bisa pasang harga belimu sendiri — penjual bisa langsung menjual ke ordermu. Dana dikunci aman saat order dipasang dan kembali bila dibatalkan.
+• Pajak masuk kas negara: pajak 2% dari penjualan kini benar-benar masuk kas negara (bukan menguap). Saldo + riwayat pemasukan/pengeluaran bisa dilihat di halaman Negara.
+• Pabrik butuh bahan: Pabrik kini mengolah 2× Besi Mentah menjadi 1× Bahan Bangunan setiap hari. Tanpa besi, pabrik berhenti berproduksi.
+
+ENERGI
+• Energi pulih otomatis +2 setiap 1 menit sampai batas maksimum — termasuk saat kamu offline, dihitung dari waktu yang berlalu.
+• Batas energi naik per level: 100 + 5×(level−1). Bonus Premium +20 dan Rumah Sakit Lapangan +10 tetap berlaku di atasnya.
+
+PERBAIKAN & TAMPILAN
+• Badge level di perisai HUD yang terpotong di HP (angka "3/5" kepotong atasnya) kini tampil utuh.
+• Tampilan lebih hidup: animasi halus saat pindah halaman dan tombol beranimasi saat ditekan.
+• Suara ketukan halus setiap kali menekan tombol — bisa dimatikan di Pengaturan.
+• Baru: pengumuman update ("Apa yang Baru") di Notifikasi, dan arsip lengkapnya di Buku Panduan → Riwayat Update.
+• Hadiah barang tanpa batas jumlah: admin kini bisa memberi makanan, bahan mentah, dan barang lain sebanyak apa pun (emas/USD tetap dibatasi 1.000.000, Premium 365 hari).
+• Keamanan pasar: harga jauh di luar batas wajar kini ditolak, dan pola perdagangan bolak-balik yang mencurigakan dicatat untuk ditinjau admin. Data lama (chat >90 hari dan lainnya) kini dibersihkan otomatis setiap hari.`;
+
+export const ADMIN_JOBS = [  { title: 'Pekerja Gudang Pelabuhan', salary: 48, resource: 'Besi Mentah', qty: 44, region: 'Kepulauan Riau', desc: 'Bongkar muat peti kemas di pelabuhan. Kerja fisik, dibayar besi mentah.' },
   { title: 'Kurir Kota', salary: 46, resource: 'Minyak Mentah', qty: 40, region: 'Kepulauan Riau', desc: 'Antar paket keliling kota. Butuh stamina dan hafal jalan.' },
   { title: 'Pembersih Jalan Kota', salary: 44, resource: 'Kayu', qty: 44, region: 'Jakarta', desc: 'Jaga kebersihan jalan ibu kota setiap pagi.' },
   { title: 'Asisten Toko Kelontong', salary: 45, resource: 'Gandum Mentah', qty: 38, region: 'Jawa Barat', desc: 'Melayani pembeli, menata rak, dan menjaga kasir.' },
@@ -716,6 +796,7 @@ export async function initDb() {
     await migrateUserColumns(t);
     await migrateAdminJobs(t);
     await migrateSupportTickets(t);
+    await migrateTahap4Columns(t);
     await seed(t);
   });
   // CHECK saldo/qty untuk database Postgres yang sudah ada: di luar transaksi
@@ -732,7 +813,7 @@ export async function initDb() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world', 'rate_limits', 'referral_pending'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world', 'rate_limits', 'referral_pending'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -837,6 +918,28 @@ async function migrateAdminJobs(t) {
   }
 }
 
+// Migrasikan kolom Tahap 4 untuk database yang sudah ada (Neon live +
+// SQLite lama): country.treasury_usd (kas negara dalam USD — pajak pasar
+// lokal) dan citizens.energy_updated_at (jam terakhir regen energi).
+// Idempotent: kolom yang sudah ada tidak disentuh. Baris warga lama yang
+// energy_updated_at-nya masih 0 diperlakukan sebagai "baru saja" saat regen
+// (tidak ada windfall energi — lihat util.js applyEnergyRegen).
+async function migrateTahap4Columns(t) {
+  if (isPg) {
+    await t.exec('ALTER TABLE country ADD COLUMN IF NOT EXISTS treasury_usd REAL NOT NULL DEFAULT 0');
+    await t.exec('ALTER TABLE citizens ADD COLUMN IF NOT EXISTS energy_updated_at BIGINT NOT NULL DEFAULT 0');
+  } else {
+    const countryCols = await t.sql('PRAGMA table_info(country)');
+    if (!countryCols.some((c) => c.name === 'treasury_usd')) {
+      await t.exec('ALTER TABLE country ADD COLUMN treasury_usd REAL NOT NULL DEFAULT 0');
+    }
+    const citizenCols = await t.sql('PRAGMA table_info(citizens)');
+    if (!citizenCols.some((c) => c.name === 'energy_updated_at')) {
+      await t.exec('ALTER TABLE citizens ADD COLUMN energy_updated_at BIGINT NOT NULL DEFAULT 0');
+    }
+  }
+}
+
 // Migrasikan tabel support_tickets lama (tanpa kolom status) ke status
 // 'baru'/'dibaca'/'selesai' untuk inbox admin. Idempotent: kolom yang sudah
 // ada tidak disentuh.
@@ -863,6 +966,10 @@ const CHECK_CONSTRAINTS = [
   ['inventory', 'ck_inventory_qty_nonneg', 'qty >= 0'],
   ['market_offers', 'ck_market_offers_qty_pos', 'qty > 0'],
   ['market_offers', 'ck_market_offers_price_pos', 'price > 0'],
+  ['market_buy_orders', 'ck_buy_orders_qty_pos', 'qty > 0'],
+  ['market_buy_orders', 'ck_buy_orders_price_pos', 'price > 0'],
+  ['market_buy_orders', 'ck_buy_orders_filled_nonneg', 'qty_filled >= 0'],
+  ['market_buy_orders', 'ck_buy_orders_filled_lte', 'qty_filled <= qty'],
   ['fx_offers', 'ck_fx_offers_qty_gold_nonneg', 'qty_gold >= 0'],
   ['fx_offers', 'ck_fx_offers_qty_filled_nonneg', 'qty_filled >= 0'],
   ['jobs', 'ck_jobs_seats_nonneg', 'seats_taken >= 0'],
@@ -930,5 +1037,12 @@ async function seed(t = { one, run }) {
   if (!world) {
     await t.run('INSERT INTO world (id, day, last_tick_date) VALUES (1,1,?) RETURNING id',
       [new Date().toISOString().slice(0, 10)]);
+  }
+  // Pengumuman pertama (Update #1, Tahap 4): di-seed sekali saat tabel
+  // masih kosong, supaya langsung tampil setelah deploy ini.
+  const annCount = await t.one('SELECT COUNT(*) AS c FROM announcements');
+  if (Number(annCount.c) === 0) {
+    await t.run('INSERT INTO announcements (title, body, created_at, created_by) VALUES (?,?,?,NULL) RETURNING id',
+      [ANNOUNCEMENT_TAHAP4_TITLE, ANNOUNCEMENT_TAHAP4_BODY, now]);
   }
 }

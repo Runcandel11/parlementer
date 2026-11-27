@@ -81,7 +81,7 @@
 
   <main id="page" class="page"></main>
 
-  <div class="energy-bar" id="energy-bar">
+  <div class="energy-bar" id="energy-bar" title="Energi pulih +2/menit sampai batas maksimum">
     <button class="energy-chat" id="energy-chat" type="button" aria-label="Buka obrolan">💬<span class="badge" id="badge-chat2" hidden>0</span></button>
     <span class="energy-sep"></span>
     <span class="energy-icon">⚡</span>
@@ -107,6 +107,19 @@
     <div class="modal-actions">
       <button class="btn-ghost" id="report-cancel" type="button">BATAL</button>
       <button class="btn-gold" id="report-submit" type="button">KIRIM LAPORAN</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL PENGUMUMAN UPDATE ("Apa yang Baru", Tahap 4) ============ -->
+<div id="announce-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="announce-modal-title">
+  <div class="modal-card">
+    <h3 id="announce-modal-title">📣 APA YANG BARU</h3>
+    <p class="modal-sub" id="announce-modal-sub"></p>
+    <div class="announce-body" id="announce-modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="announce-modal-later" type="button">NANTI</button>
+      <button class="btn-gold" id="announce-modal-read" type="button">SUDAH DIBACA</button>
     </div>
   </div>
 </div>

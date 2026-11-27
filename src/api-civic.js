@@ -39,10 +39,13 @@ export function registerCivic(app) {
     }
     const capitalSupport = await one("SELECT COUNT(*) AS n FROM war_support WHERE region_id = (SELECT id FROM regions WHERE name = 'Jakarta')");
     const wars = await sql("SELECT w.*, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active'");
+    // Buku kas negara (Tahap 4, BUG-8): pemasukan pajak pasar + pengeluaran.
+    const treasuryTx = await sql('SELECT * FROM treasury_tx ORDER BY created_at DESC LIMIT 20');
     res.json({
       country, president: president?.username || 'Kosong', ministers,
       citizens: Number(stats.citizens), parties: Number(parties.n), regions: Number(regions.n),
       seats: Number(seats.n), capitalRebellion: Number(capitalSupport.n), wars,
+      treasuryTx,
     });
   }));
 

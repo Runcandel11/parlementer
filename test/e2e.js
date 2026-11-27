@@ -744,21 +744,250 @@ async function main() {
   r = await A.post(`/api/wars/${warId}/attack`, { side: 'defender', ammo: 'Senjata' });
   check('Pos Militer: kerusakan perang 30 → 33 (+10%)', r.status === 200 && r.data.damage === 33, `damage=${r.data.damage} ${r.data.error || ''}`);
 
-  console.log('\n[21] Aktivitas Saya + teks Premium (Tahap 3)');
-  const dbAct = new DatabaseSync(DB_PATH);
-  const foodCom = dbAct.prepare("SELECT id FROM commodities WHERE name = 'Makanan'").get();
-  dbAct.prepare('INSERT INTO market_tx (buyer_id, seller_id, scope, commodity_id, tier, qty, price_each, total, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-    .run(aId, 2, 'local', foodCom.id, 1, 10, 9, 90, Date.now());
-  dbAct.prepare('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?)')
-    .run(aId, 'SISTEM', 'Aktivitas tes', 'Peristiwa tes aktivitas.', Date.now());
-  dbAct.close();
-  r = await A.get('/api/activity');
-  check('GET /api/activity 200', r.status === 200 && Array.isArray(r.data.transactions) && Array.isArray(r.data.events));
-  const txRow = r.data.transactions.find((t) => t.commodity_name === 'Makanan' && t.direction === 'beli');
-  check('Aktivitas: transaksi BELI Makanan T1 ×10 tercatat', !!txRow && txRow.qty === 10 && txRow.total === 90, JSON.stringify(txRow));
-  check('Aktivitas: peristiwa "Aktivitas tes" tercatat', r.data.events.some((e) => e.title === 'Aktivitas tes'));
-  r = await A.get('/api/shop');
-  check('Toko: teks Premium jujur (batas energi 120, tanpa mode otomatis/roti)', typeof r.data.perks === 'string' && r.data.perks.includes('Batas energi 120') && !r.data.perks.includes('Mode otomatis') && !r.data.perks.includes('roti'), r.data.perks || '');
+  console.log('\n[22] Tahap 4 — Pasar/Ekonomi, energi, pengumuman, hadiah barang');
+  // Helper: paksa tick harian (mundurkan tanggal seperti [12]).
+  const forceTick = async (client) => {
+    const dbF = new DatabaseSync(DB_PATH);
+    const yd = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    dbF.prepare('UPDATE world SET last_tick_date = ? WHERE id = 1').run(yd);
+    dbF.close();
+    await client.get('/api/me');
+    await sleep(1500);
+  };
+  const C = new Client();
+  const D = new Client();
+  const E = new Client();
+  const F = new Client();
+  r = await C.post('/api/auth/register', { email: 'tahap4c@test.local', password: 'rahasia123', username: 'tahap4_c' });
+  check('Tahap 4: C mendaftar', r.status === 200 && r.data.ok);
+  r = await D.post('/api/auth/register', { email: 'tahap4d@test.local', password: 'rahasia123', username: 'tahap4_d' });
+  check('Tahap 4: D mendaftar', r.status === 200 && r.data.ok);
+  r = await E.post('/api/auth/register', { email: 'tahap4e@test.local', password: 'rahasia123', username: 'tahap4_e' });
+  check('Tahap 4: E mendaftar', r.status === 200 && r.data.ok);
+  r = await F.post('/api/auth/register', { email: 'tahap4f@test.local', password: 'rahasia123', username: 'tahap4_f' });
+  check('Tahap 4: F mendaftar', r.status === 200 && r.data.ok);
+  const meC = (await C.get('/api/me')).data;
+  const meD = (await D.get('/api/me')).data;
+  const meE = (await E.get('/api/me')).data;
+  const meF = (await F.get('/api/me')).data;
+  const cId = meC.citizen.id; const dId = meD.citizen.id;
+  const eId = meE.citizen.id; const fId = meF.citizen.id;
+  const cUserId = meC.user.id;
+  const market0 = await C.get('/api/market?scope=local');
+  const besiId = market0.data.commodities.find((x) => x.name === 'Besi Mentah').id;
+  const makananId = market0.data.commodities.find((x) => x.name === 'Makanan').id;
+  const db4 = new DatabaseSync(DB_PATH);
+  const setInv = (citizenId, commodityId, qty) => db4.prepare(
+    'INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = ?')
+    .run(citizenId, commodityId, qty, qty);
+  const invQty = (citizenId, commodityId) => {
+    const row = db4.prepare('SELECT qty FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1').get(citizenId, commodityId);
+    return row ? row.qty : 0;
+  };
+
+  console.log('  [22a] Grafik harga');
+  const nowMs4 = Date.now();
+  for (const [i, ts] of [nowMs4, nowMs4 - 3600000, nowMs4 - 86400000].entries()) {
+    db4.prepare('INSERT INTO market_tx (buyer_id, seller_id, scope, commodity_id, tier, qty, price_each, total, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(cId, dId, 'local', besiId, 1, 10, 10, 100, ts);
+  }
+  r = await C.get(`/api/market/prices?commodity_id=${besiId}&days=14`);
+  const todayStr = new Date(nowMs4).toISOString().slice(0, 10);
+  const todayBucket = (r.data.days || []).find((d) => d.date === todayStr);
+  check('Grafik harga: 2 hari terisi (hari ini + kemarin)', r.status === 200 && r.data.days.length === 2, `days=${r.data.days?.length}`);
+  check('Grafik harga hari ini: 2 transaksi, 20 unit, rata-rata 10', !!todayBucket && todayBucket.tx === 2 && todayBucket.volume === 20 && todayBucket.avg === 10, JSON.stringify(todayBucket));
+  r = await C.get('/api/market/prices?days=14');
+  check('Grafik harga tanpa commodity_id ditolak (400)', r.status === 400);
+
+  console.log('  [22b] Batas harga wajar');
+  setInv(cId, besiId, 20);
+  r = await C.post('/api/market/sell', { scope: 'local', commodity_id: besiId, tier: 1, qty: 10, price: 100 });
+  check('Jual @100 ditolak: di luar batas wajar (median 10)', r.status === 400 && /batas wajar/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  const bandFlags = db4.prepare("SELECT COUNT(*) AS n FROM market_flags WHERE kind = 'price_band'").get();
+  check('Penolakan harga dicatat di market_flags', Number(bandFlags.n) >= 1, `n=${bandFlags.n}`);
+  r = await C.post('/api/market/sell', { scope: 'local', commodity_id: besiId, tier: 1, qty: 10, price: 10 });
+  check('Jual @10 (dalam batas) berhasil', r.status === 200 && !!r.data.offerId, `status=${r.status} ${r.data.error || ''}`);
+  r = await C.post('/api/market/buy-order', { scope: 'local', commodity_id: besiId, tier: 1, qty: 10, price: 100 });
+  check('Order beli @100 ditolak (batas wajar)', r.status === 400);
+
+  console.log('  [22c] Order beli + escrow + pajak ke kas negara');
+  const usdC0 = (await C.get('/api/me')).data.citizen.usd;
+  check('C mulai dengan 500 USD', usdC0 === 500, `usd=${usdC0}`);
+  r = await C.post('/api/market/buy-order', { scope: 'local', commodity_id: besiId, tier: 1, qty: 10, price: 9 });
+  check('Order beli 10× Besi @9 dipasang', r.status === 200 && !!r.data.orderId, `status=${r.status} ${r.data.error || ''}`);
+  const buyOrderId = r.data.orderId;
+  check('Escrow: 90 USD dikunci (500 → 410)', (await C.get('/api/me')).data.citizen.usd === 410);
+  r = await C.get('/api/market?scope=local');
+  const listedOrder = (r.data.buyOrders || []).find((o) => o.id === buyOrderId);
+  check('Order beli tampil di order book', !!listedOrder && listedOrder.buyer === 'tahap4_c' && listedOrder.qty - listedOrder.qty_filled === 10);
+  const treasury0 = (await C.get('/api/country')).data.country.treasury_usd;
+  setInv(dId, besiId, 20);
+  const usdD0 = (await D.get('/api/me')).data.citizen.usd;
+  r = await D.post('/api/market/sell-to-order', { order_id: buyOrderId, qty: 6 });
+  check('Jual 6 unit ke order beli berhasil', r.status === 200 && r.data.sellerReceives === 52.92, `status=${r.status} ${JSON.stringify(r.data)}`);
+  check('Penjual terima 52,92 USD (54 − pajak 2%)', eq((await D.get('/api/me')).data.citizen.usd, usdD0 + 52.92));
+  check('Pembeli terima 6× Besi (10 → 16)', invQty(cId, besiId) === 16, `besi=${invQty(cId, besiId)}`);
+  r = await C.get('/api/market?scope=local');
+  const myOrder = (r.data.myBuyOrders || []).find((o) => o.id === buyOrderId);
+  check('Order terisi 6/10', !!myOrder && myOrder.qty_filled === 6, JSON.stringify(myOrder));
+  const treasury1 = (await C.get('/api/country')).data.country.treasury_usd;
+  check('Pajak 1,08 USD masuk kas negara', eq(treasury1 - treasury0, 1.08), `delta=${treasury1 - treasury0}`);
+  const ledger = (await C.get('/api/country')).data.treasuryTx || [];
+  check('Buku kas mencatat pajak 1,08 USD', ledger.some((t) => t.currency === 'usd' && eq(t.amount, 1.08)));
+  r = await D.post('/api/market/sell-to-order', { order_id: buyOrderId, qty: 5 });
+  check('Jual melebihi sisa order (4) ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await C.post('/api/market/sell-to-order', { order_id: buyOrderId, qty: 1 });
+  check('Jual ke order beli sendiri ditolak (400)', r.status === 400);
+  r = await C.post('/api/market/buy-order/cancel', { order_id: buyOrderId });
+  check('Batal order: sisa escrow 36 USD kembali (410 → 446)', r.status === 200 && eq(r.data.refund, 36) && (await C.get('/api/me')).data.citizen.usd === 446, `status=${r.status} ${JSON.stringify(r.data)}`);
+
+  console.log('  [22d] Pajak pasar biasa masuk kas negara (BUG-8)');
+  const treasury2 = (await A.get('/api/country')).data.country.treasury_usd;
+  const usdA0 = (await A.get('/api/me')).data.citizen.usd;
+  const usdB0 = (await B.get('/api/me')).data.citizen.usd;
+  setInv(2, makananId, 10);
+  r = await B.post('/api/market/sell', { scope: 'local', commodity_id: makananId, tier: 1, qty: 10, price: 9 });
+  check('B pasang jual 10× Makanan @9', r.status === 200 && !!r.data.offerId, `status=${r.status}`);
+  r = await A.post('/api/market/buy', { offer_id: r.data.offerId, qty: 10 });
+  check('A membeli 10× Makanan', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  check('A bayar 90 USD', eq((await A.get('/api/me')).data.citizen.usd, usdA0 - 90));
+  check('B terima 88,20 USD (90 − pajak 2%)', eq((await B.get('/api/me')).data.citizen.usd, usdB0 + 88.2));
+  const treasury3 = (await A.get('/api/country')).data.country.treasury_usd;
+  check('Pajak 1,80 USD masuk kas negara', eq(treasury3 - treasury2, 1.8), `delta=${treasury3 - treasury2}`);
+
+  console.log('  [22e] Deteksi wash trading');
+  setInv(fId, besiId, 40);
+  for (let i = 0; i < 3; i++) {
+    const sell = await F.post('/api/market/sell', { scope: 'local', commodity_id: besiId, tier: 1, qty: 10, price: 10 });
+    check(`Wash ${i + 1}/3: F pasang jual`, sell.status === 200, `status=${sell.status}`);
+    const buy = await E.post('/api/market/buy', { offer_id: sell.data.offerId, qty: 10 });
+    check(`Wash ${i + 1}/3: E membeli`, buy.status === 200, `status=${buy.status}`);
+    const flags = db4.prepare("SELECT COUNT(*) AS n FROM market_flags WHERE kind = 'wash_trade' AND buyer_id = ? AND seller_id = ?").get(eId, fId);
+    if (i < 2) check(`Wash: belum ditandai setelah ${i + 1} transaksi`, Number(flags.n) === 0, `n=${flags.n}`);
+    else check('Wash: ditandai setelah 3 transaksi bolak-balik', Number(flags.n) >= 1, `n=${flags.n}`);
+  }
+
+  console.log('  [22f] Rantai produksi Pabrik (Besi Mentah → Bahan Bangunan)');
+  db4.prepare('UPDATE citizens SET gold = 200 WHERE id = ?').run(cId);
+  r = await C.post('/api/companies', { type: 'factory', name: 'Pabrik Tes' });
+  check('Pabrik didirikan (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
+  const bahanId = market0.data.commodities.find((x) => x.name === 'Bahan Bangunan').id;
+  setInv(cId, besiId, 25);
+  await forceTick(C);
+  check('Tick 1: 20 Besi → 10 Bahan Bangunan (Besi 25 → 5)', invQty(cId, bahanId) === 10 && invQty(cId, besiId) === 5, `bahan=${invQty(cId, bahanId)} besi=${invQty(cId, besiId)}`);
+  await forceTick(C);
+  check('Tick 2: 4 Besi → 2 Bahan Bangunan (Besi 5 → 1, total 12)', invQty(cId, bahanId) === 12 && invQty(cId, besiId) === 1, `bahan=${invQty(cId, bahanId)} besi=${invQty(cId, besiId)}`);
+  await forceTick(C);
+  check('Tick 3: Besi 1 → produksi 0 (tetap 12)', invQty(cId, bahanId) === 12 && invQty(cId, besiId) === 1);
+  r = await C.get('/api/notifications');
+  check('Pabrik kekurangan bahan: notifikasi dikirim', (r.data.notifications || []).some((n) => n.title === 'Pabrik kekurangan bahan'));
+
+  console.log('  [22g] Retensi data');
+  const old = Date.now() - 200 * 86400000;
+  db4.prepare("INSERT INTO chat_messages (room, citizen_id, content, created_at) VALUES ('global',?,?,?)").run(aId, 'Pesan lama 100 hari', Date.now() - 100 * 86400000);
+  db4.prepare("INSERT INTO chat_messages (room, citizen_id, content, created_at) VALUES ('global',?,?,?)").run(aId, 'Pesan baru 1 hari', Date.now() - 86400000);
+  db4.prepare('INSERT INTO notifications (citizen_id, category, title, content, is_read, created_at) VALUES (?,?,?,?,?,?)').run(aId, 'SISTEM', 'Notif lama dibaca', '', 1, Date.now() - 40 * 86400000);
+  db4.prepare('INSERT INTO notifications (citizen_id, category, title, content, is_read, created_at) VALUES (?,?,?,?,?,?)').run(aId, 'SISTEM', 'Notif lama belum dibaca', '', 0, Date.now() - 40 * 86400000);
+  db4.prepare('INSERT INTO notifications (citizen_id, category, title, content, is_read, created_at) VALUES (?,?,?,?,?,?)').run(aId, 'SISTEM', 'Notif baru dibaca', '', 1, Date.now() - 86400000);
+  db4.prepare('INSERT INTO market_tx (buyer_id, seller_id, scope, commodity_id, tier, qty, price_each, total, created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(aId, 2, 'local', besiId, 1, 5, 10, 50, old);
+  db4.prepare('INSERT INTO market_tx (buyer_id, seller_id, scope, commodity_id, tier, qty, price_each, total, created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(aId, 2, 'local', besiId, 1, 5, 10, 50, Date.now() - 86400000);
+  db4.prepare('INSERT INTO fx_history (price, volume, created_at) VALUES (?,?,?)').run(10, 5, old);
+  db4.prepare('INSERT INTO war_attacks (war_id, citizen_id, side, damage, ammo, created_at) VALUES (?,?,?,?,?,?)').run(warId, aId, 'defender', 10, 'Senjata', old);
+  await forceTick(A);
+  const cnt = (table, cond) => Number(db4.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${cond}`).get().n);
+  check('Retensi: chat >90 hari dihapus, yang baru tetap', cnt('chat_messages', "content = 'Pesan lama 100 hari'") === 0 && cnt('chat_messages', "content = 'Pesan baru 1 hari'") === 1);
+  check('Retensi: notifikasi terbaca >30 hari dihapus', cnt('notifications', "title = 'Notif lama dibaca'") === 0 && cnt('notifications', "title = 'Notif baru dibaca'") === 1);
+  check('Retensi: notifikasi BELUM dibaca dipertahankan', cnt('notifications', "title = 'Notif lama belum dibaca'") === 1);
+  check('Retensi: market_tx + fx_history + war_attacks >180 hari dihapus', cnt('market_tx', `created_at = ${old}`) === 0 && cnt('fx_history', `created_at = ${old}`) === 0 && cnt('war_attacks', `created_at = ${old}`) === 0);
+  db4.close();
+
+  console.log('  [22h] Regen energi + batas per level');
+  const dbE = new DatabaseSync(DB_PATH);
+  const setEnergy = (energy, updatedAt) => dbE.prepare('UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ?').run(energy, updatedAt, dId);
+  setEnergy(50, Date.now() - 10 * 60000);
+  r = await D.get('/api/me');
+  check('Regen: 50 + 10 menit × 2 = 70', r.data.citizen.energy === 70, `energi=${r.data.citizen.energy}`);
+  setEnergy(99, Date.now() - 10 * 60000);
+  r = await D.get('/api/me');
+  check('Regen berhenti di cap 100 (bukan 119)', r.data.citizen.energy === 100, `energi=${r.data.citizen.energy}`);
+  setEnergy(0, Date.now() - 5 * 3600000);
+  r = await D.get('/api/me');
+  check('Regen offline 5 jam: tetap cap 100 (bukan 600)', r.data.citizen.energy === 100, `energi=${r.data.citizen.energy}`);
+  setEnergy(50, Date.now() + 60000);
+  r = await D.get('/api/me');
+  check('Regen: jam di masa depan tidak menambah energi', r.data.citizen.energy === 50, `energi=${r.data.citizen.energy}`);
+  dbE.prepare('UPDATE citizens SET level = 3 WHERE id = ?').run(dId);
+  r = await D.get('/api/me');
+  check('Cap level 3 = 110 (100 + 5×2)', r.data.citizen.energyCap === 110, `cap=${r.data.citizen.energyCap}`);
+  dbE.prepare('UPDATE users SET premium_until = ? WHERE id = ?').run(Date.now() + 86400000, meD.user.id);
+  r = await D.get('/api/me');
+  check('Cap level 3 + Premium = 130 (+20)', r.data.citizen.energyCap === 130, `cap=${r.data.citizen.energyCap}`);
+  dbE.prepare('INSERT INTO convoys (citizen_id, slot, building, region_id, expires_at, created_at) VALUES (?,?,?,?,?,?)')
+    .run(dId, 1, 'health', 1, Date.now() + 7 * 86400000, Date.now());
+  r = await D.get('/api/me');
+  check('Cap level 3 + Premium + RS Lapangan = 140 (+10)', r.data.citizen.energyCap === 140, `cap=${r.data.citizen.energyCap}`);
+  dbE.prepare("DELETE FROM convoys WHERE citizen_id = ? AND building = 'health'").run(dId);
+  dbE.prepare('UPDATE citizens SET level = 1 WHERE id = ?').run(dId);
+  dbE.prepare('UPDATE users SET premium_until = 0 WHERE id = ?').run(meD.user.id);
+  r = await D.get('/api/me');
+  check('Cap kembali 100 setelah bonus dicabut', r.data.citizen.energyCap === 100, `cap=${r.data.citizen.energyCap}`);
+  dbE.close();
+
+  console.log('  [22i] Pengumuman update (Apa yang Baru)');
+  r = await C.get('/api/announcements');
+  const seeded = (r.data.announcements || []).find((a) => a.num === 1);
+  check('Pengumuman Update #1 ter-seed (Tahap 4)', r.status === 200 && !!seeded && /Pasar Lebih Dalam/.test(seeded.title), `n=${r.data.announcements?.length}`);
+  check('Update #1 berisi regen + cap level + perisai + suara', !!seeded && /\+2/.test(seeded.body) && /perisai/i.test(seeded.body) && /ketukan/i.test(seeded.body));
+  const unread0 = r.data.unreadCount;
+  check('Pengumuman belum dibaca terhitung', unread0 >= 1, `unread=${unread0}`);
+  r = await C.post('/api/announcements/read', { id: seeded.id });
+  check('Tandai dibaca berhasil', r.status === 200);
+  r = await C.get('/api/announcements');
+  check('Unread berkurang 1 setelah dibaca', r.data.unreadCount === unread0 - 1, `unread=${r.data.unreadCount}`);
+  r = await C.post('/api/announcements/read', { id: 999999 });
+  check('Tandai dibaca id tidak ada → 404', r.status === 404);
+  r = await C.post('/api/announcements/read', {});
+  check('Tandai dibaca tanpa id → 400', r.status === 400);
+  r = await C.post('/api/admin/announcements', { title: 'X', body: 'Y' });
+  check('Pemain biasa tidak bisa membuat pengumuman (403)', r.status === 403);
+  r = await ADM.post('/api/admin/announcements', { title: 'Update Tes E2E', body: 'Isi tes.' });
+  check('Admin membuat pengumuman', r.status === 200 && !!r.data.id, `status=${r.status} ${r.data.error || ''}`);
+  const annTestId = r.data.id;
+  r = await C.get('/api/announcements');
+  const newest = (r.data.announcements || [])[0];
+  check('Pengumuman baru = Update #2 (terbaru dulu)', !!newest && newest.num === 2 && newest.title === 'Update Tes E2E', JSON.stringify(newest));
+  check('Unread naik lagi (pengumuman baru belum dibaca)', r.data.unreadCount === 1, `unread=${r.data.unreadCount}`);
+  r = await ADM.post('/api/admin/announcements', { title: '', body: 'X' });
+  check('Pengumuman tanpa judul ditolak (400)', r.status === 400);
+  r = await ADM.post(`/api/admin/announcements/${annTestId}/delete`);
+  check('Admin menghapus pengumuman', r.status === 200);
+  r = await ADM.post(`/api/admin/announcements/${annTestId}/delete`);
+  check('Hapus pengumuman yang sama lagi → 404', r.status === 404);
+  r = await ADM.get('/api/admin/market-flags');
+  check('Admin melihat tanda pasar (price_band + wash_trade)', r.status === 200 && (r.data.flags || []).some((f) => f.kind === 'price_band') && (r.data.flags || []).some((f) => f.kind === 'wash_trade'), `flags=${(r.data.flags || []).length}`);
+  r = await C.get('/api/admin/market-flags');
+  check('Pemain biasa tidak bisa melihat tanda pasar (403)', r.status === 403);
+
+  console.log('  [22j] Hadiah barang tanpa batas jumlah');
+  const besiC0 = (await C.get('/api/inventory')).data.items.find((x) => x.name === 'Besi Mentah')?.qty || 0;
+  r = await ADM.post('/api/admin/item', { user_id: cUserId, commodity: 'Besi Mentah', tier: 1, qty: 50000 });
+  check('Grant 50.000× Besi Mentah lolos (tanpa batas)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const besiC1 = (await C.get('/api/inventory')).data.items.find((x) => x.name === 'Besi Mentah')?.qty || 0;
+  check('Inventaris C bertambah 50.000 Besi', besiC1 === besiC0 + 50000, `${besiC0} → ${besiC1}`);
+  r = await ADM.post('/api/admin/item', { user_id: cUserId, commodity: 'Besi Mentah', tier: 1, qty: 0 });
+  check('Grant barang 0 tetap ditolak (400)', r.status === 400);
+  r = await ADM.post('/api/admin/item', { user_id: cUserId, commodity: 'Besi Mentah', tier: 1, qty: -5 });
+  check('Grant barang negatif tetap ditolak (400)', r.status === 400);
+  r = await ADM.post('/api/admin/item', { user_id: cUserId, commodity: 'Besi Mentah', tier: 1, qty: 10.5 });
+  check('Grant barang pecahan tetap ditolak (400)', r.status === 400);
+  r = await ADM.post('/api/admin/gift-all', { kind: 'item', commodity: 'Kayu', tier: 1, amount: 50000 });
+  check('Gift-all 50.000× Kayu lolos (tanpa batas)', r.status === 200 && r.data.recipients >= 1, `status=${r.status} ${r.data.error || ''}`);
+  const kayuC = (await C.get('/api/inventory')).data.items.find((x) => x.name === 'Kayu')?.qty || 0;
+  check('C menerima 50.000× Kayu dari gift-all', kayuC === 50000, `kayu=${kayuC}`);
+  r = await ADM.post('/api/admin/gift-all', { kind: 'item', commodity: 'Kayu', tier: 1, amount: 0 });
+  check('Gift-all barang 0 tetap ditolak (400)', r.status === 400);
+  r = await ADM.post('/api/admin/gold', { user_id: cUserId, amount: 1000001 });
+  check('Batas emas 1.000.000 TIDAK berubah (400)', r.status === 400);
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);
