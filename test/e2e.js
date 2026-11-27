@@ -1262,6 +1262,38 @@ async function main() {
   const tChat = performance.now() - tChat0;
   check('Latensi /api/chat/global < 500ms (lokal hangat)', tChat < 500, `${tChat.toFixed(0)}ms`);
   db5.close();
+
+  console.log('\n[24] Bug tulis artikel (CSP memblokir onclick inline)');
+  r = await A.get('/api/press/newspapers/mine');
+  check('A belum punya koran (daftar kosong)', r.status === 200 && (r.data.newspapers || []).length === 0, JSON.stringify(r.data));
+  r = await A.post('/api/press/articles', { newspaper_id: 999, title: 'Judul Artikel Tes', content: 'Isi artikel tes yang cukup panjang.' });
+  check('Tulis artikel tanpa koran sendiri ditolak (403)', r.status === 403, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/press/newspaper', { name: 'KB' });
+  check('Nama koran <3 karakter ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await A.post('/api/press/newspaper', { name: 'Kabar Warga Tes' });
+  check('A mendirikan koran (5 emas)', r.status === 200 && !!r.data.newspaperId, `status=${r.status} ${r.data.error || ''}`);
+  const paperId = r.data.newspaperId;
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Abcd', content: 'Isi artikel tes yang cukup panjang.' });
+  check('Judul 4 karakter ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Judul Artikel Tes', content: 'Terlalu pendek.' });
+  check('Isi <20 karakter ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Judul Artikel Tes', content: 'Ini adalah isi artikel tes yang panjangnya lebih dari dua puluh karakter.' });
+  check('Artikel valid terbit + mengembalikan articleId', r.status === 200 && !!r.data.articleId, `status=${r.status} ${r.data.error || ''}`);
+  const articleId = r.data.articleId;
+  r = await B.post('/api/press/articles', { newspaper_id: paperId, title: 'Judul Artikel Tes', content: 'Ini adalah isi artikel tes yang panjangnya lebih dari dua puluh karakter.' });
+  check('B tidak bisa menulis di koran A (403)', r.status === 403, `status=${r.status}`);
+  r = await A.get('/api/press/articles?sort=new');
+  check('Artikel muncul di daftar Pers', (r.data.articles || []).some((a) => a.id === articleId), `n=${(r.data.articles || []).length}`);
+  r = await A.get(`/api/press/articles/${articleId}`);
+  check('Artikel bisa dibuka: judul + isi cocok', r.status === 200 && r.data.article.title === 'Judul Artikel Tes' && r.data.article.content.startsWith('Ini adalah isi artikel'), `status=${r.status}`);
+  check('Artikel dihitung 1x dibaca', r.data.article.views === 1, `views=${r.data.article.views}`);
+  r = await B.post(`/api/press/articles/${articleId}/react`, { reaction: 'like' });
+  check('B menyukai artikel', r.status === 200 && r.data.reaction === 'like', `status=${r.status}`);
+  r = await B.post(`/api/press/articles/${articleId}/comment`, { content: 'Artikel yang bagus sekali!' });
+  check('B mengomentari artikel', r.status === 200 && !!r.data.commentId, `status=${r.status}`);
+  r = await A.get(`/api/press/articles/${articleId}`);
+  check('Suka + komentar tampil di detail artikel', r.data.article.likes === 1 && r.data.comments.length === 1, `likes=${r.data.article.likes} komentar=${r.data.comments.length}`);
+
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);
   process.exit(failed ? 1 : 0);

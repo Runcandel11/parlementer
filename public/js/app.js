@@ -120,6 +120,16 @@ function playTap() {
     osc.stop(t0 + 0.08);
   } catch { /* suara gagal: jangan ganggu permainan */ }
 }
+// Navigasi tanpa inline onclick: CSP Tahap 2 (script-src 'self') memblokir
+// SEMUA handler inline, sehingga 50 tombol navigasi (TULIS ARTIKEL, Buka
+// Parlemen, kartu artikel, dsb.) mati di browser sungguhan — klik tidak
+// berbuat apa-apa. Semua navigasi memakai data-goto="#/..." dan didelegasikan
+// di sini (berlaku juga untuk konten yang dirender belakangan).
+document.addEventListener('click', (e) => {
+  const go = e.target?.closest?.('[data-goto]');
+  if (go) { location.hash = go.dataset.goto; return; }
+  if (e.target?.closest?.('[data-reload]')) location.reload();
+});
 // Tiap ketukan pada elemen interaktif membunyikan tap.
 document.addEventListener('pointerdown', (e) => {
   if (e.target?.closest?.('button, a, input, select, textarea, [role="button"], .nav-item')) playTap();
@@ -351,7 +361,7 @@ function route() {
     if (h) h.focus({ preventScroll: true });
   }).catch((e) => {
     $('#page').innerHTML = `<div class="panel"><h3>Terjadi kesalahan</h3><p class="muted">${esc(e.message)}</p>
-      <button class="btn-gold" onclick="location.reload()">Muat Ulang</button></div>`;
+      <button class="btn-gold" data-reload="1">Muat Ulang</button></div>`;
   });
 }
 // ---------- HALAMAN BANNED + BANDING ----------
@@ -449,10 +459,10 @@ ROUTES.dashboard = async () => {
   $('#page').innerHTML = page('DASHBOARD', `Hari ${ME.world.day} · Populasi dunia: ${fmt(ME.population)} warga`, `
   ${ME.activeWars.length ? `<div class="panel"><h3>⚔️ SEDANG TERJADI</h3>
     ${ME.activeWars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}
-    <button class="btn-gold btn-sm" onclick="location.hash='#/war'">Lihat Perang</button></div>` : ''}
+    <button class="btn-gold btn-sm" data-goto="#/war">Lihat Perang</button></div>` : ''}
   ${ME.votingLaws.length ? `<div class="panel"><h3>🏛 UU SEDANG DIVOTING</h3>
     ${ME.votingLaws.map((l) => `<div class="kv"><span class="k">${esc(l.title)}</span><span class="v">${l.yes} Ya / ${l.abstain} / ${l.no} Tidak</span></div>`).join('')}
-    <button class="btn-gold btn-sm" onclick="location.hash='#/parliament'">Buka Parlemen</button></div>` : ''}
+    <button class="btn-gold btn-sm" data-goto="#/parliament">Buka Parlemen</button></div>` : ''}
   <div class="panel">
     <div class="panel-head"><h3>👤 ${esc(c.username)}</h3><span class="chip">${c.isPremium ? '◆ PREMIUM' : 'WARGA'}</span></div>
     <div class="kv"><span class="k">Negara</span><span class="v">🇮🇩 Republik Indonesia</span></div>
@@ -466,7 +476,7 @@ ROUTES.dashboard = async () => {
     <p class="muted small">${c.energy >= (c.energyCap || 100) ? 'Penuh — gunakan untuk bekerja' : 'Makan roti untuk mengisi energi.'} ⚡ Pulih otomatis +2/menit sampai batas ${c.energyCap || 100} (naik 5 tiap level).</p>
     <div class="row" style="margin-top:12px">
       <button class="btn-gold" id="btn-claim" ${canClaim ? '' : 'disabled'}>${canClaim ? '🎁 AMBIL PASOKAN HARIAN' : '✓ Pasokan hari ini diambil'}</button>
-      <button class="btn-ghost" onclick="location.hash='#/inventory'">🍞 Makan Roti</button>
+      <button class="btn-ghost" data-goto="#/inventory">🍞 Makan Roti</button>
     </div>
   </div>
   <div class="panel">
@@ -486,7 +496,7 @@ ROUTES.dashboard = async () => {
     <div class="panel-head"><h3>📖 KRONIKMU — Babak I "${esc(ch1.title)}"</h3><span class="chip">${ch1.done}/${ch1.total}</span></div>
     ${ch1.tasks.map((t) => `<div class="kv"><span class="k">${t.done ? '✓' : '○'} ${esc(t.label)}</span></div>`).join('')}
     <div class="row" style="margin-top:10px">
-      <button class="btn-ghost" onclick="location.hash='#/chronicle'">Lihat Semua Babak</button>
+      <button class="btn-ghost" data-goto="#/chronicle">Lihat Semua Babak</button>
       ${ch1.done === ch1.total && !ch1.claimed ? `<button class="btn-gold" data-chronicle="1">KLAIM +${ch1.reward} EMAS</button>` : ''}
     </div>
   </div>`);
@@ -688,7 +698,7 @@ ROUTES.profile = async (username) => {
   </div>
   ${pr.companies.length ? `<div class="panel"><h3>🏭 PERUSAHAAN</h3>${pr.companies.map((c) => `<div class="kv"><span class="k">${esc(c.name)}</span><span class="v">${esc(c.type)}</span></div>`).join('')}</div>` : ''}
   ${pr.articles.length ? `<div class="panel"><h3>📰 ARTIKEL TERBARU</h3>${pr.articles.map((a) => `<div class="kv"><span class="k">${esc(a.title)}</span><span class="v small muted">${fmtDate(a.created_at)}</span></div>`).join('')}</div>` : ''}
-  ${pr.username === ME.citizen.username ? `<button class="btn-ghost" onclick="location.hash='#/settings'">✏️ Edit Profil</button>` : ''}`);
+  ${pr.username === ME.citizen.username ? `<button class="btn-ghost" data-goto="#/settings">✏️ Edit Profil</button>` : ''}`);
   const copyBtn = $('#btn-copy-ref');
   if (copyBtn && pr.referral) {
     copyBtn.onclick = async () => {
@@ -804,11 +814,11 @@ ROUTES.admin = async (q) => {
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Hanya akun admin yang bisa melihat halaman ini.', `
   <div class="tabs">
     <button class="tab active">👥 Pemain</button>
-    <button class="tab" onclick="location.hash='#/admin/appeals'">📬 Banding${pendingAppeals ? ` <span class="chip">${pendingAppeals} menunggu</span>` : ''}</button>
-    <button class="tab" onclick="location.hash='#/admin/gift-all'">🎁 Hadiah Massal</button>
-    <button class="tab" onclick="location.hash='#/admin/inbox'">📥 Laporan &amp; Saran</button>
-    <button class="tab" onclick="location.hash='#/admin/announcements'">📣 Pengumuman</button>
-    <button class="tab" onclick="location.hash='#/admin/flags'">🚩 Tanda Pasar</button>
+    <button class="tab" data-goto="#/admin/appeals">📬 Banding${pendingAppeals ? ` <span class="chip">${pendingAppeals} menunggu</span>` : ''}</button>
+    <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
+    <button class="tab" data-goto="#/admin/inbox">📥 Laporan &amp; Saran</button>
+    <button class="tab" data-goto="#/admin/announcements">📣 Pengumuman</button>
+    <button class="tab" data-goto="#/admin/flags">🚩 Tanda Pasar</button>
   </div>
   <div class="panel"><h3>🔍 CARI PEMAIN</h3>
     <p class="muted small">Jalan darurat admin (kode bootstrap): <b>${status?.bootstrapActive ? 'AKTIF — registrasi dengan kode yang benar bisa membuat admin' : 'TIDAK AKTIF — tidak ada jalan membuat admin lewat registrasi (aman)'}</b></p>
@@ -903,9 +913,9 @@ async function renderAdminAnnouncements() {
   const data = await api('/api/admin/announcements');
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Pengumuman update untuk semua pemain.', `
   <div class="tabs">
-    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
+    <button class="tab" data-goto="#/admin">👥 Pemain</button>
     <button class="tab active">📣 Pengumuman</button>
-    <button class="tab" onclick="location.hash='#/admin/flags'">🚩 Tanda Pasar</button>
+    <button class="tab" data-goto="#/admin/flags">🚩 Tanda Pasar</button>
   </div>
   <div class="panel"><h3>📣 BUAT PENGUMUMAN BARU</h3>
     <p class="muted small">Pengumuman tampil di Notifikasi pemain, sebagai modal saat login (bila belum dibaca), dan di arsip Buku Panduan → Riwayat Update. Nomor update terisi otomatis sesuai urutan terbit.</p>
@@ -935,8 +945,8 @@ async function renderAdminFlags() {
   const data = await api('/api/admin/market-flags');
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Tanda pasar: heuristik harga di luar batas wajar + pola perdagangan bolak-balik. Hanya log untuk ditinjau — bukan bukti pelanggaran otomatis.', `
   <div class="tabs">
-    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
-    <button class="tab" onclick="location.hash='#/admin/announcements'">📣 Pengumuman</button>
+    <button class="tab" data-goto="#/admin">👥 Pemain</button>
+    <button class="tab" data-goto="#/admin/announcements">📣 Pengumuman</button>
     <button class="tab active">🚩 Tanda Pasar</button>
   </div>
   <div class="panel"><h3>🚩 TANDA PASAR</h3>
@@ -950,13 +960,13 @@ async function renderAdminAppeals() {
   const pending = data.appeals.filter((a) => a.status === 'menunggu').length;
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Banding dari pemain yang di-ban.', `
   <div class="tabs">
-    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
+    <button class="tab" data-goto="#/admin">👥 Pemain</button>
     <button class="tab active">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
-    <button class="tab" onclick="location.hash='#/admin/gift-all'">🎁 Hadiah Massal</button>
-    <button class="tab" onclick="location.hash='#/admin/inbox'">📥 Laporan &amp; Saran</button>
+    <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
+    <button class="tab" data-goto="#/admin/inbox">📥 Laporan &amp; Saran</button>
   </div>
   ${data.appeals.length ? data.appeals.map((a) => `
-  <div class="panel" style="cursor:pointer" onclick="location.hash='#/admin/appeal-${a.id}'">
+  <div class="panel" style="cursor:pointer" data-goto="#/admin/appeal-${a.id}">
     <div class="panel-head"><h3>👤 ${esc(a.username)} · ${esc(a.publicId)}</h3>
       <span class="chip">${a.status === 'menunggu' ? '⏳ MENUNGGU' : a.status === 'diterima' ? '✅ DITERIMA' : '❌ DITOLAK'}</span></div>
     <div class="kv"><span class="k">Alasan ban</span><span class="v">${esc(a.ban_reason || '—')}</span></div>
@@ -970,7 +980,7 @@ async function renderAdminAppealDetail(id) {
   const d = await api('/api/appeals/' + id);
   const a = d.appeal;
   $('#page').innerHTML = page('📬 BANDING #' + a.id, `${esc(a.user.username)} · ${esc(a.user.publicId)} · Alasan ban: ${esc(a.ban_reason || '—')}`, `
-  <button class="btn-ghost btn-sm" onclick="location.hash='#/admin/appeals'">← Semua Banding</button>
+  <button class="btn-ghost btn-sm" data-goto="#/admin/appeals">← Semua Banding</button>
   <div class="panel"><h3>ISI BANDING</h3><p>${esc(a.text)}</p>
     <p class="muted small">Diajukan ${fmtDate(a.created_at)} · Status: <b>${a.status === 'menunggu' ? 'MENUNGGU' : a.status === 'diterima' ? 'DITERIMA' : 'DITOLAK'}</b>${a.decided_at ? ' · diputuskan ' + fmtDate(a.decided_at) : ''}</p></div>
   <div class="panel"><h3>💬 PERCAKAPAN</h3>
@@ -1015,10 +1025,10 @@ async function renderAdminGiftAll() {
   const recipients = list.players.filter((p) => !p.is_banned);
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Hadiah untuk semua pemain sekaligus.', `
   <div class="tabs">
-    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
-    <button class="tab" onclick="location.hash='#/admin/appeals'">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
+    <button class="tab" data-goto="#/admin">👥 Pemain</button>
+    <button class="tab" data-goto="#/admin/appeals">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
     <button class="tab active">🎁 Hadiah Massal</button>
-    <button class="tab" onclick="location.hash='#/admin/inbox'">📥 Laporan &amp; Saran</button>
+    <button class="tab" data-goto="#/admin/inbox">📥 Laporan &amp; Saran</button>
   </div>
   <div class="panel"><h3>🎁 HADIAH UNTUK SEMUA PEMAIN</h3>
     <p class="muted small">Hadiah dikirim ke <b>${recipients.length} pemain</b> yang tidak di-ban (dari ${list.players.length} pemain total). Akun yang di-ban tidak menerima apa-apa. Semua penerima mendapat notifikasi "Hadiah dari admin".</p>
@@ -1069,14 +1079,14 @@ async function renderAdminInbox(statusFilter) {
   const statusChip = (s) => s === 'baru' ? '🆕 BARU' : s === 'dibaca' ? '👁 DIBACA' : '✅ SELESAI';
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Saran & laporan bug dari pemain, plus laporan chat.', `
   <div class="tabs">
-    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
-    <button class="tab" onclick="location.hash='#/admin/appeals'">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
-    <button class="tab" onclick="location.hash='#/admin/gift-all'">🎁 Hadiah Massal</button>
+    <button class="tab" data-goto="#/admin">👥 Pemain</button>
+    <button class="tab" data-goto="#/admin/appeals">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
+    <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
     <button class="tab active">📥 Laporan &amp; Saran</button>
   </div>
   <div class="panel"><h3>🎧 TIKET MEJA BANTUAN</h3>
     <div class="tabs">
-      ${['', 'baru', 'dibaca', 'selesai'].map((s) => `<button class="tab ${statusFilter === s || (!statusFilter && s === '') ? 'active' : ''}" onclick="location.hash='#/admin/inbox${s ? '?status=' + s : ''}'">${s === '' ? 'SEMUA' : s.toUpperCase()}</button>`).join('')}
+      ${['', 'baru', 'dibaca', 'selesai'].map((s) => `<button class="tab ${statusFilter === s || (!statusFilter && s === '') ? 'active' : ''}" data-goto="#/admin/inbox${s ? '?status=' + s : ''}">${s === '' ? 'SEMUA' : s.toUpperCase()}</button>`).join('')}
     </div>
     ${tickets.tickets.length ? tickets.tickets.map((t) => `
     <div class="panel" data-ticket="${t.id}">
@@ -1159,8 +1169,8 @@ function marketPage(scope) {
       <div class="stat-cell"><div class="stat-label">🏆 Paling Laris</div><div class="stat-num gold" style="font-size:24px">${data.recentTx[0] ? esc(data.recentTx[0].commodity_name) : '—'}</div><div class="stat-sub">transaksi terakhir</div></div>
     </div>
     <div class="tabs">
-      <button class="tab ${scope === 'local' ? 'active' : ''}" onclick="location.hash='#/market'">Pasar Lokal</button>
-      <button class="tab ${scope === 'global' ? 'active' : ''}" onclick="location.hash='#/global'">Pasar Global</button>
+      <button class="tab ${scope === 'local' ? 'active' : ''}" data-goto="#/market">Pasar Lokal</button>
+      <button class="tab ${scope === 'global' ? 'active' : ''}" data-goto="#/global">Pasar Global</button>
     </div>
     <div class="panel">
       <div class="panel-head"><h3>📊 PAPAN PASAR — SEMUA KOMODITAS</h3></div>
@@ -1493,20 +1503,21 @@ ROUTES.map = async () => {
   const data = await api('/api/regions');
   $('#page').innerHTML = page('PETA DUNIA', 'Republik Indonesia — 17 wilayah. Klik wilayah untuk detail dan bepergian.', `
   <div class="panel"><h3>🔍 CARI WILAYAH</h3>
-    <input id="region-search" placeholder="Cari wilayah..." oninput="window.__filterRegions(this.value)">
+    <input id="region-search" placeholder="Cari wilayah...">
   </div>
   <div id="region-list">
   ${data.regions.map((r) => `
     <div class="card region-card" data-name="${esc(r.name.toLowerCase())}">
       <div class="panel-head"><h4>${esc(r.name)}</h4><span class="chip">${esc(r.type)} · Skor ${r.city_score}/10</span></div>
       <p class="muted small">${r.population} warga · ${r.companies} perusahaan · Pemberontakan ${r.rebellion}/5${r.resource_bonus ? ' · Bonus: ' + esc(r.resource_bonus) : ''}</p>
-      <div class="row"><button class="btn-gold btn-sm" onclick="location.hash='#/regions/${r.id}'">Lihat Wilayah</button>
+      <div class="row"><button class="btn-gold btn-sm" data-goto="#/regions/${r.id}">Lihat Wilayah</button>
       ${r.id === data.mine ? '<span class="chip teal">📍 KAMU DI SINI</span>' : `<button class="btn-ghost btn-sm" data-travel="${r.id}">Bepergian (1 🎫)</button>`}</div>
     </div>`).join('')}
   </div>`);
-  window.__filterRegions = (q) => {
-    $$('.region-card').forEach((el) => { el.style.display = el.dataset.name.includes(q.toLowerCase()) ? '' : 'none'; });
-  };
+  $('#region-search').addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase();
+    $('.region-card').forEach((el) => { el.style.display = el.dataset.name.includes(q) ? '' : 'none'; });
+  });
   $$('[data-travel]').forEach((b) => b.onclick = async () => {
     try { const r = await post('/api/regions/travel', { region_id: Number(b.dataset.travel) }); toast(`Kamu sekarang di ${r.region}.`); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
@@ -1544,7 +1555,7 @@ ROUTES.regions = async (id) => {
     <div class="panel"><h3>🔥 PEMBERONTAKAN</h3>
       <p class="muted small">5 warga berbeda harus mendukung untuk menyulut perang pemberontakan di wilayah ini. Dukunganmu hangus (tidak kembali).</p>
       ${d.war ? `<p>⚔️ Perang aktif: <b>${esc(d.war.name)}</b> — ${fmt(d.war.score_a)} vs ${fmt(d.war.score_d)}</p>
-        <button class="btn-gold" onclick="location.hash='#/war/${d.war.id}'">Buka Front Perang</button>`
+        <button class="btn-gold" data-goto="#/war/${d.war.id}">Buka Front Perang</button>`
         : `<p>Dukungan saat ini: <b>${r.rebellion}/5</b></p>
         <button class="btn-gold" id="btn-rebel" ${d.mySupport ? 'disabled' : ''}>${d.mySupport ? '✓ Sudah Mendukung' : 'DUKUNG PEMBERONTAKAN · 50 emas hangus'}</button>`}
     </div>`);
@@ -1617,7 +1628,7 @@ ROUTES.country = async () => {
   </div>
   <div class="panel"><h3>🔥 PEMBERONTAKAN IBU KOTA</h3>
     <p class="muted small">Dukungan ibu kota: ${d.capitalRebellion}/5 · Dukung: 100 emas hangus.</p>
-    <button class="btn-gold btn-sm" onclick="location.hash='#/regions/2'">Buka Jakarta</button>
+    <button class="btn-gold btn-sm" data-goto="#/regions/2">Buka Jakarta</button>
   </div>
   ${d.wars.length ? `<div class="panel"><h3>⚔️ PERANG AKTIF</h3>${d.wars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}</div>` : ''}`);
   $('#btn-budget')?.addEventListener('click', async () => {
@@ -1750,8 +1761,8 @@ ROUTES.parliament = async () => {
   $('#page').innerHTML = page('PARLEMEN', 'Demokrasi · 60 kursi · Mayoritas 31', `
   <div class="tabs">
     <button class="tab active">🏛️ Dewan</button>
-    <button class="tab" onclick="location.hash='#/country'">💼 Kabinet</button>
-    <button class="tab" onclick="location.hash='#/chat/parliament'">💬 Ruang Sidang</button>
+    <button class="tab" data-goto="#/country">💼 Kabinet</button>
+    <button class="tab" data-goto="#/chat/parliament">💬 Ruang Sidang</button>
   </div>
   <div class="stat-grid">
     <div class="stat-cell"><div class="stat-label">🏛️ Rezim</div><div class="stat-num" style="font-size:24px">Demokrasi</div></div>
@@ -1917,7 +1928,7 @@ ROUTES.war = async (id) => {
     <div class="panel"><h3>⚔️ KOMANDO SERANGAN</h3>
       ${w.status !== 'active' ? '<p class="muted">Perang sudah berakhir.</p>'
         : !d.atFront ? `<p class="red-text"><b>TIDAK DI GARIS DEPAN</b> — Kamu harus berada di ${esc(w.region_name)} untuk menyerang.</p>
-          <button class="btn-gold" onclick="location.hash='#/regions/${w.region_id}'">TERBANG KE SANA →</button>`
+          <button class="btn-gold" data-goto="#/regions/${w.region_id}">TERBANG KE SANA →</button>`
         : `<p class="muted small">Energi ${ME.citizen.energy}/100 · Senjata di inventaris dipakai sebagai amunisi (1 senjata per serangan).</p>
           ${d.bonuses?.length ? `<p class="muted small">Bonus aktif: ${d.bonuses.map(esc).join(' · ')}</p>` : ''}
           <div class="row">
@@ -1937,7 +1948,7 @@ ROUTES.war = async (id) => {
         <span class="v">${fmt(a.damage)} dmg · ${ago(a.created_at)}</span></div>`).join('')
         : '<p class="muted">Belum ada serangan.</p>'}
     </div>
-    <button class="btn-gold" onclick="location.hash='#/chat/war_${w.id}'">💬 Buka Obrolan Perang</button>`);
+    <button class="btn-gold" data-goto="#/chat/war_${w.id}">💬 Buka Obrolan Perang</button>`);
     $$('[data-attack]').forEach((b) => b.onclick = async () => {
       const [side, ammo] = b.dataset.attack.split('|');
       try { const r = await post(`/api/wars/${w.id}/attack`, { side, ammo }); toast(`Seranganmu menimbulkan ${r.damage} kerusakan!${r.bonuses?.length ? ' (' + r.bonuses.join(', ') + ')' : ''}`); await refreshMe(); route(); }
@@ -1953,7 +1964,7 @@ ROUTES.war = async (id) => {
     <div class="card"><h4>🔥 ${esc(w.name)}</h4>
     <p class="muted small">${esc(w.region_name)} · ${esc(w.attacker_label)} vs ${esc(w.defender_label)} · berakhir ${fmtDate(w.ends_at)}</p>
     <div class="kv"><span class="k">Skor</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>
-    <button class="btn-gold btn-sm" onclick="location.hash='#/war/${w.id}'">BUKA FRONT</button></div>`).join('')
+    <button class="btn-gold btn-sm" data-goto="#/war/${w.id}">BUKA FRONT</button></div>`).join('')
     : emptyState('🛡️', 'Tidak ada perang aktif', 'Perang dimulai saat 5 warga mendukung pemberontakan di sebuah wilayah (lihat Peta → wilayah → Dukung Pemberontakan).')}
   ${ended.length ? `<div class="panel"><h3>📜 PERANG BERAKHIR</h3>${ended.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)} · ${esc(w.winner)}</span></div>`).join('')}</div>` : ''}`);
 };
@@ -1964,7 +1975,7 @@ ROUTES['war-world'] = async () => {
   ${data.wars.length ? data.wars.map((w) => `
     <div class="card"><h4>${w.status === 'active' ? '🔥' : '🏳️'} ${esc(w.name)}</h4>
     <p class="muted small">${esc(w.region_name)} · ${fmt(w.score_a)} vs ${fmt(w.score_d)}</p>
-    <button class="btn-gold btn-sm" onclick="location.hash='#/war/${w.id}'">BUKA FRONT</button></div>`).join('')
+    <button class="btn-gold btn-sm" data-goto="#/war/${w.id}">BUKA FRONT</button></div>`).join('')
     : emptyState('🌍', 'Belum ada perang dunia', 'Dunia masih damai. Pemberontakan dimulai dari wilayah (Peta).')}`);
 };
 
@@ -1980,9 +1991,9 @@ ROUTES.press = async () => {
     <div class="stat-cell"><div class="stat-label">💬 Komentar</div><div class="stat-num">${fmt(stats.comments7d)}</div><div class="stat-sub">dalam 7 hari terakhir</div></div>
   </div>
   <div class="row" style="margin-bottom:12px">
-    <button class="btn-gold" onclick="location.hash='#/press/new'">✏️ TULIS ARTIKEL</button>
-    <button class="btn-ghost" onclick="location.hash='#/newspaper'">📰 Dirikan Koran (5 emas)</button>
-    <button class="btn-ghost" onclick="location.hash='#/press/league'">🏆 Liga Pers</button>
+    <button class="btn-gold" data-goto="#/press/new">✏️ TULIS ARTIKEL</button>
+    <button class="btn-ghost" data-goto="#/newspaper">📰 Dirikan Koran (5 emas)</button>
+    <button class="btn-ghost" data-goto="#/press/league">🏆 Liga Pers</button>
   </div>
   <div class="tabs">
     <button class="tab active">Terbaru</button>
@@ -1991,7 +2002,7 @@ ROUTES.press = async () => {
     <button class="tab" data-sort="top_month">Teratas Bulan Ini</button>
   </div>
   ${top ? `
-  <div class="card" style="padding:0;overflow:hidden;cursor:pointer" onclick="location.hash='#/press/${top.id}'">
+  <div class="card" style="padding:0;overflow:hidden;cursor:pointer" data-goto="#/press/${top.id}">
     <div style="background:linear-gradient(135deg,#1a2c4d,#0d1526);padding:26px 16px 14px">
       <span class="chip">🔥 SEDANG RAMAI</span>
       <h3 style="font-size:24px;margin-top:8px">${esc(top.title)}</h3>
@@ -2001,13 +2012,13 @@ ROUTES.press = async () => {
   </div>` : ''}
   <div class="panel"><h3>🔥 JUGA SEDANG TREN</h3>
     ${list.articles.slice(1).length ? list.articles.slice(1).map((a, i) => `
-      <div class="kv" style="cursor:pointer" onclick="location.hash='#/press/${a.id}'"><span class="k"><b style="color:var(--gold)">${i + 2}</b> &nbsp;${esc(a.title)}<br><small class="muted">📰 ${esc(a.newspaper_name)} · ${fmtDate(a.created_at)}</small></span>
+      <div class="kv" style="cursor:pointer" data-goto="#/press/${a.id}"><span class="k"><b style="color:var(--gold)">${i + 2}</b> &nbsp;${esc(a.title)}<br><small class="muted">📰 ${esc(a.newspaper_name)} · ${fmtDate(a.created_at)}</small></span>
       <span class="v small">👁️ ${fmt(a.views)} 👍 ${a.likes}</span></div>`).join('')
       : '<p class="muted">Belum ada artikel. Jadilah jurnalis pertama!</p>'}
   </div>
   <div class="panel"><h3>📰 SEMUA ARTIKEL</h3><div id="all-articles">
     ${list.articles.length ? list.articles.map((a) => `
-      <div class="kv" style="cursor:pointer" onclick="location.hash='#/press/${a.id}'"><span class="k">${esc(a.title)}<br><small class="muted">${esc(a.newspaper_name)} · ${esc(a.topic)} · ${fmtDate(a.created_at)}</small></span>
+      <div class="kv" style="cursor:pointer" data-goto="#/press/${a.id}"><span class="k">${esc(a.title)}<br><small class="muted">${esc(a.newspaper_name)} · ${esc(a.topic)} · ${fmtDate(a.created_at)}</small></span>
       <span class="v small">👁️ ${fmt(a.views)}</span></div>`).join('') : '<p class="muted">Belum ada artikel.</p>'}
   </div></div>`);
   $$('[data-sort]').forEach((b) => b.onclick = async () => {
@@ -2015,7 +2026,7 @@ ROUTES.press = async () => {
     $$('.tabs .tab').forEach((t) => t.classList.remove('active'));
     b.classList.add('active');
     $('#all-articles').innerHTML = list2.articles.length ? list2.articles.map((a) => `
-      <div class="kv" style="cursor:pointer" onclick="location.hash='#/press/${a.id}'"><span class="k">${esc(a.title)}<br><small class="muted">${esc(a.newspaper_name)} · ${esc(a.topic)} · ${fmtDate(a.created_at)}</small></span>
+      <div class="kv" style="cursor:pointer" data-goto="#/press/${a.id}"><span class="k">${esc(a.title)}<br><small class="muted">${esc(a.newspaper_name)} · ${esc(a.topic)} · ${fmtDate(a.created_at)}</small></span>
       <span class="v small">👁️ ${fmt(a.views)} 👍 ${a.likes}</span></div>`).join('') : '<p class="muted">Belum ada artikel.</p>';
   });
 };
@@ -2031,7 +2042,7 @@ ROUTES['press/new'] = async () => {
     <label>ISI<textarea id="art-content" rows="10" placeholder="Tulis beritamu di sini..."></textarea></label>
     <button class="btn-gold" id="btn-publish">TERBITKAN</button>
   </div>` : emptyState('📰', 'Kamu belum punya koran', 'Dirikan koran dulu (5 emas) sebelum menulis artikel.')}
-  ${!mine.newspapers.length ? `<button class="btn-gold" onclick="location.hash='#/newspaper'">Dirikan Koran (5 emas)</button>` : ''}`);
+  ${!mine.newspapers.length ? `<button class="btn-gold" data-goto="#/newspaper">Dirikan Koran (5 emas)</button>` : ''}`);
   $('#btn-publish')?.addEventListener('click', async () => {
     try {
       const r = await post('/api/press/articles', { newspaper_id: Number($('#art-paper').value), title: $('#art-title').value.trim(), content: $('#art-content').value.trim(), topic: $('#art-topic').value });
@@ -2061,7 +2072,7 @@ async function renderArticle(id) {
     <div class="row" style="margin-top:10px"><input id="comment-text" placeholder="Tulis komentar..."><button class="btn-gold" id="btn-comment">KIRIM</button></div>
   </div>
   ${d.others.length ? `<div class="panel"><h3>📰 LAINNYA DARI ${esc(a.newspaper_name)}</h3>
-    ${d.others.map((o) => `<div class="kv" style="cursor:pointer" onclick="location.hash='#/press/${o.id}'"><span class="k">${esc(o.title)}</span><span class="v small">👁️ ${fmt(o.views)}</span></div>`).join('')}</div>` : ''}`);
+    ${d.others.map((o) => `<div class="kv" style="cursor:pointer" data-goto="#/press/${o.id}"><span class="k">${esc(o.title)}</span><span class="v small">👁️ ${fmt(o.views)}</span></div>`).join('')}</div>` : ''}`);
   const react = async (reaction) => {
     try { await post(`/api/press/articles/${a.id}/react`, { reaction }); route(); }
     catch (e) { toast(e.message); }
@@ -2171,7 +2182,7 @@ ROUTES.chat = async (sub) => {
   }
   $('#page').innerHTML = page('', '', `
   <div class="chat-tabs">
-    ${CHAT_TABS.map(([r, label]) => `<button class="tab ${room === r ? 'active' : ''}" onclick="location.hash='#/chat${r === 'global' ? '' : '/' + r}'">${label}</button>`).join('')}
+    ${CHAT_TABS.map(([r, label]) => `<button class="tab ${room === r ? 'active' : ''}" data-goto="#/chat${r === 'global' ? '' : '/' + r}">${label}</button>`).join('')}
   </div>
   <h2 class="chat-title">${title}${room.startsWith('war_') ? '<span class="chat-live">● LANGSUNG</span>' : ''}</h2>
   <p class="page-sub">${esc(subLabel)}</p>
@@ -2214,7 +2225,7 @@ ROUTES.messages = async (otherId) => {
         : '<p class="muted">Belum ada pesan. Mulai percakapan!</p>'}
     </div>
     <div class="chat-input"><input id="dm-text" placeholder="Tulis pesan..." maxlength="500"><button class="btn-gold" id="btn-dm-send">KIRIM</button></div>
-    <button class="btn-ghost btn-sm" onclick="location.hash='#/messages'" style="margin-top:10px">← Semua Percakapan</button>`);
+    <button class="btn-ghost btn-sm" data-goto="#/messages" style="margin-top:10px">← Semua Percakapan</button>`);
     const send = async () => {
       const v = $('#dm-text').value.trim();
       if (!v) return;
@@ -2229,7 +2240,7 @@ ROUTES.messages = async (otherId) => {
   $('#page').innerHTML = page('PESAN', 'Percakapan pribadi dengan warga lain.', `
   <div class="panel"><h3>✉️ PERCAKAPAN</h3>
     ${d.conversations.length ? d.conversations.map((c) => `
-      <div class="kv" style="cursor:pointer" onclick="location.hash='#/messages/${c.other_id}'">
+      <div class="kv" style="cursor:pointer" data-goto="#/messages/${c.other_id}">
         <span class="k"><b>${esc(c.other_name)}</b>${c.unread ? ` <span class="badge" style="position:static">${c.unread}</span>` : ''}<br><small class="muted">${esc(c.last)}</small></span>
         <span class="v small muted">${ago(c.at)}</span></div>`).join('')
       : emptyState('✉️', 'Belum ada percakapan', 'Kirim pesan ke warga lain dari halaman profil mereka.')}

@@ -400,6 +400,77 @@ async function main() {
     check('fmtTime(null) = "—" (tidak crash)', window.eval('fmtTime(null)') === '—');
     check('fmtTime(timestamp STRING tidak valid) = "—"', window.eval("fmtTime('bukan-tanggal')") === '—');
 
+    // 15) Bug tulis artikel: CSP Tahap 2 (script-src 'self') memblokir SEMUA
+    // handler inline, sehingga 50 tombol navigasi mati di browser sungguhan.
+    // Perbaikan: tanpa onclick/oninput inline — navigasi via data-goto +
+    // delegasi klik dokumen; pencarian wilayah via addEventListener.
+    const js2 = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+    check('app.js: tidak ada lagi onclick inline (CSP memblokirnya)', !/onclick="/.test(js2), `${(js2.match(/onclick="/g) || []).length} kemunculan onclick="`);
+    check('app.js: tidak ada lagi oninput inline', !/oninput="/.test(js2));
+    check('app.js: delegasi klik data-goto ada', js2.includes("closest?.('[data-goto]')"));
+    // Perilaku: klik tombol TULIS ARTIKEL (data-goto) mengubah hash.
+    window.api = async (path) => {
+      if (path === '/api/press/stats') return { articles7d: 0, journalists7d: 0, newspapers: 0, reads7d: 0, reactions7d: 0, comments7d: 0 };
+      if (path === '/api/press/articles?sort=new') return { articles: [] };
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/press';
+    window.eval('route()');
+    await sleep(300);
+    const writeBtn = document.querySelector('[data-goto="#/press/new"]');
+    check('Pers: tombol TULIS ARTIKEL memakai data-goto (bukan onclick)', !!writeBtn && writeBtn.textContent.includes('TULIS ARTIKEL'));
+    writeBtn.click();
+    await sleep(100);
+    check('Klik TULIS ARTIKEL mengubah hash ke #/press/new', window.location.hash === '#/press/new', `hash=${window.location.hash}`);
+    // Tanpa koran: halaman jelas mengarahkan ke Dirikan Koran, bukan buntu.
+    window.api = async (path) => {
+      if (path === '/api/press/newspapers/mine') return { newspapers: [] };
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.eval('route()');
+    await sleep(300);
+    const pressNewText = document.querySelector('#page').textContent;
+    check('Tulis artikel tanpa koran: pesan "belum punya koran" tampil', pressNewText.includes('belum punya koran'));
+    const foundBtn = document.querySelector('[data-goto="#/newspaper"]');
+    check('Tulis artikel tanpa koran: tombol Dirikan Koran tampil', !!foundBtn);
+    foundBtn.click();
+    await sleep(100);
+    check('Klik Dirikan Koran mengubah hash ke #/newspaper', window.location.hash === '#/newspaper', `hash=${window.location.hash}`);
+    // Dengan koran: form tampil + TERBITKAN memanggil API + redirect ke artikel.
+    let publishedBody = null;
+    window.api = async (path, opts) => {
+      if (path === '/api/press/newspapers/mine') return { newspapers: [{ id: 7, name: 'Kabar Tes' }] };
+      if (path === '/api/press/articles' && opts?.method === 'POST') { publishedBody = opts.body; return { ok: true, articleId: 9 }; }
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/press/new';
+    window.eval('route()');
+    await sleep(300);
+    check('Tulis artikel dengan koran: form tampil (koran + judul + isi)', !!document.querySelector('#art-paper') && !!document.querySelector('#art-title') && !!document.querySelector('#art-content'));
+    document.querySelector('#art-title').value = 'Judul Artikel Tes';
+    document.querySelector('#art-content').value = 'Isi artikel tes yang panjangnya lebih dari dua puluh karakter.';
+    document.querySelector('#btn-publish').click();
+    await sleep(300);
+    check('TERBITKAN: POST /api/press/articles dipanggil dengan koran+judul+isi',
+      !!publishedBody && publishedBody.newspaper_id === 7 && publishedBody.title === 'Judul Artikel Tes', JSON.stringify(publishedBody));
+    check('TERBITKAN: redirect ke #/press/9 (articleId)', window.location.hash === '#/press/9', `hash=${window.location.hash}`);
+    // Validasi gagal: pesan error tampil sebagai toast (bukan gagal diam-diam).
+    window.api = async (path, opts) => {
+      if (path === '/api/press/newspapers/mine') return { newspapers: [{ id: 7, name: 'Kabar Tes' }] };
+      if (path === '/api/press/articles' && opts?.method === 'POST') throw new Error('Judul 5–120 karakter.');
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/press/new';
+    window.eval('route()');
+    await sleep(300);
+    document.querySelector('#art-title').value = 'Abcd';
+    document.querySelector('#art-content').value = 'Isi artikel tes yang panjangnya lebih dari dua puluh karakter.';
+    document.querySelector('#btn-publish').click();
+    await sleep(300);
+    const toastEl = document.querySelector('#toast');
+    check('Validasi gagal: toast menampilkan pesan error', !toastEl.hidden && toastEl.textContent.includes('Judul 5–120 karakter.'), `toast="${toastEl.textContent}" hidden=${toastEl.hidden}`);
+    check('Validasi gagal: tetap di #/press/new (tidak redirect)', window.location.hash === '#/press/new', `hash=${window.location.hash}`);
+
     dom.window.close();
   } finally {
     stop();

@@ -847,7 +847,8 @@ DIPLOMASI
 PERBAIKAN BUG
 • Pemain baru tidak lagi semuanya lahir di Kepulauan Riau: wilayah awal kini dipilih acak dan merata dari semua wilayah yang ada. Pemain yang sudah ada tidak dipindah — hanya pendaftaran baru yang memakai wilayah acak.
 • Waktu chat kini tampil benar: semua pesan chat sebelumnya menampilkan "Invalid Date" — penyebabnya format waktu dari database yang tidak dikenali browser. Sekarang waktu tampil sebagai jam yang benar ("baru saja", "5 mnt lalu", dst.).
-• Game lebih ringan: polling otomatis kini berhenti saat tab tidak aktif (dan langsung menyegarkan saat tab dibuka lagi), data dunia di-cache 30 detik, dan pengecekan tick harian dibatasi sekali per menit — supaya koneksi database tidak berebut dan game tidak terasa nge-lag. Catatan jujur: jeda saat membuka game pertama kali (cold start server gratis) masih bisa terjadi — itu batas paket gratis, bukan bug.
+• Game lebih ringan: polling otomatis kini berhenti saat tab tidak aktif (dan langsung menyegarkan saat tab dibuka lagi), dan data dunia di-cache 30 detik — supaya koneksi database tidak berebut dan game tidak terasa nge-lag. Catatan jujur: jeda saat membuka game pertama kali (cold start server gratis) masih bisa terjadi — itu batas paket gratis, bukan bug.
+• Menulis artikel kini bisa lagi: tombol TULIS ARTIKEL sebelumnya tidak berfungsi karena aturan keamanan browser memblokir tombol-tombol di dalam halaman. Semua tombol navigasi di dalam halaman kini diperbaiki — termasuk pencarian wilayah yang ikut mati.
 • Log peringatan admin di server kini tidak lagi berisik: status jalan darurat admin cukup dilihat di Panel Admin.`;
 
 export const ADMIN_JOBS = [  { title: 'Pekerja Gudang Pelabuhan', salary: 48, resource: 'Besi Mentah', qty: 44, region: 'Kepulauan Riau', desc: 'Bongkar muat peti kemas di pelabuhan. Kerja fisik, dibayar besi mentah.' },

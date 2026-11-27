@@ -100,6 +100,31 @@ tanda minus dengan benar untuk pengeluaran.
   `forceTick` di tes e2e §22f/g dan mengubah kontrak timing tick harian.
 - **Tidak ada perubahan paket/hosting berbayar.** Lihat §6 untuk rekomendasi.
 
+### 3d. Menulis artikel tidak bisa (tombol TULIS ARTIKEL mati)
+- Laporan Khalid: menulis artikel tidak bisa. Bacaan statis tampak benar
+  (routing `#/press/new`, handler `POST /api/press/articles`, validasi).
+- Reproduksi lewat Playwright (UI sungguhan, akun baru): klik TULIS ARTIKEL
+  tidak berbuat apa-apa. Console browser: `Executing inline event handler
+  violates CSP directive 'script-src 'self'' — The action has been blocked.`
+- Akar masalah: CSP Tahap 2 (`script-src 'self'`, tanpa `unsafe-inline`)
+  memblokir **semua handler inline** — dan `app.js` memakai `onclick="..."`
+  di **50 tombol** (navigasi di semua halaman: TULIS ARTIKEL, Buka Parlemen,
+  kartu artikel, tab, dsb.) plus satu `oninput` (pencarian wilayah). Semua
+  tombol itu mati di browser sungguhan sejak Tahap 2; tes tidak menangkapnya
+  karena e2e memakai API langsung dan jsdom tidak menegakkan CSP.
+- Perbaikan (tanpa melemahkan CSP — tidak tambah `unsafe-inline`):
+  semua `onclick="location.hash='...'"` → `data-goto="..."` + satu
+  delegated `click` listener di `document`; `onclick="location.reload()"`
+  → `data-reload`; `oninput` pencarian wilayah → `addEventListener`.
+- Verifikasi ulang lewat Playwright: daftar → TULIS ARTIKEL (tanpa koran:
+  pesan jelas + tombol Dirikan Koran) → dirikan koran (5 emas) → tulis
+  artikel valid → redirect `#/press/1` + toast "Artikel diterbitkan!" +
+  artikel muncul di daftar Pers + bisa dibuka. Screenshot: `/tmp/article-step4.png`.
+- Koreksi pengumuman: teks Update #2 sebelumnya mengklaim "pengecekan tick
+  harian dibatasi sekali per menit" — itu **tidak benar** (throttle maybeTick
+  sengaja dibatalkan agar `forceTick` tes tetap jalan; pengecekan tick tetap
+  di setiap request API). Kalimat itu diperbaiki di seed pengumuman.
+
 ## 4. Bug yang ketemu & diperbaiki selama pengujian Tahap 5
 
 1. **INSERT pemakzulan salah jumlah nilai** (`api-civic.js`): `VALUES
@@ -131,13 +156,13 @@ tanda minus dengan benar untuk pengeluaran.
 
 | Suite | Hasil | Keterangan |
 |---|---|---|
-| e2e (`npm test`) | **412/412** | baseline 329 → +83 (§23 Tahap 5: 70+ cek; §5/§9 disesuaikan wilayah acak) |
-| modal-dom | **71/71** | baseline 56 → +15 (§14: parlemen, orgs, fmtTime/ago string) |
+| e2e (`npm test`) | **426/426** | baseline 329 → +97 (§23 Tahap 5; §24 artikel: 14 cek; §5/§9 disesuaikan wilayah acak) |
+| modal-dom | **84/84** | baseline 56 → +28 (§14 Tahap 5; §15 artikel/CSP: 13 cek) |
 | pg (pg-mem) | **28/28** | — |
 | pg-verify (Postgres 16) | **34/34** | baseline 25 → +9 (§8: tabel/kolom/CHECK Tahap 5, Update #2, tanpa default region, parser int8) |
 | pg-concurrency | **33/33** | baseline 24 → +9 (§7 pakta race, §8 vote anggaran race) |
 | ssl-warning | **6/6** | — |
-| **TOTAL** | **584/584** | baseline 468 → **+116** |
+| **TOTAL** | **611/611** | baseline 468 → **+143** |
 
 Tambahan di luar suite:
 - **Screenshot Playwright 390×844** halaman chat global: jam "09.08" tampil
@@ -226,11 +251,12 @@ Tampil di notifikasi + "RIWAYAT UPDATE" di Buku sebagai Update #2.
 - `public/js/app.js` — panel aturan berlaku + form UU berjenis, panel
   wewenang menteri, panel pakta, pajak dinamis (pasar/lowongan/wilayah/buku),
   bonus perang, `toDate()` + format waktu tahan string, polling dilewati
-  saat tab tersembunyi, status bootstrap di admin. (`public/css/style.css`
+  saat tab tersembunyi, status bootstrap di admin, **perbaikan CSP: 50
+  handler inline → `data-goto` + delegasi klik** (§3d). (`public/css/style.css`
   tidak berubah di Tahap 5 — rombak visual menyusul sebagai commit terpisah.)
-- `test/e2e.js` — §23 Tahap 5 + penyesuaian §2/§5/§9/§22i (wilayah acak,
+- `test/e2e.js` — §23 Tahap 5 + §24 artikel + penyesuaian §2/§5/§9/§22i (wilayah acak,
   Update #2).
-- `test/modal-dom.js` — §14 (parlemen, pakta, format waktu string).
+- `test/modal-dom.js` — §14 (parlemen, pakta, format waktu string) + §15 (CSP/data-goto, form artikel).
 - `test/pg-verify.mjs` — §8 (skema Tahap 5, Update #2, parser int8).
 - `test/pg-concurrency.mjs` — §7 (pakta race), §8 (vote anggaran race),
   §9 (invariant; dulu §7), penyesuaian §3 (wilayah acak).
