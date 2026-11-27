@@ -5,13 +5,15 @@ import { warDamage, CHRONICLE } from './game.js';
 
 const CHAT_ROOMS = ['global', 'indonesia', 'negara'];
 
+// Kirim notifikasi ke satu warga (dipakai juga oleh sistem banding).
+export async function notify(citizenId, category, title, content = '') {
+  await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?) RETURNING id',
+    [citizenId, category, title, content, Date.now()]);
+}
+
 export function registerCivic(app) {
   const r = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-  async function notify(citizenId, category, title, content = '') {
-    await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?) RETURNING id',
-      [citizenId, category, title, content, Date.now()]);
-  }
   async function chronicleDone(citizen, key) {
     const done = JSON.parse(citizen.chronicle_done || '[]');
     if (!done.includes(key)) {
@@ -419,7 +421,7 @@ export function registerCivic(app) {
     const blocked = await sql('SELECT blocked_id FROM blocked WHERE blocker_id = ?', [req.citizen.id]);
     const blockedSet = new Set(blocked.map((b) => b.blocked_id));
     const rows = await sql(
-      `SELECT m.*, u.username, u.premium_until, p.tag AS party_tag,
+      `SELECT m.*, u.username, u.avatar, u.premium_until, p.tag AS party_tag,
         (SELECT COUNT(*) FROM article_comments WHERE article_id = m.article_id) AS article_comments,
         (SELECT title FROM articles WHERE id = m.article_id) AS article_title,
         (SELECT likes FROM articles WHERE id = m.article_id) AS article_likes
@@ -523,7 +525,7 @@ export function registerCivic(app) {
   app.get('/api/dms/:citizenId', authRequired, citizenRequired, r(async (req, res) => {
     const other = Number(req.params.citizenId);
     const rows = await sql(
-      `SELECT d.*, u.username AS from_name FROM dms d JOIN citizens c ON c.id = d.from_id JOIN users u ON u.id = c.user_id
+      `SELECT d.*, u.username AS from_name, u.avatar AS from_avatar FROM dms d JOIN citizens c ON c.id = d.from_id JOIN users u ON u.id = c.user_id
        WHERE (d.from_id = ? AND d.to_id = ?) OR (d.from_id = ? AND d.to_id = ?) ORDER BY d.created_at ASC LIMIT 100`,
       [req.citizen.id, other, other, req.citizen.id]);
     await run('UPDATE dms SET is_read = 1 WHERE from_id = ? AND to_id = ?', [other, req.citizen.id]);

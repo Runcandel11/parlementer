@@ -105,6 +105,94 @@ async function main() {
     const viaFlag = /data-report.*openReport|openReport\(Number\(b\.dataset\.report\)\)/.test(js);
     check('openReport hanya dipanggil dari tombol laporkan chat', callers === 2 && viaFlag, `${callers} kemunculan openReport(`);
 
+    // 5) Loading screen: ada di HTML (tampil saat cold start) dan disembunyikan
+    // setelah boot selesai (form login terlihat).
+    const loading = document.querySelector('#loading-screen');
+    check('layar loading ada di HTML (logo + Memuat...)',
+      !!loading && loading.textContent.includes('PARLEMENTER') && loading.textContent.includes('Memuat...'));
+    check('layar loading disembunyikan setelah boot selesai',
+      loading.hidden === true && window.getComputedStyle(loading).display === 'none',
+      `hidden=${loading.hidden} display=${window.getComputedStyle(loading).display}`);
+
+    // 6) Layar banned menyembunyikan HUD (header, bottom bar energi) dan
+    // menampilkan tombol AJUKAN BANDING. Disimulasikan dengan ME banned.
+    window.eval('ME = { user: { id: 99, is_banned: true, banned_reason: "cheat" }, citizen: { username: "warga_tes" } }');
+    window.eval('route()');
+    const appEl = document.querySelector('#app');
+    check('mode banned: class "banned" ditambahkan ke #app', appEl.classList.contains('banned'));
+    check('mode banned: header HUD disembunyikan',
+      window.getComputedStyle(document.querySelector('.hud')).display === 'none',
+      `display=${window.getComputedStyle(document.querySelector('.hud')).display}`);
+    check('mode banned: bottom bar energi disembunyikan',
+      window.getComputedStyle(document.querySelector('.energy-bar')).display === 'none',
+      `display=${window.getComputedStyle(document.querySelector('.energy-bar')).display}`);
+    check('layar banned menampilkan tombol AJUKAN BANDING', !!document.querySelector('#btn-appeal'));
+    check('layar banned menampilkan tombol KELUAR', !!document.querySelector('#btn-banned-logout'));
+    // Form banding muncul saat tombol ditekan.
+    document.querySelector('#btn-appeal').click();
+    await sleep(100);
+    check('form banding muncul (textarea + KIRIM BANDING)',
+      !!document.querySelector('#appeal-text') && !!document.querySelector('#btn-appeal-submit'));
+
+    // 7) Halaman Toko: link WhatsApp menyertakan nama + ID pemain; banner
+    // "★ PALING DIMINATI" tidak terpotong; badge HEMAT tidak melipat;
+    // padding bawah halaman cukup untuk bar energi; header HP dua baris;
+    // bar energi bersembunyi saat scroll ke bawah.
+    window.eval("ME = { user: { id: 1, username: 'warga_tes', publicId: 'PL-000099', is_banned: false }, citizen: { username: 'warga_tes', energy: 100 } }");
+    window.api = async (path) => {
+      if (path === '/api/shop') return {
+        packages: [
+          { id: 'pemula', name: 'PAKET PEMULA', tagline: 'Langkah pertama.', price: 15000, was: 17000, save: 'HEMAT 12%', premiumMonths: 1, gold: 1000 },
+          { id: 'deluxe', name: 'PAKET DELUXE', tagline: 'Satu musim keistimewaan.', price: 50000, was: 58000, save: 'HEMAT 14%', premiumMonths: 6, gold: 5000, best: true },
+          { id: 'ultimate', name: 'PAKET ULTIMATE', tagline: 'Setahun penuh.', price: 100000, was: 125000, save: 'HEMAT 20%', premiumMonths: 12, gold: 20000 },
+        ],
+        premium: [
+          { months: 1, price: 5000, perMonth: 5000 },
+          { months: 3, price: 15000, perMonth: 5000 },
+          { months: 6, price: 25000, perMonth: 4167 },
+          { months: 12, price: 45000, perMonth: 3750 },
+        ],
+        perks: 'Mode otomatis, lebih banyak roti.',
+        waUrl: 'https://wa.me/6285220743283',
+      };
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/shop';
+    window.eval('route()');
+    await sleep(300);
+    const waLinks = [...document.querySelectorAll('a[href*="wa.me"]')];
+    check('halaman Toko menampilkan 7 link WhatsApp (3 paket + 4 premium)', waLinks.length === 7, `${waLinks.length} link`);
+    const waOk = waLinks.length > 0 && waLinks.every((a) => {
+      const text = decodeURIComponent(a.href.split('text=')[1] || '');
+      return text.includes('Nama warga: warga_tes (ID: PL-000099)');
+    });
+    check('semua link WhatsApp menyertakan nama + ID pemain', waOk, waLinks[0]?.href || '');
+    const banner = document.querySelector('.shop-banner');
+    check('banner "★ PALING DIMINATI" tampil di kartu Deluxe', !!banner && banner.textContent.includes('PALING DIMINATI'));
+    if (banner) {
+      const mTop = parseFloat(window.getComputedStyle(banner).marginTop);
+      const pTop = parseFloat(window.getComputedStyle(banner.parentElement).paddingTop);
+      check('banner tidak terpotong di tepi atas kartu (margin negatif = padding panel)', mTop + pTop >= 0, `marginTop=${mTop} paddingTop=${pTop}`);
+    }
+    const saveChip = [...document.querySelectorAll('.chip.teal')].find((c) => c.textContent.includes('HEMAT 14%'));
+    check('badge "HEMAT 14%" ada dan tidak melipat (white-space nowrap)',
+      !!saveChip && window.getComputedStyle(saveChip).whiteSpace === 'nowrap');
+    const pagePad = parseFloat(window.getComputedStyle(document.querySelector('#page')).paddingBottom);
+    check('padding bawah halaman cukup untuk bar energi (>= 160px)', pagePad >= 160, `paddingBottom=${pagePad}px`);
+    const css = fs.readFileSync(new URL('../public/css/style.css', import.meta.url), 'utf8');
+    check('header HP dua baris: identitas pindah ke baris penuh (order 5, flex 100%)',
+      /\.hud-identity\s*\{[^}]*order:\s*5[^}]*flex:\s*1\s+1\s+100%/.test(css));
+    check('bar energi memakai safe-area bawah (tidak menabrak gesture bar HP)',
+      css.includes('env(safe-area-inset-bottom'));
+    // Perilaku sembunyi saat scroll: simulasikan scrollY.
+    const bar = document.querySelector('.energy-bar');
+    Object.defineProperty(window, 'scrollY', { value: 500, configurable: true });
+    window.dispatchEvent(new window.Event('scroll'));
+    check('bar energi bersembunyi saat scroll ke bawah', bar.classList.contains('energy-hidden'));
+    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true });
+    window.dispatchEvent(new window.Event('scroll'));
+    check('bar energi muncul lagi saat scroll ke atas', !bar.classList.contains('energy-hidden'));
+
     dom.window.close();
   } finally {
     stop();

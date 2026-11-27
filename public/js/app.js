@@ -19,6 +19,43 @@ let ME = null; // hasil /api/me
 let chatTimer = null;
 let chatSince = 0;
 
+// Avatar bulat: foto (data URL) bila ada, huruf awal nama bila tidak.
+const avatarHtml = (avatar, username, size = 40) => avatar
+  ? `<img src="${esc(avatar)}" class="avatar-img" style="width:${size}px;height:${size}px" alt="">`
+  : `<span class="avatar-initial" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px">${esc((username || '?')[0].toUpperCase())}</span>`;
+
+// Baca file gambar → resize/crop persegi 256×256 lewat canvas → data URL JPEG.
+// Mengembalikan null bila file bukan gambar atau hasil akhirnya tetap > 100 KB.
+async function processAvatarFile(file) {
+  if (!file || !file.type.startsWith('image/')) return null;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error('gagal membaca gambar'));
+      i.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = 256; canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    const s = Math.min(img.width, img.height);
+    const sx = Math.floor((img.width - s) / 2);
+    const sy = Math.floor((img.height - s) / 2);
+    ctx.drawImage(img, sx, sy, s, s, 0, 0, 256, 256);
+    for (const q of [0.85, 0.6, 0.4]) {
+      const dataUrl = canvas.toDataURL('image/jpeg', q);
+      // Data URL base64 ≈ 4/3 ukuran biner; 100 KB biner ≈ 136.500 karakter.
+      if (dataUrl.length <= 136500) return dataUrl;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function toast(msg) {
   const t = $('#toast');
   t.textContent = msg;
@@ -41,6 +78,11 @@ async function api(path, opts = {}) {
 const post = (path, body = {}) => api(path, { method: 'POST', body });
 
 // ---------- AUTH ----------
+function hideLoading() {
+  const l = $('#loading-screen');
+  if (l) l.hidden = true;
+}
+
 async function boot() {
   try {
     const me = await api('/api/auth/me');
@@ -50,6 +92,7 @@ async function boot() {
 }
 
 function showAuth() {
+  hideLoading();
   $('#app').hidden = true;
   $('#auth-view').hidden = false;
   $('#tab-login').onclick = () => switchAuthTab('login');
@@ -153,6 +196,7 @@ function openDrawer() { $('#drawer').classList.add('open'); $('#drawer-overlay')
 function closeDrawer() { $('#drawer').classList.remove('open'); $('#drawer-overlay').classList.remove('open'); }
 
 async function showApp() {
+  hideLoading();
   $('#auth-view').hidden = true;
   $('#app').hidden = false;
   await refreshMe(); // dulu, supaya buildNav tahu apakah warga ini admin
@@ -206,15 +250,16 @@ function route() {
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
   const [slug, arg] = hash.split('/');
   // Akun banned: tampilkan pesan banned, bukan dashboard/game.
+  // Layar banned bersih full-screen: HUD (header saldo/level, tombol chat,
+  // lonceng, gear, bottom bar energi) disembunyikan lewat class 'banned'
+  // di #app — lihat CSS. Di halaman ini pemain bisa mengajukan banding
+  // dan membalas thread bandingnya.
   if (ME?.user?.is_banned) {
-    $('#page').innerHTML = page('⛔ AKUN DIBANNED', '', `
-    <div class="panel"><div class="empty"><div class="big-ico">⛔</div>
-    <h3>Akun ini dibanned</h3>
-    <p class="muted">Alasan: ${esc(ME.user.banned_reason || 'tidak dicantumkan')}</p>
-    <p class="muted">Akunmu tidak bisa masuk ke game sampai admin mencabut ban ini.</p>
-    <button class="btn-danger" onclick="logout()">KELUAR</button></div></div>`);
+    $('#app').classList.add('banned');
+    renderBannedPage();
     return;
   }
+  $('#app').classList.remove('banned');
   $$('#drawer-nav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.route === slug));
   const fn = ROUTES[slug] || ROUTES.dashboard;
   $('#page').innerHTML = '<div class="panel"><p class="muted">Memuat…</p></div>';
@@ -223,6 +268,83 @@ function route() {
       <button class="btn-gold" onclick="location.reload()">Muat Ulang</button></div>`;
   });
 }
+// ---------- HALAMAN BANNED + BANDING ----------
+async function renderBannedPage() {
+  const u = ME.user;
+  $('#page').innerHTML = page('⛔ AKUN DIBANNED', '', `
+  <div class="panel"><div class="empty"><div class="big-ico">⛔</div>
+  <h3>Akun ini dibanned</h3>
+  <p class="muted">Alasan: ${esc(u.banned_reason || 'tidak dicantumkan')}</p>
+  <p class="muted">Akunmu tidak bisa masuk ke game sampai admin mencabut ban ini. Kamu bisa mengajukan banding — admin akan meninjaunya dan membalas di halaman ini juga.</p>
+  <div class="row" style="justify-content:center">
+    <button class="btn-gold" id="btn-appeal" type="button">📝 AJUKAN BANDING</button>
+    <button class="btn-danger" id="btn-banned-logout" type="button">KELUAR</button>
+  </div></div></div>
+  <div id="appeal-area"></div>`);
+  $('#btn-banned-logout').onclick = logout;
+  $('#btn-appeal').onclick = () => showAppealForm();
+  let appeals = [];
+  try { const d = await api('/api/appeals/mine'); appeals = d.appeals || []; }
+  catch { /* sesi habis — form banding akan menampilkan error saat kirim */ }
+  renderAppealArea(appeals);
+}
+
+function renderAppealArea(appeals) {
+  const area = $('#appeal-area');
+  if (!area) return;
+  const active = appeals.find((a) => a.status === 'menunggu');
+  const last = appeals[0];
+  if (active) {
+    area.innerHTML = `<div class="panel"><h3>📝 BANDINGMU — MENUNGGU DITINJAU</h3>
+      <p class="muted small">Diajukan ${fmtDate(active.created_at)} · Alasan ban: ${esc(active.ban_reason || '—')}</p>
+      <div>${active.messages.map((m) => `
+        <div class="msg"><div class="msg-avatar">${m.sender_role === 'admin' ? '🛡' : esc((ME.citizen.username || '?')[0].toUpperCase())}</div>
+        <div class="msg-body"><div class="msg-head"><span class="msg-name">${m.sender_role === 'admin' ? 'Admin' : esc(ME.citizen.username)}</span><span class="msg-time">${fmtTime(m.created_at)}</span></div>
+        <div class="msg-bubble">${esc(m.text)}</div></div></div>`).join('')}</div>
+      <div class="chat-input"><input id="appeal-reply" placeholder="Tulis balasan untuk admin..." maxlength="1000" autocomplete="off">
+      <button class="btn-gold" id="btn-appeal-reply" type="button">KIRIM</button></div></div>`;
+    const send = async () => {
+      const input = $('#appeal-reply');
+      const text = input.value.trim();
+      if (!text) return;
+      try { await post('/api/appeals/' + active.id + '/message', { text }); toast('Balasan terkirim.'); renderBannedPage(); }
+      catch (e) { toast(e.message); }
+    };
+    $('#btn-appeal-reply').onclick = send;
+    $('#appeal-reply').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+    return;
+  }
+  if (last && last.status === 'diterima') {
+    area.innerHTML = `<div class="panel"><div class="empty"><div class="big-ico">✅</div>
+      <h3>Bandingmu DITERIMA</h3><p class="muted">Admin mencabut ban akunmu. Kamu bisa masuk ke game lagi.</p>
+      <button class="btn-gold" id="btn-appeal-enter" type="button">MASUK KE GAME</button></div></div>`;
+    $('#btn-appeal-enter').onclick = async () => { await refreshMe(); location.hash = '#/dashboard'; route(); };
+    return;
+  }
+  if (last && last.status === 'ditolak') {
+    area.innerHTML = `<div class="panel"><h3>❌ BANDING DITOLAK</h3>
+      <p class="muted">Admin menolak bandingmu (${fmtDate(last.decided_at)}). Kamu boleh mengajukan banding baru dengan penjelasan yang lebih lengkap — tekan AJUKAN BANDING di atas.</p></div>`;
+  }
+  // Tidak ada banding aktif → tombol AJUKAN BANDING di atas membuka form.
+}
+
+function showAppealForm() {
+  const area = $('#appeal-area');
+  if (!area) return;
+  area.innerHTML = `<div class="panel"><h3>📝 AJUKAN BANDING</h3>
+    <p class="muted small">Jelaskan kenapa ban ini seharusnya dicabut. Admin akan membalasmu di halaman ini juga.</p>
+    <label>ALASAN / PENJELASAN (minimal 10 karakter)<textarea id="appeal-text" rows="4" maxlength="2000" placeholder="Contoh: Saya tidak pernah memakai cheat..."></textarea></label>
+    <div class="row"><button class="btn-gold" id="btn-appeal-submit" type="button">KIRIM BANDING</button></div></div>`;
+  $('#btn-appeal-submit').onclick = async () => {
+    const text = $('#appeal-text').value.trim();
+    try {
+      await post('/api/appeals', { text });
+      toast('Banding terkirim. Admin akan meninjaunya.');
+      renderBannedPage();
+    } catch (e) { toast(e.message); }
+  };
+}
+
 const page = (title, sub, body) => `
   <h2>${title}</h2>
   ${sub ? `<p class="page-sub">${sub}</p>` : ''}
@@ -402,6 +524,17 @@ ROUTES.profile = async (username) => {
   $('#page').innerHTML = page('BERKAS WARGA', '', `
   <div class="panel">
     <div class="panel-head"><h3>👤 ${esc(pr.username)} ${pr.isPremium ? '◆' : ''}</h3><span class="chip">LEVEL ${pr.level}</span></div>
+    <div class="profile-avatar-row">
+      <span id="profile-avatar">${avatarHtml(pr.avatar, pr.username, 96)}</span>
+      ${pr.username === ME.citizen.username ? `
+      <div>
+        <input type="file" id="avatar-file" accept="image/*" hidden>
+        <button class="btn-gold btn-sm" id="btn-avatar-change" type="button">📷 Ubah Foto</button>
+        ${pr.avatar ? `<button class="btn-ghost btn-sm" id="btn-avatar-delete" type="button">🗑 Hapus Foto</button>` : ''}
+        <div id="avatar-preview" style="margin-top:8px"></div>
+        <p class="muted small">Foto di-crop persegi &amp; diperkecil jadi 256×256 (maks 100 KB).</p>
+      </div>` : ''}
+    </div>
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(pr.publicId)}</b></span></div>
     <div class="kv"><span class="k">Kewarganegaraan</span><span class="v">Republik Indonesia</span></div>
     <div class="kv"><span class="k">Daerah asal</span><span class="v">${esc(pr.region_name)}</span></div>
@@ -447,6 +580,41 @@ ROUTES.profile = async (username) => {
       }
     };
   }
+
+  // ---------- FOTO PROFIL (hanya profil sendiri) ----------
+  if (pr.username === ME.citizen.username) {
+    let pendingAvatar = null;
+    const fileInput = $('#avatar-file');
+    $('#btn-avatar-change').onclick = () => fileInput.click();
+    fileInput.onchange = async () => {
+      const f = fileInput.files?.[0];
+      if (!f) return;
+      const dataUrl = await processAvatarFile(f);
+      if (!dataUrl) {
+        toast('Gambar tidak valid atau terlalu besar (maks 100 KB setelah di-resize).');
+        fileInput.value = '';
+        return;
+      }
+      pendingAvatar = dataUrl;
+      $('#avatar-preview').innerHTML = `
+        <img src="${esc(dataUrl)}" class="avatar-img" style="width:96px;height:96px" alt="Pratinjau foto profil">
+        <div class="row" style="margin-top:8px">
+          <button class="btn-gold btn-sm" id="btn-avatar-save" type="button">Simpan Foto</button>
+          <button class="btn-ghost btn-sm" id="btn-avatar-cancel" type="button">Batal</button>
+        </div>`;
+      $('#btn-avatar-save').onclick = async () => {
+        try { await post('/api/profile/avatar', { avatar: pendingAvatar }); toast('Foto profil disimpan.'); await refreshMe(); route(); }
+        catch (e) { toast(e.message); }
+      };
+      $('#btn-avatar-cancel').onclick = () => { pendingAvatar = null; fileInput.value = ''; $('#avatar-preview').innerHTML = ''; };
+    };
+    const delBtn = $('#btn-avatar-delete');
+    if (delBtn) delBtn.onclick = async () => {
+      if (!confirm('Hapus foto profil dan kembali ke avatar default?')) return;
+      try { await post('/api/profile/avatar/delete'); toast('Foto profil dihapus.'); await refreshMe(); route(); }
+      catch (e) { toast(e.message); }
+    };
+  }
 };
 
 // ---------- PENGATURAN ----------
@@ -481,12 +649,27 @@ ROUTES.settings = async () => {
 
 // ---------- PANEL ADMIN ----------
 ROUTES.admin = async (q) => {
+  if (q === 'appeals') return renderAdminAppeals();
+  if (q && q.startsWith('appeal-')) return renderAdminAppealDetail(Number(q.slice(7)));
+  if (q === 'gift-all') return renderAdminGiftAll();
+  if (q === 'inbox' || (q && q.startsWith('inbox?'))) {
+    const params = new URLSearchParams((q.split('?')[1] || ''));
+    return renderAdminInbox(params.get('status') || '');
+  }
   const query = q ? decodeURIComponent(q) : '';
-  const [list, logs] = await Promise.all([
+  const [list, logs, appeals] = await Promise.all([
     api('/api/admin/players' + (query ? '?q=' + encodeURIComponent(query) : '')),
     api('/api/admin/actions'),
+    api('/api/admin/appeals'),
   ]);
+  const pendingAppeals = appeals.appeals.filter((a) => a.status === 'menunggu').length;
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Hanya akun admin yang bisa melihat halaman ini.', `
+  <div class="tabs">
+    <button class="tab active">👥 Pemain</button>
+    <button class="tab" onclick="location.hash='#/admin/appeals'">📬 Banding${pendingAppeals ? ` <span class="chip">${pendingAppeals} menunggu</span>` : ''}</button>
+    <button class="tab" onclick="location.hash='#/admin/gift-all'">🎁 Hadiah Massal</button>
+    <button class="tab" onclick="location.hash='#/admin/inbox'">📥 Laporan &amp; Saran</button>
+  </div>
   <div class="panel"><h3>🔍 CARI PEMAIN</h3>
     <div class="row"><input id="adm-q" placeholder="Nama / email / ID (cth: PL-000001)" value="${esc(query)}" style="flex:2">
     <button class="btn-gold" id="adm-search">Cari</button>
@@ -495,7 +678,7 @@ ROUTES.admin = async (q) => {
   </div>
   ${list.players.map((p) => `
   <div class="panel" data-player="${p.id}">
-    <div class="panel-head"><h3>👤 ${esc(p.username)} ${p.isPremium ? '◆' : ''}</h3>
+    <div class="panel-head"><h3>${avatarHtml(p.avatar, p.username, 36)} 👤 ${esc(p.username)} ${p.isPremium ? '◆' : ''}</h3>
       <span class="chip">${p.is_banned ? '⛔ BANNED' : p.is_admin ? '🛡️ ADMIN' : 'WARGA'}</span></div>
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(p.publicId)}</b></span></div>
     <div class="kv"><span class="k">Email</span><span class="v">${esc(p.email)}</span></div>
@@ -504,6 +687,15 @@ ROUTES.admin = async (q) => {
     <div class="kv"><span class="k">Premium</span><span class="v">${p.isPremium ? 'Aktif sampai ' + fmtDate(p.premium_until) : 'Tidak aktif'}</span></div>
     ${p.is_banned ? `<div class="kv"><span class="k">Alasan ban</span><span class="v">${esc(p.banned_reason || '')}</span></div>` : ''}
     <div class="kv"><span class="k">Bergabung</span><span class="v">${fmtDate(p.created_at)}</span></div>
+    <p class="muted small" style="margin-top:10px">🎁 <b>Hadiah tunggal</b> — pilih jenis dulu: <b>Hadiah</b> (gratis) atau <b>Pembelian</b> (top-up WhatsApp yang dipenuhi admin). Notifikasi ke pemain mengikuti pilihan ini.</p>
+    <div class="row">
+      <label class="small muted" style="flex:1">JENIS PEMBERIAN
+        <select class="adm-kind" style="width:100%">
+          <option value="hadiah">🎁 Hadiah</option>
+          <option value="pembelian">🛒 Pembelian (top-up dipenuhi)</option>
+        </select>
+      </label>
+    </div>
     <div class="row" style="margin-top:10px">
       <select class="adm-premium" style="flex:1"><option value="1">Premium 1 bln</option><option value="3">Premium 3 bln</option><option value="6">Premium 6 bln</option><option value="12">Premium 12 bln</option></select>
       <button class="btn-gold btn-sm" data-act="premium">Beri Premium</button>
@@ -515,7 +707,7 @@ ROUTES.admin = async (q) => {
       <button class="btn-gold btn-sm" data-act="usd">+ USD</button>
     </div>
     <div class="row">
-      <select class="adm-item" style="flex:1"><option>Makanan</option><option>Senjata</option><option>Tiket</option></select>
+      <select class="adm-item" style="flex:1"><option>Makanan</option><option>Senjata</option><option>Tiket</option><option>Gandum Mentah</option><option>Besi Mentah</option><option>Minyak Mentah</option><option>Kapas Mentah</option><option>Kayu</option><option>Batu Bara</option><option>Tembaga Mentah</option></select>
       <select class="adm-tier"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
       <input class="adm-qty" type="number" min="1" value="10" style="width:80px">
       <button class="btn-gold btn-sm" data-act="item">Beri Barang</button>
@@ -537,6 +729,7 @@ ROUTES.admin = async (q) => {
   if (resetBtn) resetBtn.onclick = () => { location.hash = '#/admin'; };
   $$('#page [data-player]').forEach((panel) => {
     const uid = Number(panel.dataset.player);
+    const kind = () => panel.querySelector('.adm-kind').value;
     const runAct = async (path, body) => {
       try { await post(path, body); toast('Aksi admin berhasil.'); await refreshMe(); route(); }
       catch (e) { toast(e.message); }
@@ -544,14 +737,14 @@ ROUTES.admin = async (q) => {
     panel.querySelectorAll('[data-act]').forEach((btn) => {
       btn.onclick = async () => {
         const act = btn.dataset.act;
-        if (act === 'premium') return runAct('/api/admin/premium', { user_id: uid, months: Number(panel.querySelector('.adm-premium').value) });
-        if (act === 'gold') return runAct('/api/admin/gold', { user_id: uid, amount: Number(panel.querySelector('.adm-gold').value) });
-        if (act === 'usd') return runAct('/api/admin/usd', { user_id: uid, amount: Number(panel.querySelector('.adm-usd').value) });
+        if (act === 'premium') return runAct('/api/admin/premium', { user_id: uid, months: Number(panel.querySelector('.adm-premium').value), kind: kind() });
+        if (act === 'gold') return runAct('/api/admin/gold', { user_id: uid, amount: Number(panel.querySelector('.adm-gold').value), kind: kind() });
+        if (act === 'usd') return runAct('/api/admin/usd', { user_id: uid, amount: Number(panel.querySelector('.adm-usd').value), kind: kind() });
         if (act === 'item') return runAct('/api/admin/item', {
           user_id: uid, commodity: panel.querySelector('.adm-item').value,
-          tier: Number(panel.querySelector('.adm-tier').value), qty: Number(panel.querySelector('.adm-qty').value),
+          tier: Number(panel.querySelector('.adm-tier').value), qty: Number(panel.querySelector('.adm-qty').value), kind: kind(),
         });
-        if (act === 'energy') return runAct('/api/admin/energy', { user_id: uid });
+        if (act === 'energy') return runAct('/api/admin/energy', { user_id: uid, kind: kind() });
         if (act === 'unban') return runAct('/api/admin/unban', { user_id: uid });
         if (act === 'ban') {
           const reason = panel.querySelector('.adm-reason').value.trim();
@@ -563,6 +756,205 @@ ROUTES.admin = async (q) => {
     });
   });
 };
+
+// ---------- PANEL ADMIN: TAB BANDING ----------
+async function renderAdminAppeals() {
+  const data = await api('/api/admin/appeals');
+  const pending = data.appeals.filter((a) => a.status === 'menunggu').length;
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Banding dari pemain yang di-ban.', `
+  <div class="tabs">
+    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
+    <button class="tab active">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
+    <button class="tab" onclick="location.hash='#/admin/gift-all'">🎁 Hadiah Massal</button>
+    <button class="tab" onclick="location.hash='#/admin/inbox'">📥 Laporan &amp; Saran</button>
+  </div>
+  ${data.appeals.length ? data.appeals.map((a) => `
+  <div class="panel" style="cursor:pointer" onclick="location.hash='#/admin/appeal-${a.id}'">
+    <div class="panel-head"><h3>👤 ${esc(a.username)} · ${esc(a.publicId)}</h3>
+      <span class="chip">${a.status === 'menunggu' ? '⏳ MENUNGGU' : a.status === 'diterima' ? '✅ DITERIMA' : '❌ DITOLAK'}</span></div>
+    <div class="kv"><span class="k">Alasan ban</span><span class="v">${esc(a.ban_reason || '—')}</span></div>
+    <div class="kv"><span class="k">Isi banding</span><span class="v">${esc(a.text.length > 120 ? a.text.slice(0, 120) + '…' : a.text)}</span></div>
+    <div class="kv"><span class="k">Pesan</span><span class="v">${a.messages_count} pesan</span></div>
+    <div class="kv"><span class="k">Diajukan</span><span class="v">${fmtDate(a.created_at)}</span></div>
+  </div>`).join('') : emptyState('📬', 'Belum ada banding', 'Banding dari pemain yang di-ban akan muncul di sini.')}`);
+}
+
+async function renderAdminAppealDetail(id) {
+  const d = await api('/api/appeals/' + id);
+  const a = d.appeal;
+  $('#page').innerHTML = page('📬 BANDING #' + a.id, `${esc(a.user.username)} · ${esc(a.user.publicId)} · Alasan ban: ${esc(a.ban_reason || '—')}`, `
+  <button class="btn-ghost btn-sm" onclick="location.hash='#/admin/appeals'">← Semua Banding</button>
+  <div class="panel"><h3>ISI BANDING</h3><p>${esc(a.text)}</p>
+    <p class="muted small">Diajukan ${fmtDate(a.created_at)} · Status: <b>${a.status === 'menunggu' ? 'MENUNGGU' : a.status === 'diterima' ? 'DITERIMA' : 'DITOLAK'}</b>${a.decided_at ? ' · diputuskan ' + fmtDate(a.decided_at) : ''}</p></div>
+  <div class="panel"><h3>💬 PERCAKAPAN</h3>
+    ${a.messages.map((m) => `
+      <div class="msg"><div class="msg-avatar">${m.sender_role === 'admin' ? '🛡' : esc((a.user.username || '?')[0].toUpperCase())}</div>
+      <div class="msg-body"><div class="msg-head"><span class="msg-name">${m.sender_role === 'admin' ? 'Admin' : esc(a.user.username)}</span><span class="msg-time">${fmtTime(m.created_at)}</span></div>
+      <div class="msg-bubble">${esc(m.text)}</div></div></div>`).join('')}
+    ${a.status === 'menunggu' ? `
+    <div class="chat-input"><input id="adm-appeal-reply" placeholder="Tulis balasan untuk pemain..." maxlength="1000" autocomplete="off">
+    <button class="btn-gold" id="btn-adm-appeal-reply" type="button">KIRIM</button></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn-gold" id="btn-appeal-accept" type="button">✅ Cabut Ban — Terima Banding</button>
+      <button class="btn-danger" id="btn-appeal-reject" type="button">❌ Tolak Banding</button>
+    </div>` : ''}
+  </div>`);
+  if (a.status === 'menunggu') {
+    const send = async () => {
+      const v = $('#adm-appeal-reply').value.trim();
+      if (!v) return;
+      try { await post('/api/admin/appeals/' + a.id + '/message', { text: v }); toast('Balasan terkirim.'); route(); }
+      catch (e) { toast(e.message); }
+    };
+    $('#btn-adm-appeal-reply').onclick = send;
+    $('#adm-appeal-reply').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+    $('#btn-appeal-accept').onclick = async () => {
+      if (!confirm('Terima banding ini dan cabut ban pemain?')) return;
+      try { await post('/api/admin/appeals/' + a.id + '/decide', { decision: 'accept' }); toast('Banding diterima — ban dicabut.'); route(); }
+      catch (e) { toast(e.message); }
+    };
+    $('#btn-appeal-reject').onclick = async () => {
+      if (!confirm('Tolak banding ini? Pemain masih bisa mengajukan banding baru.')) return;
+      try { await post('/api/admin/appeals/' + a.id + '/decide', { decision: 'reject' }); toast('Banding ditolak.'); route(); }
+      catch (e) { toast(e.message); }
+    };
+  }
+}
+
+// ---------- PANEL ADMIN: TAB HADIAH MASSAL ----------
+async function renderAdminGiftAll() {
+  const [list, appeals] = await Promise.all([api('/api/admin/players'), api('/api/admin/appeals')]);
+  const pending = appeals.appeals.filter((a) => a.status === 'menunggu').length;
+  const recipients = list.players.filter((p) => !p.is_banned);
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Hadiah untuk semua pemain sekaligus.', `
+  <div class="tabs">
+    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
+    <button class="tab" onclick="location.hash='#/admin/appeals'">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
+    <button class="tab active">🎁 Hadiah Massal</button>
+    <button class="tab" onclick="location.hash='#/admin/inbox'">📥 Laporan &amp; Saran</button>
+  </div>
+  <div class="panel"><h3>🎁 HADIAH UNTUK SEMUA PEMAIN</h3>
+    <p class="muted small">Hadiah dikirim ke <b>${recipients.length} pemain</b> yang tidak di-ban (dari ${list.players.length} pemain total). Akun yang di-ban tidak menerima apa-apa. Semua penerima mendapat notifikasi "Hadiah dari admin".</p>
+    <label>JENIS HADIAH<select id="ga-kind">
+      <option value="gold">🪙 Emas</option><option value="usd">💵 USD</option>
+      <option value="item">📦 Barang</option><option value="premium">💎 Hari Premium</option>
+      <option value="energy">⚡ Isi Energi Penuh</option>
+    </select></label>
+    <div id="ga-item-row" class="row" hidden>
+      <select id="ga-commodity" style="flex:2"><option>Makanan</option><option>Senjata</option><option>Tiket</option><option>Gandum Mentah</option><option>Besi Mentah</option><option>Minyak Mentah</option><option>Kapas Mentah</option><option>Kayu</option><option>Batu Bara</option><option>Tembaga Mentah</option></select>
+      <select id="ga-tier"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+    </div>
+    <div id="ga-amount-wrap"><label id="ga-amount-label">JUMLAH EMAS<input id="ga-amount" type="number" min="1" value="50"></label></div>
+    <label>PESAN OPSIONAL (tampil di notifikasi)<input id="ga-message" maxlength="200" placeholder="cth: Terima kasih sudah bermain!"></label>
+    <button class="btn-gold" id="btn-gift-all">🎁 KIRIM KE ${recipients.length} PEMAIN</button>
+  </div>`);
+  const kindSel = $('#ga-kind');
+  const syncKind = () => {
+    const k = kindSel.value;
+    $('#ga-item-row').hidden = k !== 'item';
+    $('#ga-amount-wrap').style.display = k === 'energy' ? 'none' : '';
+    $('#ga-amount-label').firstChild.textContent = k === 'gold' ? 'JUMLAH EMAS' : k === 'usd' ? 'JUMLAH USD' : k === 'item' ? 'JUMLAH BARANG' : k === 'premium' ? 'HARI PREMIUM' : 'JUMLAH';
+  };
+  kindSel.onchange = syncKind;
+  syncKind();
+  $('#btn-gift-all').onclick = async () => {
+    const k = kindSel.value;
+    const body = { kind: k, amount: Number($('#ga-amount').value) || 0, message: $('#ga-message').value.trim() };
+    if (k === 'item') { body.commodity = $('#ga-commodity').value; body.tier = Number($('#ga-tier').value); }
+    const label = k === 'gold' ? `${body.amount} emas` : k === 'usd' ? `${body.amount} USD` : k === 'item' ? `${body.amount}× ${body.commodity} T${body.tier}` : k === 'premium' ? `Premium ${body.amount} hari` : 'isi energi penuh';
+    if (!confirm(`Kirim hadiah ${label} ke ${recipients.length} pemain?`)) return;
+    try {
+      const r = await post('/api/admin/gift-all', body);
+      toast(`Hadiah massal terkirim ke ${r.recipients} pemain.`);
+      route();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+// ---------- PANEL ADMIN: TAB LAPORAN & SARAN (INBOX) ----------
+async function renderAdminInbox(statusFilter) {
+  const [tickets, reports, appeals] = await Promise.all([
+    api('/api/admin/tickets' + (statusFilter ? '?status=' + statusFilter : '')),
+    api('/api/admin/reports'),
+    api('/api/admin/appeals'),
+  ]);
+  const pending = appeals.appeals.filter((a) => a.status === 'menunggu').length;
+  const statusChip = (s) => s === 'baru' ? '🆕 BARU' : s === 'dibaca' ? '👁 DIBACA' : '✅ SELESAI';
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Saran & laporan bug dari pemain, plus laporan chat.', `
+  <div class="tabs">
+    <button class="tab" onclick="location.hash='#/admin'">👥 Pemain</button>
+    <button class="tab" onclick="location.hash='#/admin/appeals'">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
+    <button class="tab" onclick="location.hash='#/admin/gift-all'">🎁 Hadiah Massal</button>
+    <button class="tab active">📥 Laporan &amp; Saran</button>
+  </div>
+  <div class="panel"><h3>🎧 TIKET MEJA BANTUAN</h3>
+    <div class="tabs">
+      ${['', 'baru', 'dibaca', 'selesai'].map((s) => `<button class="tab ${statusFilter === s || (!statusFilter && s === '') ? 'active' : ''}" onclick="location.hash='#/admin/inbox${s ? '?status=' + s : ''}'">${s === '' ? 'SEMUA' : s.toUpperCase()}</button>`).join('')}
+    </div>
+    ${tickets.tickets.length ? tickets.tickets.map((t) => `
+    <div class="panel" data-ticket="${t.id}">
+      <div class="panel-head"><h3>${t.type === 'Laporan bug' ? '🐛' : '💡'} ${esc(t.type)} · ${esc(t.topic)}</h3><span class="chip">${statusChip(t.status)}</span></div>
+      <div class="kv"><span class="k">Dari</span><span class="v">${esc(t.username)} · ${esc(t.publicId)} · ${esc(t.email)}</span></div>
+      <div class="kv"><span class="k">Tanggal</span><span class="v">${fmtDate(t.created_at)}</span></div>
+      <p style="margin-top:8px">${esc(t.details)}</p>
+      <div class="row" style="margin-top:10px">
+        ${t.status !== 'dibaca' ? `<button class="btn-ghost btn-sm" data-tact="dibaca" type="button">👁 Tandai Dibaca</button>` : ''}
+        ${t.status !== 'selesai' ? `<button class="btn-gold btn-sm" data-tact="selesai" type="button">✅ Selesai</button>` : ''}
+      </div>
+      <div class="chat-input" style="margin-top:10px"><input class="t-reply" placeholder="Tulis balasan untuk pemain..." maxlength="1000" autocomplete="off">
+      <button class="btn-gold" data-tact="balas" type="button">KIRIM BALASAN</button></div>
+    </div>`).join('') : '<p class="muted">Belum ada tiket.</p>'}
+  </div>
+  <div class="panel"><h3>🚩 LAPORAN CHAT</h3>
+    ${reports.reports.length ? reports.reports.map((r) => `
+    <div class="kv" style="align-items:flex-start">
+      <span class="k" style="max-width:70%;overflow-wrap:break-word">
+        <b>${esc(r.reporter_name)}</b> melaporkan <b>${esc(r.author_name || '—')}</b> · ${esc(r.reason)}<br>
+        <span class="small">"${esc(r.message_content || '(pesan tidak ditemukan)')}"</span>
+        ${r.details ? `<br><small class="muted">${esc(r.details)}</small>` : ''}
+        <br><small class="muted">${fmtDate(r.created_at)}</small>
+      </span>
+      <span class="v">${r.status === 'open'
+        ? `<button class="btn-gold btn-sm" data-report="${r.id}" type="button">👁 Tandai Ditinjau</button>`
+        : '<span class="chip">✅ DITINJAU</span>'}</span>
+    </div>`).join('') : '<p class="muted">Belum ada laporan chat.</p>'}
+  </div>`);
+  $$('#page [data-ticket]').forEach((panel) => {
+    const tid = Number(panel.dataset.ticket);
+    panel.querySelectorAll('[data-tact]').forEach((btn) => {
+      btn.onclick = async () => {
+        const act = btn.dataset.tact;
+        try {
+          if (act === 'balas') {
+            const text = panel.querySelector('.t-reply').value.trim();
+            if (!text) { toast('Tulis balasan dulu.'); return; }
+            await post('/api/admin/tickets/' + tid + '/reply', { text });
+            toast('Balasan terkirim ke pemain.');
+          } else {
+            await post('/api/admin/tickets/' + tid + '/status', { status: act });
+            toast('Status tiket diubah.');
+          }
+          route();
+        } catch (e) { toast(e.message); }
+      };
+    });
+  });
+  $$('[data-report]').forEach((b) => b.onclick = async () => {
+    try { await post('/api/admin/reports/' + b.dataset.report + '/review'); toast('Laporan ditandai sudah ditinjau.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+}
+
+// Bilah energi bawah menyembunyikan diri saat pengguna scroll ke bawah,
+// supaya harga/tombol yang sedang dibaca tidak tertutup bar; muncul lagi
+// saat scroll ke atas atau saat sudah di dekat atas halaman.
+let lastScrollY = window.scrollY || 0;
+window.addEventListener('scroll', () => {
+  const y = window.scrollY || 0;
+  const bar = document.getElementById('energy-bar');
+  if (bar) bar.classList.toggle('energy-hidden', y > lastScrollY && y > 120);
+  lastScrollY = y;
+}, { passive: true });
 
 boot();
 
@@ -1334,7 +1726,7 @@ async function renderChatRoom(room) {
     const div = document.createElement('div');
     div.className = 'msg';
     div.innerHTML = `
-      <div class="msg-avatar">${esc(m.username[0].toUpperCase())}</div>
+      <div class="msg-avatar">${avatarHtml(m.avatar, m.username, 36)}</div>
       <div class="msg-body">
         <div class="msg-head">
           <span class="msg-name ${m.isPremium ? 'premium-name' : ''}">${esc(m.username)}${m.isPremium ? ' ◆' : ''}</span>
@@ -1414,7 +1806,7 @@ ROUTES.messages = async (otherId) => {
     $('#page').innerHTML = page('PESAN — ' + esc(other?.other_name || '').toUpperCase(), '', `
     <div id="dm-list" style="max-height:55vh;overflow-y:auto">
       ${d.messages.length ? d.messages.map((m) => `
-        <div class="msg"><div class="msg-avatar">${esc(m.from_name[0].toUpperCase())}</div>
+        <div class="msg"><div class="msg-avatar">${avatarHtml(m.from_avatar, m.from_name, 36)}</div>
         <div class="msg-body"><div class="msg-head"><span class="msg-name">${esc(m.from_name)}</span><span class="msg-time">${fmtTime(m.created_at)}</span></div>
         <div class="msg-bubble">${esc(m.content)}</div></div></div>`).join('')
         : '<p class="muted">Belum ada pesan. Mulai percakapan!</p>'}
@@ -1492,13 +1884,19 @@ ROUTES.orgs = async () => {
 // ---------- TOKO ----------
 ROUTES.shop = async () => {
   const s = await api('/api/shop');
-  const wa = (label) => s.waUrl + '?text=' + encodeURIComponent('Halo, saya mau top-up Parlementer: ' + label);
+  // Pesan WhatsApp menyertakan nama warga + ID publik pemain yang login,
+  // supaya admin tahu siapa yang harus diberi paketnya. Bila data pemain
+  // entah bagaimana tidak tersedia, pesan tetap terkirim tanpa nama.
+  const who = (ME?.user?.username && ME?.user?.publicId)
+    ? `. Nama warga: ${ME.user.username} (ID: ${ME.user.publicId})`
+    : '';
+  const wa = (label) => s.waUrl + '?text=' + encodeURIComponent('Halo, saya mau top-up Parlementer: ' + label + who);
   $('#page').innerHTML = page('TOKO PERBENDAHARAAN', 'Top-up diproses manual via WhatsApp. Semua paket bisa dihadiahkan.', `
   ${s.packages.map((p) => `
-  <div class="panel" style="padding-top:0;overflow:hidden">
+  <div class="panel" style="overflow:hidden">
     ${p.best ? '<div class="shop-banner">★ PALING DIMINATI</div>' : ''}
     <div style="display:flex;justify-content:space-between;align-items:flex-start">
-      <div><h3 style="font-size:24px">${esc(p.name)}</h3><p class="muted" style="font-style:italic">${esc(p.tagline)}</p></div>
+      <div style="min-width:0"><h3 style="font-size:24px">${esc(p.name)}</h3><p class="muted" style="font-style:italic">${esc(p.tagline)}</p></div>
       <span class="chip teal">${esc(p.save)}</span>
     </div>
     <div class="kv"><span class="k">💎 Premium ${p.premiumMonths} bulan</span></div>

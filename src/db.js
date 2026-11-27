@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS users (
   pass_hash TEXT NOT NULL,
   referred_by INTEGER,
   referral_code TEXT UNIQUE,
+  avatar TEXT,
   premium_until BIGINT NOT NULL DEFAULT 0,
   is_admin INTEGER NOT NULL DEFAULT 0,
   is_banned INTEGER NOT NULL DEFAULT 0,
@@ -184,6 +185,24 @@ CREATE TABLE IF NOT EXISTS admin_actions (
   target_id INTEGER NOT NULL,
   action TEXT NOT NULL,
   detail TEXT NOT NULL DEFAULT '',
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS appeals (
+  id ${id},
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  ban_reason TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'menunggu',
+  created_at BIGINT NOT NULL,
+  decided_at BIGINT NOT NULL DEFAULT 0,
+  decided_by INTEGER
+);
+CREATE TABLE IF NOT EXISTS appeal_messages (
+  id ${id},
+  appeal_id INTEGER NOT NULL REFERENCES appeals(id),
+  sender_id INTEGER NOT NULL,
+  sender_role TEXT NOT NULL DEFAULT 'pemain',
+  text TEXT NOT NULL,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS citizens (
@@ -523,6 +542,7 @@ CREATE TABLE IF NOT EXISTS support_tickets (
   type TEXT NOT NULL,
   topic TEXT NOT NULL,
   details TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'baru',
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS world (
@@ -618,6 +638,7 @@ export async function initDb() {
     if (isPg) await migrateTimestampsToBigint(t);
     await migrateUserColumns(t);
     await migrateAdminJobs(t);
+    await migrateSupportTickets(t);
     await seed(t);
   });
 }
@@ -630,7 +651,7 @@ export async function initDb() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -673,17 +694,20 @@ async function migrateTimestampsToBigint(t) {
 }
 
 // Migrasikan kolom users yang ditambahkan setelah deploy pertama
-// (referral_code, is_banned, banned_reason, banned_at) untuk database yang
-// sudah terlanjur dibuat dengan skema lama (Neon live + SQLite lama).
+// (referral_code, is_banned, banned_reason, banned_at, avatar) untuk database
+// yang sudah terlanjur dibuat dengan skema lama (Neon live + SQLite lama).
 // Idempotent: kolom yang sudah ada tidak disentuh. Setelah itu:
 //  - semua user yang belum punya kode referral dibuatkan kode unik;
-//  - akun ADMIN_EMAIL selalu ditandai is_admin = 1 (bila sudah terdaftar).
+//  - akun ADMIN_EMAIL selalu ditandai is_admin = 1 (bila sudah terdaftar);
+//  - akun admin tidak boleh berstatus banned — bila ada yang is_banned=1
+//    (mis. ke-ban sebelum flag admin ada), ban-nya dicabut di sini.
 async function migrateUserColumns(t) {
   if (isPg) {
     await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE');
     await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned INTEGER NOT NULL DEFAULT 0');
     await t.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_reason TEXT NOT NULL DEFAULT ''");
     await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at BIGINT NOT NULL DEFAULT 0');
+    await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT');
   } else {
     const cols = await t.sql('PRAGMA table_info(users)');
     const names = new Set(cols.map((c) => c.name));
@@ -691,6 +715,7 @@ async function migrateUserColumns(t) {
     if (!names.has('is_banned')) await t.exec('ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0');
     if (!names.has('banned_reason')) await t.exec("ALTER TABLE users ADD COLUMN banned_reason TEXT NOT NULL DEFAULT ''");
     if (!names.has('banned_at')) await t.exec('ALTER TABLE users ADD COLUMN banned_at BIGINT NOT NULL DEFAULT 0');
+    if (!names.has('avatar')) await t.exec('ALTER TABLE users ADD COLUMN avatar TEXT');
   }
   const missing = await t.sql('SELECT id FROM users WHERE referral_code IS NULL');
   for (const u of missing) {
@@ -698,6 +723,7 @@ async function migrateUserColumns(t) {
     await t.run('UPDATE users SET referral_code = ? WHERE id = ?', [code, u.id]);
   }
   await t.run('UPDATE users SET is_admin = 1 WHERE email = ?', [ADMIN_EMAIL]);
+  await t.run("UPDATE users SET is_banned = 0, banned_reason = '', banned_at = 0 WHERE is_admin = 1 AND is_banned = 1");
 }
 
 // Migrasikan lowongan ADMIN lama (dibayar USD) ke aturan baru (dibayar bahan
@@ -718,6 +744,20 @@ async function migrateAdminJobs(t) {
     await t.run(
       "UPDATE jobs SET salary_type = 'goods', resource = ?, pay_qty = ?, salary = ? WHERE is_admin = 1 AND title = ?",
       [j.resource, j.qty, j.salary, j.title]);
+  }
+}
+
+// Migrasikan tabel support_tickets lama (tanpa kolom status) ke status
+// 'baru'/'dibaca'/'selesai' untuk inbox admin. Idempotent: kolom yang sudah
+// ada tidak disentuh.
+async function migrateSupportTickets(t) {
+  if (isPg) {
+    await t.exec("ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'baru'");
+  } else {
+    const cols = await t.sql('PRAGMA table_info(support_tickets)');
+    if (!cols.some((c) => c.name === 'status')) {
+      await t.exec("ALTER TABLE support_tickets ADD COLUMN status TEXT NOT NULL DEFAULT 'baru'");
+    }
   }
 }
 

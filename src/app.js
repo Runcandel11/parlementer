@@ -6,10 +6,12 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { initDb, isPg } from './db.js';
+import { initDb, isPg, one } from './db.js';
 import { registerCore } from './api-core.js';
 import { registerCivic } from './api-civic.js';
 import { registerAdmin } from './api-admin.js';
+import { registerAppeals } from './api-appeals.js';
+import { getUserIdFromReq } from './util.js';
 import { maybeTick, ensureElections } from './tick.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,9 +42,31 @@ export function createApp() {
   // jalan terus, jadi tidak ada setInterval di sana.
   app.use('/api/', (req, res, next) => { maybeTick().catch(() => {}); next(); });
 
+  // Penjaga akun banned: akun yang di-ban tidak bisa memakai API game apa
+  // pun (klaim, latih, kerja, pasar, chat, dll.) walau sesinya masih hidup.
+  // Yang dikecualikan: auth (login/logout/me), /api/me (layar banned butuh
+  // status akun), sistem banding, dan /api/world (publik). Login akun banned
+  // memang diizinkan (lihat api-core.js) agar pemain bisa membuka layar
+  // banned dan mengajukan banding — tanpa sesi itu banding tidak mungkin.
+  app.use('/api/', async (req, res, next) => {
+    const p = req.path;
+    if (p.startsWith('/auth/') || p === '/me' || p.startsWith('/appeals') ||
+        p.startsWith('/admin/appeals') || p === '/world') return next();
+    const uid = getUserIdFromReq(req);
+    if (!uid) return next(); // tanpa sesi: authRequired di route yang menolak.
+    try {
+      const u = await one('SELECT is_banned FROM users WHERE id = ?', [uid]);
+      if (u?.is_banned) {
+        return res.status(403).json({ error: 'Akun ini dibanned. Ajukan banding untuk memulihkan akses.' });
+      }
+    } catch { /* DB belum siap — biarkan route yang menangani. */ }
+    next();
+  });
+
   registerCore(app);
   registerCivic(app);
   registerAdmin(app);
+  registerAppeals(app);
 
   // Frontend statis + SPA fallback.
   app.use(express.static(path.join(__dirname, '..', 'public')));

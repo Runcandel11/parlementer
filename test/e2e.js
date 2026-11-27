@@ -48,24 +48,28 @@ async function main() {
   try { fs.unlinkSync(DB_PATH + '-shm'); } catch {}
 
   console.log('[e2e] Menyalakan server di port ' + PORT + ' ...');
-  const server = spawn('node', ['server.js'], {
-    cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  let server = null;
   let serverLog = '';
-  server.stdout.on('data', (d) => { serverLog += d; });
-  server.stderr.on('data', (d) => { serverLog += d; });
-
+  async function startServer() {
+    server = spawn('node', ['server.js'], {
+      cwd: ROOT,
+      env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    server.stdout.on('data', (d) => { serverLog += d; });
+    server.stderr.on('data', (d) => { serverLog += d; });
+    // Tunggu server siap.
+    let ready = false;
+    for (let i = 0; i < 40 && !ready; i++) {
+      await sleep(500);
+      try { const r = await fetch(BASE + '/api/world'); ready = r.ok; } catch {}
+    }
+    return ready;
+  }
   const stop = () => { try { server.kill('SIGTERM'); } catch {} };
   process.on('exit', stop);
 
-  // Tunggu server siap.
-  let ready = false;
-  for (let i = 0; i < 40 && !ready; i++) {
-    await sleep(500);
-    try { const r = await fetch(BASE + '/api/world'); ready = r.ok; } catch {}
-  }
+  const ready = await startServer();
   check('Server menyala & /api/world merespons', ready);
   if (!ready) { console.log(serverLog); process.exit(1); }
 
@@ -352,9 +356,15 @@ async function main() {
   check('Admin: ban B dengan alasan', r.status === 200 && r.data.ok);
   const B2 = new Client();
   r = await B2.post('/api/auth/login', { email: 'warga2@test.local', password: 'rahasia123' });
-  check('Login akun banned ditolak + pesan alasan', r.status === 403 && (r.data.error || '').includes('Tes banned'), `status=${r.status} ${r.data.error || ''}`);
+  check('Login akun banned: sesi masuk tapi ditandai banned (agar bisa banding)', r.status === 200 && r.data.banned === true && (r.data.banned_reason || '').includes('Tes banned'), `status=${r.status} banned=${r.data.banned}`);
   r = await B.get('/api/me');
   check('/api/me mengembalikan status banned', r.data.user.is_banned === true && r.data.user.banned_reason === 'Tes banned');
+  r = await B2.post('/api/claim');
+  check('Akun banned tidak bisa klaim pasokan (403)', r.status === 403, r.data.error || '');
+  r = await B2.post('/api/chat/global', { content: 'Saya dibanned tes' });
+  check('Akun banned tidak bisa chat (403)', r.status === 403, r.data.error || '');
+  r = await B2.post('/api/auth/login', { email: 'warga2@test.local', password: 'salah123' });
+  check('Login akun banned dengan password salah tetap ditolak (400)', r.status === 400);
   r = await ADM.post('/api/admin/unban', { user_id: 2 });
   check('Admin: unban B', r.status === 200 && r.data.ok);
   r = await B2.post('/api/auth/login', { email: 'warga2@test.local', password: 'rahasia123' });
@@ -369,6 +379,231 @@ async function main() {
   check('Profil orang lain: statistik referral tidak ditampilkan', r.data.profile.referral === null);
   const html2 = await fetch(BASE + '/').then((x) => x.text());
   check('Form daftar punya field Kode Referral', html2.includes('KODE REFERAL'));
+
+  console.log('\n[15] Sistem banding (appeal) + pengaman admin');
+  r = await ADM.post('/api/admin/ban', { user_id: 2, reason: 'Cheat terdeteksi' });
+  check('Admin: ban B lagi (alasan Cheat terdeteksi)', r.status === 200 && r.data.ok);
+  const B3 = new Client();
+  r = await B3.post('/api/auth/login', { email: 'warga2@test.local', password: 'rahasia123' });
+  check('B banned bisa login (sesi banding)', r.status === 200 && r.data.banned === true);
+  r = await B3.post('/api/appeals', { text: 'pendek' });
+  check('Banding < 10 karakter ditolak (400)', r.status === 400);
+  r = await B3.post('/api/appeals', { text: 'Saya tidak memakai cheat, tolong tinjau kembali akun saya.' });
+  check('B mengajukan banding', r.status === 200 && !!r.data.appealId, `appealId=${r.data.appealId}`);
+  const appealId = r.data.appealId;
+  r = await B3.post('/api/appeals', { text: 'Banding kedua padahal masih menunggu.' });
+  check('Banding kedua saat masih aktif ditolak (400)', r.status === 400);
+  r = await B3.get('/api/appeals/mine');
+  check('B melihat 1 banding menunggu + thread berisi pesannya', r.data.appeals.length === 1 && r.data.appeals[0].status === 'menunggu' && r.data.appeals[0].messages.length === 1, `n=${r.data.appeals?.length}`);
+  r = await R.get('/api/appeals/' + appealId);
+  check('Pemain lain tidak bisa melihat banding orang lain (403)', r.status === 403);
+  r = await B3.post('/api/appeals/' + appealId + '/message', { text: 'Tambahan bukti: saya main sendiri.' });
+  check('B membalas di thread bandingnya', r.status === 200 && r.data.ok);
+  r = await ADM.get('/api/admin/appeals');
+  check('Admin melihat daftar banding (1, menunggu)', r.status === 200 && r.data.appeals.length === 1 && r.data.appeals[0].status === 'menunggu', `n=${r.data.appeals?.length}`);
+  r = await ADM.post('/api/admin/appeals/' + appealId + '/message', { text: 'Kami tinjau dulu ya.' });
+  check('Admin membalas banding', r.status === 200 && r.data.ok);
+  r = await B3.get('/api/appeals/mine');
+  check('Thread kini 3 pesan (banding + balasan B + balasan admin)', r.data.appeals[0].messages.length === 3, `n=${r.data.appeals[0].messages?.length}`);
+  r = await R.post('/api/admin/appeals/' + appealId + '/message', { text: 'bukan admin' });
+  check('Non-admin tidak bisa membalas banding (403)', r.status === 403);
+  r = await ADM.post('/api/admin/appeals/' + appealId + '/decide', { decision: 'reject' });
+  check('Admin menolak banding', r.status === 200 && r.data.status === 'ditolak');
+  r = await B3.post('/api/appeals/' + appealId + '/message', { text: 'balasan setelah ditolak' });
+  check('Balasan setelah banding diputuskan ditolak (400)', r.status === 400);
+  r = await B3.post('/api/appeals', { text: 'Saya ajukan banding baru dengan bukti lengkap.' });
+  check('Setelah ditolak, pemain bisa banding lagi', r.status === 200 && !!r.data.appealId);
+  const appealId2 = r.data.appealId;
+  r = await ADM.post('/api/admin/appeals/' + appealId2 + '/decide', { decision: 'accept' });
+  check('Admin menerima banding kedua → ban dicabut', r.status === 200 && r.data.status === 'diterima');
+  r = await B3.get('/api/me');
+  check('B tidak lagi banned setelah banding diterima', r.data.user.is_banned === false);
+  const B4 = new Client();
+  r = await B4.post('/api/auth/login', { email: 'warga2@test.local', password: 'rahasia123' });
+  check('B bisa login normal lagi setelah unban', r.status === 200 && r.data.ok && !r.data.banned);
+  r = await B4.post('/api/claim');
+  check('B bisa klaim pasokan lagi setelah unban', r.status === 200 && r.data.ok);
+
+  // Pengaman admin: tandai admin banned langsung di DB, restart server
+  // (initDb jalan di boot) — migrasi harus mencabut ban admin itu.
+  const dbBan = new DatabaseSync(DB_PATH);
+  dbBan.prepare('UPDATE users SET is_banned = 1, banned_reason = ? WHERE id = ?').run('tes migrasi', 7);
+  dbBan.close();
+  stop();
+  await sleep(500);
+  const upAgain = await startServer();
+  check('Server restart setelah migrasi ban admin', upAgain);
+  r = await ADM.get('/api/me');
+  check('Migrasi mencabut ban akun admin (is_banned=false)', r.data.user.is_banned === false, `is_banned=${r.data.user?.is_banned}`);
+  r = await ADM.post('/api/admin/ban', { user_id: 7, reason: 'coba ban admin' });
+  check('Endpoint ban tetap menolak admin (400)', r.status === 400);
+
+  console.log('\n[16] Foto profil (avatar)');
+  // A logout di [13], jadi login lagi dulu.
+  r = await A.post('/api/auth/login', { email: 'warga1@test.local', password: 'rahasia123' });
+  check('A login lagi setelah logout di [13]', r.status === 200 && r.data.ok);
+  const TINY_JPEG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAUAQEAAAAAAAAAAAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8AvwH/2Q==';
+  r = await A.post('/api/profile/avatar', { avatar: TINY_JPEG });
+  check('Upload avatar JPEG kecil berhasil', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.get('/api/profile/warga_satu');
+  check('Profil menampilkan avatar yang diupload', r.data.profile.avatar === TINY_JPEG);
+  r = await A.get('/api/me');
+  check('/api/me membawa avatar', r.data.user.avatar === TINY_JPEG);
+  r = await A.post('/api/chat/global', { content: 'Pesan dengan avatar baru tes' });
+  check('A kirim pesan chat (untuk cek avatar)', r.status === 200);
+  await sleep(6000); // anti-spam chat 5 detik
+  r = await B.get('/api/chat/global');
+  const withAvatar = r.data.messages.find((m) => m.username === 'warga_satu' && m.content === 'Pesan dengan avatar baru tes');
+  check('Pesan chat membawa avatar pengirim', !!withAvatar && withAvatar.avatar === TINY_JPEG);
+  r = await ADM.get('/api/admin/players');
+  const aPlayer = r.data.players.find((p) => p.username === 'warga_satu');
+  check('Daftar pemain admin menampilkan avatar', !!aPlayer && aPlayer.avatar === TINY_JPEG);
+  const bigBuf = Buffer.alloc(101 * 1024, 0);
+  bigBuf[0] = 0xFF; bigBuf[1] = 0xD8; bigBuf[2] = 0xFF;
+  const bigJpeg = 'data:image/jpeg;base64,' + bigBuf.toString('base64');
+  r = await A.post('/api/profile/avatar', { avatar: bigJpeg });
+  check('Avatar > 100 KB ditolak (400)', r.status === 400, r.data.error || '');
+  r = await A.post('/api/profile/avatar', { avatar: 'data:text/plain;base64,SGVsbG8=' });
+  check('Bukan gambar ditolak (400)', r.status === 400);
+  r = await A.post('/api/profile/avatar', { avatar: 'bukan-data-url' });
+  check('Data URL tidak valid ditolak (400)', r.status === 400);
+  r = await B.post('/api/profile/avatar', { avatar: TINY_JPEG });
+  check('B upload avatar sendiri berhasil', r.status === 200 && r.data.ok);
+  r = await A.get('/api/profile/warga_satu');
+  check('Avatar A tetap milik A (tidak tertimpa B)', r.data.profile.avatar === TINY_JPEG);
+  r = await B.get('/api/profile/warga_dua');
+  check('Avatar B kini terisi', r.data.profile.avatar === TINY_JPEG);
+  r = await A.post('/api/profile/avatar/delete');
+  check('Hapus avatar berhasil', r.status === 200 && r.data.ok);
+  r = await A.get('/api/profile/warga_satu');
+  check('Profil A kembali tanpa avatar', !r.data.profile.avatar);
+
+  console.log('\n[17] Jenis HADIAH vs PEMBELIAN + hadiah massal + bahan mentah');
+  r = await ADM.post('/api/admin/gold', { user_id: 3, amount: 100, kind: 'hadiah' });
+  check('Admin: beri 100 emas (hadiah)', r.status === 200 && r.data.ok);
+  r = await R.get('/api/notifications');
+  const nGift = r.data.notifications.find((n) => n.title === 'Hadiah dari admin' && (n.content || '').includes('+100 emas'));
+  check('Notifikasi hadiah emas: "Hadiah dari admin"', !!nGift, nGift?.content || '');
+  r = await ADM.post('/api/admin/gold', { user_id: 3, amount: 100, kind: 'pembelian' });
+  check('Admin: beri 100 emas (pembelian)', r.status === 200 && r.data.ok);
+  r = await R.get('/api/notifications');
+  const nBuy = r.data.notifications.find((n) => n.title === 'Pembelian diterima' && (n.content || '').includes('100 emas diterima dari pembelian'));
+  check('Notifikasi pembelian emas: "Pembelian diterima"', !!nBuy, nBuy?.content || '');
+  check('Notifikasi pembelian tidak mengandung kata hadiah', !!nBuy && !/hadiah/i.test(nBuy.title + ' ' + nBuy.content));
+  r = await ADM.post('/api/admin/usd', { user_id: 3, amount: 25, kind: 'pembelian' });
+  check('Admin: beri 25 USD (pembelian)', r.status === 200 && r.data.ok);
+  r = await R.get('/api/notifications');
+  const nBuyUsd = r.data.notifications.find((n) => n.title === 'Pembelian diterima' && (n.content || '').includes('25 USD diterima dari pembelian'));
+  check('Notifikasi pembelian USD', !!nBuyUsd);
+  r = await ADM.post('/api/admin/item', { user_id: 3, commodity: 'Senjata', tier: 1, qty: 5, kind: 'pembelian' });
+  check('Admin: beri 5× Senjata T1 (pembelian)', r.status === 200 && r.data.ok);
+  r = await R.get('/api/notifications');
+  const nBuyItem = r.data.notifications.find((n) => n.title === 'Pembelian diterima' && (n.content || '').includes('5× Senjata T1 diterima dari pembelian'));
+  check('Notifikasi pembelian barang: "5× Senjata T1 diterima dari pembelian"', !!nBuyItem);
+  r = await R.get('/api/inventory');
+  const senjataR = r.data.items.find((i) => i.name === 'Senjata');
+  check('Inventaris R: Senjata 3 → 8', senjataR && senjataR.qty === 8, `senjata=${senjataR?.qty}`);
+  r = await ADM.post('/api/admin/premium', { user_id: 3, months: 1, kind: 'pembelian' });
+  check('Admin: beri Premium 1 bulan (pembelian)', r.status === 200 && r.data.ok);
+  r = await R.get('/api/notifications');
+  const nBuyPrem = r.data.notifications.find((n) => n.title === 'Pembelian diterima' && (n.content || '').includes('Premium 1 bulan diterima dari pembelian'));
+  check('Notifikasi pembelian premium', !!nBuyPrem);
+  r = await ADM.post('/api/admin/energy', { user_id: 3, kind: 'pembelian' });
+  check('Admin: isi energi (pembelian)', r.status === 200 && r.data.ok);
+  r = await R.get('/api/notifications');
+  const nBuyEn = r.data.notifications.find((n) => n.title === 'Pembelian diterima' && (n.content || '').includes('Energi diisi penuh'));
+  check('Notifikasi pembelian energi', !!nBuyEn);
+  r = await ADM.get('/api/admin/actions');
+  const logBuy = r.data.actions.find((a) => a.action === 'gold' && (a.detail || '').includes('(pembelian)'));
+  check('Log admin mencatat jenis pembelian', !!logBuy, logBuy?.detail || '');
+  const logGift = r.data.actions.find((a) => a.action === 'gold' && (a.detail || '').includes('(hadiah)'));
+  check('Log admin mencatat jenis hadiah', !!logGift, logGift?.detail || '');
+  r = await ADM.post('/api/admin/item', { user_id: 3, commodity: 'Besi Mentah', tier: 1, qty: 10, kind: 'hadiah' });
+  check('Admin: beri 10× Besi Mentah T1 (bahan mentah)', r.status === 200 && r.data.ok, r.data.error || '');
+  r = await R.get('/api/inventory');
+  const besiR = r.data.items.find((i) => i.name === 'Besi Mentah');
+  check('Inventaris R: 10× Besi Mentah T1', besiR && besiR.qty === 10 && besiR.tier === 1, `besi=${besiR?.qty}`);
+  r = await ADM.post('/api/admin/item', { user_id: 3, commodity: 'Barang Palsu', tier: 1, qty: 5 });
+  check('Barang tidak dikenal ditolak (400)', r.status === 400);
+  r = await ADM.post('/api/admin/ban', { user_id: 6, reason: 'Tes hadiah massal' });
+  check('Admin: ban Y untuk tes hadiah massal', r.status === 200 && r.data.ok);
+  const beforeR = (await R.get('/api/me')).data.citizen.gold;
+  const beforeY = (await Y.get('/api/me')).data.citizen.gold;
+  r = await ADM.post('/api/admin/gift-all', { kind: 'gold', amount: 50, message: 'Terima kasih sudah bermain!' });
+  check('Hadiah massal +50 emas terkirim (6 penerima)', r.status === 200 && r.data.ok && r.data.recipients === 6, `recipients=${r.data.recipients}`);
+  r = await R.get('/api/me');
+  check('R menerima +50 emas dari hadiah massal', r.data.citizen.gold === beforeR + 50, `emas=${r.data.citizen.gold} sebelum=${beforeR}`);
+  r = await Y.get('/api/me');
+  check('Y yang di-ban TIDAK menerima hadiah massal', r.data.citizen.gold === beforeY, `emas=${r.data.citizen.gold} sebelum=${beforeY}`);
+  r = await R.get('/api/notifications');
+  const nMass = r.data.notifications.find((n) => n.title === 'Hadiah dari admin' && (n.content || '').includes('+50 emas'));
+  check('Notifikasi hadiah massal: "Hadiah dari admin"', !!nMass);
+  r = await ADM.get('/api/admin/actions');
+  check('Log admin mencatat hadiah massal', r.data.actions.some((a) => a.action === 'gift_all'));
+  r = await ADM.post('/api/admin/gift-all', { kind: 'item', commodity: 'Kayu', tier: 1, amount: 5 });
+  check('Hadiah massal 5× Kayu T1 terkirim', r.status === 200 && r.data.ok);
+  r = await R.get('/api/inventory');
+  const kayuR = r.data.items.find((i) => i.name === 'Kayu');
+  check('Inventaris R: 5× Kayu T1 dari hadiah massal', kayuR && kayuR.qty === 5, `kayu=${kayuR?.qty}`);
+  r = await ADM.post('/api/admin/gift-all', { kind: 'gold', amount: 0 });
+  check('Hadiah massal jumlah 0 ditolak (400)', r.status === 400);
+  r = await ADM.post('/api/admin/gift-all', { kind: 'gold', amount: 1000001 });
+  check('Hadiah massal di atas maks ditolak (400)', r.status === 400);
+  r = await B.post('/api/admin/gift-all', { kind: 'gold', amount: 50 });
+  check('Non-admin tidak bisa hadiah massal (403)', r.status === 403);
+  r = await ADM.post('/api/admin/unban', { user_id: 6 });
+  check('Admin: unban Y kembali', r.status === 200 && r.data.ok);
+
+  console.log('\n[18] Inbox admin: tiket Meja Bantuan + laporan chat');
+  r = await A.post('/api/support', { type: 'Saran', topic: 'Ekonomi & Pasar', details: 'Saran tes inbox admin ini cukup panjang.' });
+  check('A mengirim tiket saran ke Meja Bantuan', r.status === 200 && r.data.ok, r.data.error || '');
+  r = await B.get('/api/admin/tickets');
+  check('Pemain biasa tidak bisa membuka daftar tiket (403)', r.status === 403);
+  r = await ADM.get('/api/admin/tickets');
+  const ticket = r.data.tickets.find((t) => t.username === 'warga_satu' && t.type === 'Saran');
+  check('Admin melihat tiket A (status baru, info pemain)', r.status === 200 && !!ticket && ticket.status === 'baru' && ticket.publicId === 'PL-000001', `status=${ticket?.status} id=${ticket?.publicId}`);
+  const ticketId = ticket.id;
+  r = await ADM.post('/api/admin/tickets/' + ticketId + '/reply', { text: 'Terima kasih, saranmu kami tampung.' });
+  check('Admin membalas tiket', r.status === 200 && r.data.ok);
+  r = await A.get('/api/notifications');
+  const nReply = r.data.notifications.find((n) => n.title === 'Balasan dari Admin' && (n.content || '').includes('Terima kasih, saranmu kami tampung.'));
+  check('A mendapat notifikasi "Balasan dari Admin"', !!nReply, nReply?.content || '');
+  r = await ADM.get('/api/admin/tickets?status=dibaca');
+  check('Tiket berubah jadi dibaca setelah dibalas', r.data.tickets.some((t) => t.id === ticketId), `n=${r.data.tickets?.length}`);
+  r = await ADM.post('/api/admin/tickets/' + ticketId + '/status', { status: 'selesai' });
+  check('Admin menandai tiket selesai', r.status === 200 && r.data.status === 'selesai');
+  r = await ADM.get('/api/admin/tickets?status=selesai');
+  check('Tiket tampil di filter selesai', r.data.tickets.some((t) => t.id === ticketId));
+  r = await ADM.post('/api/admin/tickets/' + ticketId + '/status', { status: 'ngawur' });
+  check('Status tiket tidak valid ditolak (400)', r.status === 400);
+  r = await ADM.post('/api/admin/tickets/99999/reply', { text: 'tes' });
+  check('Balas tiket tidak ada ditolak (404)', r.status === 404);
+  await sleep(6000); // anti-spam chat 5 detik (pesan terakhir A di [16])
+  r = await B.get('/api/chat/global');
+  const aMsg = r.data.messages.find((m) => m.username === 'warga_satu' && m.content === 'Pesan dengan avatar baru tes');
+  check('B menemukan pesan A untuk dilaporkan', !!aMsg);
+  r = await B.post('/api/chat/report', { message_id: aMsg.id, reason: 'Spam', details: 'tes laporan inbox' });
+  check('B melaporkan pesan A', r.status === 200 && r.data.ok);
+  r = await ADM.get('/api/admin/reports');
+  const rep = r.data.reports.find((x) => x.message_content === 'Pesan dengan avatar baru tes' && x.reporter_name === 'warga_dua');
+  check('Admin melihat laporan chat (pesan + pelapor + alasan)', r.status === 200 && !!rep && rep.reason === 'Spam', `reason=${rep?.reason}`);
+  const repId = rep.id;
+  r = await ADM.post('/api/admin/reports/' + repId + '/review');
+  check('Admin menandai laporan ditinjau', r.status === 200 && r.data.status === 'reviewed');
+  r = await ADM.get('/api/admin/reports');
+  check('Laporan tampil sebagai sudah ditinjau', r.data.reports.find((x) => x.id === repId)?.status === 'reviewed');
+  r = await ADM.post('/api/admin/reports/' + repId + '/review');
+  check('Laporan yang sudah ditinjau tidak bisa ditinjau lagi (400)', r.status === 400);
+  r = await B.get('/api/admin/reports');
+  check('Pemain biasa tidak bisa membuka daftar laporan (403)', r.status === 403);
+
+  console.log('\n[19] Toko: endpoint shop + data paket');
+  r = await A.get('/api/shop');
+  check('GET /api/shop 200 (butuh login)', r.status === 200 && Array.isArray(r.data.packages));
+  check('Toko punya 3 paket + 4 pilihan premium', r.data.packages?.length === 3 && r.data.premium?.length === 4);
+  const deluxe = r.data.packages.find((p) => p.id === 'deluxe');
+  check('Paket Deluxe: best, Rp50.000, HEMAT 14%', deluxe?.best === true && deluxe?.price === 50000 && deluxe?.save === 'HEMAT 14%');
+  check('waUrl top-up mengarah ke nomor admin', (r.data.waUrl || '').startsWith('https://wa.me/6285220743283'));
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

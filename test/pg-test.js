@@ -117,6 +117,47 @@ console.log('\n[6] Agregat (dipakai dashboard/pers)');
 const agg = await one('SELECT COUNT(*) AS tx, COALESCE(SUM(qty),0) AS units FROM market_tx');
 check('Agregat market_tx berjalan (0 transaksi)', Number(agg.tx) === 0);
 
+console.log('\n[7] Banding & avatar di dialek pg');
+const ap = await run(
+  'INSERT INTO appeals (user_id, ban_reason, text, status, created_at) VALUES (?,?,?,?,?) RETURNING id',
+  [user.id, 'cheat', 'Saya tidak memakai cheat, tolong tinjau.', 'menunggu', Date.now()]);
+check('Banding dibuat', typeof ap.id === 'number', `appealId=${ap.id}`);
+await run(
+  'INSERT INTO appeal_messages (appeal_id, sender_id, sender_role, text, created_at) VALUES (?,?,?,?,?) RETURNING id',
+  [ap.id, user.id, 'pemain', 'Saya tidak memakai cheat, tolong tinjau.', Date.now()]);
+await run(
+  'INSERT INTO appeal_messages (appeal_id, sender_id, sender_role, text, created_at) VALUES (?,?,?,?,?) RETURNING id',
+  [ap.id, user2.id, 'admin', 'Kami tinjau dulu ya.', Date.now()]);
+const apMsgs = await sql('SELECT * FROM appeal_messages WHERE appeal_id = ? ORDER BY created_at ASC', [ap.id]);
+check('Thread banding 2 pesan (pemain + admin)', apMsgs.length === 2 && apMsgs[0].sender_role === 'pemain' && apMsgs[1].sender_role === 'admin');
+await run('UPDATE appeals SET status = ?, decided_at = ? WHERE id = ?', ['diterima', Date.now(), ap.id]);
+const apDone = await one('SELECT status FROM appeals WHERE id = ?', [ap.id]);
+check('Banding bisa diputuskan (diterima)', apDone.status === 'diterima');
+await run('UPDATE users SET avatar = ? WHERE id = ?', ['data:image/jpeg;base64,/9j/4AAQ', user.id]);
+const av = await one('SELECT avatar FROM users WHERE id = ?', [user.id]);
+check('Kolom avatar tersimpan di users', av.avatar === 'data:image/jpeg;base64,/9j/4AAQ');
+await run('UPDATE users SET avatar = NULL WHERE id = ?', [user.id]);
+const av2 = await one('SELECT avatar FROM users WHERE id = ?', [user.id]);
+check('Avatar bisa dihapus (NULL)', av2.avatar === null);
+
+console.log('\n[8] Inbox admin: tiket Meja Bantuan & laporan chat di dialek pg');
+const tk = await run(
+  'INSERT INTO support_tickets (citizen_id, type, topic, details, created_at) VALUES (?,?,?,?,?) RETURNING id',
+  [citizen.id, 'Saran', 'Ekonomi & Pasar', 'Saran tes inbox pg.', Date.now()]);
+check('Tiket dibuat', typeof tk.id === 'number', `ticketId=${tk.id}`);
+const tk0 = await one('SELECT status FROM support_tickets WHERE id = ?', [tk.id]);
+check('Status awal tiket "baru"', tk0.status === 'baru', `status=${tk0.status}`);
+await run("UPDATE support_tickets SET status = 'dibaca' WHERE id = ?", [tk.id]);
+const tk1 = await one('SELECT status FROM support_tickets WHERE id = ?', [tk.id]);
+check('Status tiket bisa diubah ke dibaca', tk1.status === 'dibaca');
+await run('INSERT INTO chat_reports (reporter_id, message_id, reason, details, created_at) VALUES (?,?,?,?,?) RETURNING id',
+  [cit2.id, msg.id, 'Spam', 'tes laporan inbox', Date.now()]);
+const rep0 = await one('SELECT status FROM chat_reports WHERE reporter_id = ? ORDER BY id DESC', [cit2.id]);
+check('Status awal laporan chat "open"', rep0.status === 'open', `status=${rep0.status}`);
+await run("UPDATE chat_reports SET status = 'reviewed' WHERE reporter_id = ?", [cit2.id]);
+const rep1 = await one('SELECT status FROM chat_reports WHERE reporter_id = ? ORDER BY id DESC', [cit2.id]);
+check('Laporan chat bisa ditandai ditinjau', rep1.status === 'reviewed');
+
 await closeDb();
 console.log(`\n[pg-test] SELESAI: ${passed} lolos, ${failed} gagal`);
 process.exit(failed ? 1 : 0);

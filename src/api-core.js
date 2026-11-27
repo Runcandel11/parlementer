@@ -147,12 +147,22 @@ export function registerCore(app) {
     if (!isValidEmail(email) || !password) return res.status(400).json({ error: 'Email dan password wajib diisi.' });
     const user = await one('SELECT * FROM users WHERE email = ?', [email.toLowerCase()]);
     if (!user) return res.status(400).json({ error: 'Email belum terdaftar.' });
-    if (user.is_banned) return res.status(403).json({ error: `Akun ini dibanned: ${user.banned_reason || 'tanpa alasan yang dicantumkan'}.` });
+    // Password dicek DULU (sebelum status banned) agar status ban tidak bisa
+    // ditebak tanpa password. Akun banned TETAP diberi sesi login — tapi
+    // hanya untuk membuka layar banned + sistem banding; semua API game
+    // diblokir middleware penjaga banned (lihat src/app.js). Tanpa sesi ini,
+    // pemain yang ke-ban tidak akan pernah bisa mengajukan banding.
     const ok = await bcrypt.compare(password, user.pass_hash);
     if (!ok) return res.status(400).json({ error: 'Password salah.' });
     res.cookie(COOKIE_NAME, signToken(user.id), cookieOptions());
     const citizen = await loadCitizen(user.id);
-    res.json({ ok: true, user: { id: user.id, publicId: publicId(user.id), email: user.email, username: user.username }, citizen });
+    res.json({
+      ok: true,
+      banned: !!user.is_banned,
+      banned_reason: user.banned_reason || '',
+      user: { id: user.id, publicId: publicId(user.id), email: user.email, username: user.username },
+      citizen,
+    });
   }));
 
   app.post('/api/auth/logout', r(async (req, res) => {
@@ -166,6 +176,7 @@ export function registerCore(app) {
     res.json({
       user: {
         id: citizen.user_id, publicId: publicId(citizen.user_id), email: citizen.email, username: citizen.username,
+        avatar: citizen.avatar || null,
         is_admin: !!citizen.is_admin, is_banned: !!citizen.is_banned, banned_reason: citizen.banned_reason || '',
       },
       citizen,
@@ -195,6 +206,7 @@ export function registerCore(app) {
     res.json({
       user: {
         id: c.user_id, publicId: publicId(c.user_id), email: c.email, username: c.username,
+        avatar: c.avatar || null,
         is_admin: !!c.is_admin, is_banned: !!c.is_banned, banned_reason: c.banned_reason || '',
       },
       citizen: { ...c, isPremium },
@@ -359,7 +371,7 @@ export function registerCore(app) {
 
   // ---------- PROFIL ----------
   app.get('/api/profile/:username', authRequired, r(async (req, res) => {
-    const u = await one('SELECT u.id, u.username, u.premium_until, u.referral_code, c.* FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.username = ?', [req.params.username]);
+    const u = await one('SELECT u.id, u.username, u.avatar, u.premium_until, u.referral_code, c.* FROM users u JOIN citizens c ON c.user_id = u.id WHERE u.username = ?', [req.params.username]);
     if (!u) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
     const region = await one('SELECT name FROM regions WHERE id = ?', [u.region_id]);
     const party = u.party_id ? await one('SELECT name, tag FROM parties WHERE id = ?', [u.party_id]) : null;
@@ -388,6 +400,40 @@ export function registerCore(app) {
     if (taken) return res.status(400).json({ error: 'Nama ini sudah dipakai.' });
     await run('UPDATE users SET username = ? WHERE id = ?', [name, c.user_id]);
     await run('UPDATE citizens SET gold = gold - 50 WHERE id = ?', [c.id]);
+    res.json({ ok: true });
+  }));
+
+  // ---------- FOTO PROFIL ----------
+  // Simpan sebagai data URL di kolom users.avatar — tanpa layanan baru
+  // (Vercel serverless tidak punya filesystem permanen). Browser sudah
+  // me-resize/crop gambar jadi persegi 256×256 sebelum mengirim.
+  // Batas: data URL gambar (JPEG/PNG/WebP) yang valid, ≤ 100 KB.
+  // Hanya untuk akun sendiri — tidak ada parameter target, selalu req.userId.
+  const AVATAR_MAX_BYTES = 100 * 1024;
+  function parseAvatarDataUrl(dataUrl) {
+    if (typeof dataUrl !== 'string') return null;
+    const m = dataUrl.match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
+    if (!m) return null;
+    let buf;
+    try { buf = Buffer.from(m[2], 'base64'); } catch { return null; }
+    if (buf.length === 0 || buf.length > AVATAR_MAX_BYTES) return null;
+    // Periksa magic bytes agar benar-benar file gambar, bukan teks lain.
+    const isJpeg = buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
+    const isPng = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
+    const isWebp = buf.length > 11 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+    if (!isJpeg && !isPng && !isWebp) return null;
+    return { bytes: buf.length, dataUrl };
+  }
+  app.post('/api/profile/avatar', authRequired, r(async (req, res) => {
+    const parsed = parseAvatarDataUrl(req.body?.avatar);
+    if (!parsed) {
+      return res.status(400).json({ error: 'Foto harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 100 KB.' });
+    }
+    await run('UPDATE users SET avatar = ? WHERE id = ?', [parsed.dataUrl, req.userId]);
+    res.json({ ok: true, bytes: parsed.bytes });
+  }));
+  app.post('/api/profile/avatar/delete', authRequired, r(async (req, res) => {
+    await run('UPDATE users SET avatar = NULL WHERE id = ?', [req.userId]);
     res.json({ ok: true });
   }));
 

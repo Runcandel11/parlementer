@@ -34,12 +34,26 @@ export function readToken(req) {
 
 export async function loadCitizen(userId) {
   const c = await one(
-    `SELECT c.*, u.username, u.email, u.premium_until, u.is_admin,
+    `SELECT c.*, u.username, u.email, u.premium_until, u.is_admin, u.avatar,
        u.referral_code, u.is_banned, u.banned_reason, u.banned_at
      FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.user_id = ?`,
     [userId],
   );
   return c || null;
+}
+
+// Ambil userId dari token sesi tanpa melempar error — untuk middleware yang
+// hanya perlu tahu "siapa yang login" (mis. penjaga akun banned). Kembalikan
+// null bila tidak ada token atau token tidak valid.
+export function getUserIdFromReq(req) {
+  const token = readToken(req);
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    return payload.uid;
+  } catch {
+    return null;
+  }
 }
 
 // ID publik pemain: PL- + nomor urut 6 digit dari id database (mis. PL-000001).
