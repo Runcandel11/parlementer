@@ -5,3 +5,4 @@ data/
 
 # Laporan audit internal — sengaja untracked (berisi temuan keamanan)
 docs/AUDIT.md
+docs/parlamentum-ui-reference/
