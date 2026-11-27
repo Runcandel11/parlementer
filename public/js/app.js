@@ -1016,6 +1016,7 @@ ROUTES.dashboard = async () => {
       rb.innerHTML = `
       <p class="lbl-gold" style="margin:0">DITEMPATKAN DI</p>
       <h4 style="font-size:22px">${esc(r.name)}</h4>
+      ${ME.travel ? `<p class="teal-text small">✈️ Dalam perjalanan ke ${esc(ME.travel.toRegionName)} — tiba ${fmtCountdown(ME.travel.remainingMs)} lagi.</p>` : ''}
       <p class="muted">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Wilayah Merdeka'}</p>
       <div class="kv"><span class="k">Skor Kota</span><span class="v"><span class="region-score">${r.city_score}<small>/10</small></span></span></div>
       <div class="kv"><span class="k">Peringkat</span><span class="v">${r.rank}/17 wilayah</span></div>
@@ -2150,7 +2151,11 @@ ROUTES.companies = async () => {
 // ---------- PETA & WILAYAH ----------
 ROUTES.map = async () => {
   const data = await api('/api/regions');
+  // Banner transit (27 Nov 2026): selama bepergian, tombol travel di
+  // semua kartu nonaktif — warga tiba saat waktunya habis.
+  const transitBanner = ME.travel ? `<div class="panel"><p class="teal-text" style="margin:0">✈️ Dalam perjalanan ke <b>${esc(ME.travel.toRegionName)}</b> — tiba dalam ${fmtCountdown(ME.travel.remainingMs)} lagi.</p></div>` : '';
   $('#page').innerHTML = page('PETA DUNIA', '17 wilayah merdeka. Klik wilayah untuk detail dan bepergian.', `
+  ${transitBanner}
   <div class="panel"><h3>🔍 CARI WILAYAH</h3>
     <input id="region-search" placeholder="Cari wilayah...">
   </div>
@@ -2161,7 +2166,8 @@ ROUTES.map = async () => {
       <p class="muted small">${r.population} warga · ${r.companies} perusahaan · Pemberontakan ${r.rebellion}/5${r.resource_bonus ? ' · Bonus: ' + esc(r.resource_bonus) : ''}</p>
       <p class="muted small">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Wilayah Merdeka'}</p>
       <div class="row"><button class="btn-gold btn-sm" data-goto="#/regions/${r.id}">Lihat Wilayah</button>
-      ${r.id === data.mine ? '<span class="chip teal">📍 KAMU DI SINI</span>' : `<button class="btn-ghost btn-sm" data-travel="${r.id}">Bepergian (1 🎫)</button>`}</div>
+      ${r.id === data.home ? '<span class="chip gold">🏠 KEWARGANEGARAAN</span>' : ''}
+      ${r.id === data.mine ? '<span class="chip teal">📍 KAMU DI SINI</span>' : ME.travel ? '<span class="chip">✈️ Dalam perjalanan</span>' : `<button class="btn-ghost btn-sm" data-travel="${r.id}">Bepergian (~${r.travelMinutes} mnt · ${data.travelTickets || 1} 🎫)</button>`}</div>
     </div>`).join('')}
   </div>`);
   $('#region-search').addEventListener('input', (e) => {
@@ -2169,7 +2175,7 @@ ROUTES.map = async () => {
     $('.region-card').forEach((el) => { el.style.display = el.dataset.name.includes(q) ? '' : 'none'; });
   });
   $$('[data-travel]').forEach((b) => b.onclick = async () => {
-    try { const r = await post('/api/regions/travel', { region_id: Number(b.dataset.travel) }); toast(`Kamu sekarang di ${r.region}.`); await refreshMe(); route(); }
+    try { const r = await post('/api/regions/travel', { region_id: Number(b.dataset.travel) }); toast(`Dalam perjalanan ke ${r.region} — tiba dalam ~${r.travelMinutes} menit.`); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   });
 };
@@ -2201,7 +2207,15 @@ ROUTES.regions = async (id) => {
       <div class="kv"><span class="k">Perbatasan</span><span class="v">Terbuka</span></div>
     </div>
     <div class="panel"><h3>✈️ PERJALANAN</h3>
-      ${d.mine ? '<p class="muted">Kamu di sini.</p>' : `<button class="btn-gold" id="btn-travel">PINDAH KE SINI (${d.travelTickets || 1} 🎫)</button>`}
+      ${d.mine
+        ? `<p class="muted">Kamu di sini.</p>${d.home
+          ? '<p class="teal-text small">🏠 Ini wilayah kewarganegaraanmu.</p>'
+          : `<button class="btn-gold" id="btn-move">PINDAH KEWARGANEGARAAN KE SINI</button><p class="muted small">Kewarganegaraanmu pindah ke ${esc(r.name)} — negara, pajak, dan hak memilihmu mengikuti wilayah ini. Bisa pindah lagi setelah 7 hari. Gratis.</p>`}`
+        : ME.travel && ME.travel.toRegionId === r.id
+          ? `<p class="teal-text">✈️ Dalam perjalanan ke sini — tiba dalam ${fmtCountdown(ME.travel.remainingMs)} lagi.</p>`
+          : ME.travel
+            ? `<p class="muted">✈️ Kamu sedang dalam perjalanan ke ${esc(ME.travel.toRegionName)} — tiba dalam ${fmtCountdown(ME.travel.remainingMs)} lagi.</p>`
+            : `<button class="btn-gold" id="btn-travel">BEPERGIAN KE SINI (~${d.travelMinutes} mnt · ${d.travelTickets || 1} 🎫)</button><p class="muted small">Bepergian hanya kunjungan — kewarganegaraanmu tetap di wilayah asal.</p>`}
     </div>
     <div class="panel"><h3>🔥 PEMBERONTAKAN</h3>
       <p class="muted small">5 warga berbeda harus mendukung untuk menyulut perang pemberontakan di wilayah ini. Dukunganmu hangus (tidak kembali).</p>
@@ -2211,7 +2225,12 @@ ROUTES.regions = async (id) => {
         <button class="btn-gold" id="btn-rebel" ${d.mySupport ? 'disabled' : ''}>${d.mySupport ? '✓ Sudah Mendukung' : 'DUKUNG PEMBERONTAKAN · 50 emas hangus'}</button>`}
     </div>`);
     $('#btn-travel')?.addEventListener('click', async () => {
-      try { const res = await post('/api/regions/travel', { region_id: r.id }); toast(`Kamu sekarang di ${res.region}.`); await refreshMe(); route(); }
+      try { const res = await post('/api/regions/travel', { region_id: r.id }); toast(`Dalam perjalanan ke ${res.region} — tiba dalam ~${res.travelMinutes} menit.`); await refreshMe(); route(); }
+      catch (e) { toast(e.message); }
+    });
+    $('#btn-move')?.addEventListener('click', async () => {
+      if (!confirm(`Pindah kewarganegaraan ke ${r.name}? Negara, pajak, dan hak memilihmu akan mengikuti wilayah ini. Bisa pindah lagi setelah 7 hari.`)) return;
+      try { const res = await post('/api/regions/move', { region_id: r.id }); toast(`Kewarganegaraanmu kini ${res.region}.`); await refreshMe(); route(); }
       catch (e) { toast(e.message); }
     });
     $('#btn-rebel')?.addEventListener('click', async () => {
@@ -2314,7 +2333,7 @@ ROUTES.country = async () => {
   </div>
   ${d.wars.length ? `<div class="panel"><h3>⚔️ PERANG AKTIF</h3>${d.wars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}</div>` : ''}` : `
   <div class="panel"><h3>🕊️ WILAYAHMU MERDEKA</h3>
-    <p>Kamu tinggal di <b>${esc(d.myRegion?.name || '')}</b> — wilayah ini belum bernegara. Kamu bisa mendirikan negara sendiri (wilayahmu jadi ibu kota) atau mengusulkan wilayahmu bergabung dengan negara yang sudah ada.</p>
+    <p>Wilayah kewarganegaraanmu adalah <b>${esc(d.myRegion?.name || '')}</b> — wilayah ini belum bernegara. Kamu bisa mendirikan negara sendiri (wilayahmu jadi ibu kota) atau mengusulkan wilayahmu bergabung dengan negara yang sudah ada.</p>
     <div class="kv"><span class="k">Wilayahmu</span><span class="v">${esc(d.myRegion?.name || '')} · ${esc(d.myRegion?.type || '')}</span></div>
     <div class="kv"><span class="k">Levelmu</span><span class="v">${ME.citizen.level} (butuh Level ${rules.minLevel} untuk mendirikan negara)</span></div>
     <div class="kv"><span class="k">Emasmu</span><span class="v">${fmt(ME.citizen.gold)} (butuh ${rules.costGold} emas)</span></div>

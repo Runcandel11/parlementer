@@ -233,7 +233,7 @@ async function main() {
   // steady state hanya baca penanda (tanpa lock/DDL); migrasi penuh hanya
   // bila penanda dihapus / versi lama.
   const ver = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Penanda versi skema = 10', ver.rows[0]?.value === '10', `value=${ver.rows[0]?.value}`);
+  check('Penanda versi skema = 11', ver.rows[0]?.value === '11', `value=${ver.rows[0]?.value}`);
   const t9a = Date.now();
   await Promise.all([initDb(), initDb(), initDb(), initDb(), initDb()]);
   const t9b = Date.now() - t9a;
@@ -300,7 +300,7 @@ async function main() {
   const archive = await pool.query("SELECT kind, currency, amount FROM treasury_tx WHERE kind = 'pembubaran' ORDER BY created_at");
   check('Migrasi: kas RI diarsip sebagai treasury_tx pembubaran (−100 emas, −50 USD)', archive.rows.length === 2 && archive.rows.some((r) => r.currency === 'gold' && Number(r.amount) === -100) && archive.rows.some((r) => r.currency === 'usd' && Number(r.amount) === -50), JSON.stringify(archive.rows));
   const ver10 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 10', ver10.rows[0]?.value === '10', `value=${ver10.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 11', ver10.rows[0]?.value === '11', `value=${ver10.rows[0]?.value}`);
 
   console.log('\n[11] Regresi bug Partai — GET /api/parties di Postgres (ORDER BY ambigu)');
   // Bug live 27 Nov 2026: begitu ada ≥1 partai, GET /api/parties 500 di
@@ -368,7 +368,9 @@ async function main() {
     await pool.query("UPDATE regions SET country = 'Negara Tes', country_id = 9001 WHERE id = 5");
     await pool.query('INSERT INTO party_seats (party_id, country_id, seats) VALUES ($1, 9001, 7)', [partyId]);
     const p2me = await P2.get('/api/me');
-    await pool.query('UPDATE citizens SET region_id = 5 WHERE id = $1', [p2me.data.citizen.id]);
+    // Kursi partai mengikuti KEWARGANEGARAAN (home_region_id, 27 Nov 2026):
+    // pindah P2 ke wilayah Negara Tes secara penuh (lokasi + asal).
+    await pool.query('UPDATE citizens SET region_id = 5, home_region_id = 5 WHERE id = $1', [p2me.data.citizen.id]);
     rr = await P2.get('/api/parties');
     check('GET /api/parties sebagai warga Negara Tes: kursi partai = 7 (per negara)',
       rr.status === 200 && rr.data.parties?.[0]?.seats === 7,
@@ -381,6 +383,96 @@ async function main() {
   } else {
     console.log(pServerLog);
     pStop();
+  }
+
+  console.log('\n[12] Travel + waktu tempuh — migrasi v11 + endpoint (27 Nov 2026)');
+  // Kolom perjalanan ada setelah initDb.
+  const tCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('travel_to_region_id', 'travel_arrives_at', 'home_changed_at')");
+  check('Kolom perjalanan ada (travel_to_region_id, travel_arrives_at, home_changed_at)', tCols.rowCount === 3, `n=${tCols.rowCount}`);
+  // Migrasi: hapus kolom, initDb mengembalikannya (versi 11).
+  await pool.query('ALTER TABLE citizens DROP COLUMN travel_to_region_id');
+  await pool.query('ALTER TABLE citizens DROP COLUMN travel_arrives_at');
+  await pool.query('ALTER TABLE citizens DROP COLUMN home_changed_at');
+  await resetVersion();
+  await initDb();
+  const tCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('travel_to_region_id', 'travel_arrives_at', 'home_changed_at')");
+  check('Migrasi: kolom perjalanan ditambah kembali', Number(tCols2.rows[0].n) === 3, `n=${tCols2.rows[0].n}`);
+  const ver11 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
+  check('Versi skema setelah migrasi = 11', ver11.rows[0]?.value === '11', `value=${ver11.rows[0]?.value}`);
+  // Aturan durasi (unit, tanpa server): Kepri → Jakarta ±830 km = 10 mnt;
+  // Jakarta → Bandung ±116 km = 3 mnt; terjauh dipangkas ke 30 mnt.
+  const { travelMinutesFor } = await import('../src/game.js');
+  check('Durasi Kepri → Jakarta = 10 menit', travelMinutesFor('Kepulauan Riau', 'Jakarta') === 10, `mnt=${travelMinutesFor('Kepulauan Riau', 'Jakarta')}`);
+  check('Durasi Jakarta → Jawa Barat = 3 menit', travelMinutesFor('Jakarta', 'Jawa Barat') === 3, `mnt=${travelMinutesFor('Jakarta', 'Jawa Barat')}`);
+  check('Durasi Jakarta → Papua dipangkas ke 30 menit', travelMinutesFor('Jakarta', 'Papua') === 30, `mnt=${travelMinutesFor('Jakarta', 'Papua')}`);
+  check('Durasi wilayah tak dikenal fallback 10 menit', travelMinutesFor('Jakarta', 'Atlantis') === 10, `mnt=${travelMinutesFor('Jakarta', 'Atlantis')}`);
+  // Endpoint travel + move lewat HTTP (server tes kedua, Postgres sungguhan).
+  const T_PORT = 3467;
+  const T_BASE = `http://127.0.0.1:${T_PORT}`;
+  class TClient {
+    constructor() { this.cookie = ''; }
+    async req(method, p, body) {
+      const res = await fetch(T_BASE + p, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...(this.cookie ? { Cookie: this.cookie } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const setCookie = res.headers.get('set-cookie');
+      if (setCookie) this.cookie = setCookie.split(';')[0];
+      let data = null;
+      try { data = await res.json(); } catch { data = {}; }
+      return { status: res.status, data };
+    }
+    get(p) { return this.req('GET', p); }
+    post(p, b) { return this.req('POST', p, b || {}); }
+  }
+  const tServer = spawn('node', ['server.js'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { ...process.env, PORT: String(T_PORT), DATABASE_URL, JWT_SECRET: 'pg-verify-travel-secret', ADMIN_BOOTSTRAP_CODE: 'pg-verify-bootstrap' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let tServerLog = '';
+  tServer.stdout.on('data', (d) => { tServerLog += d; });
+  tServer.stderr.on('data', (d) => { tServerLog += d; });
+  const tStop = () => { try { tServer.kill('SIGTERM'); } catch {} };
+  process.on('exit', tStop);
+  let tUp = false;
+  for (let i = 0; i < 40 && !tUp; i++) {
+    await sleep(500);
+    try { const rr = await fetch(T_BASE + '/api/world'); tUp = rr.ok; } catch {}
+  }
+  check('Server tes travel menyala (Postgres)', tUp);
+  if (tUp) {
+    const T1 = new TClient();
+    let rr = await T1.post('/api/auth/register', { email: 'travel@pgverify.local', password: 'rahasia123', username: 'travel_pgverify' });
+    check('T1 mendaftar', rr.status === 200, `status=${rr.status}`);
+    const tMe0 = await T1.get('/api/me');
+    const tHome0 = tMe0.data.citizen.home_region_id;
+    const tRegion0 = tMe0.data.citizen.region_id;
+    check('/api/me: homeRegion ada, travel null saat lahir', !!tMe0.data.homeRegion && tMe0.data.travel === null, `home=${tMe0.data.homeRegion?.name} travel=${JSON.stringify(tMe0.data.travel)}`);
+    const tRegs = (await T1.get('/api/regions')).data;
+    const tTarget = tRegs.regions.find((x) => x.id !== tRegion0);
+    check('GET /api/regions: travelMinutes + home + travelTickets ada', tRegs.regions.every((x) => typeof x.travelMinutes === 'number') && tRegs.home === tHome0 && typeof tRegs.travelTickets === 'number', `home=${tRegs.home} tickets=${tRegs.travelTickets}`);
+    rr = await T1.post('/api/regions/travel', { region_id: tTarget.id });
+    check('Travel dimulai: inTransit + travelMinutes + arrivesAt masa depan', rr.status === 200 && rr.data.inTransit === true && rr.data.travelMinutes > 0 && rr.data.arrivesAt > Date.now(), `status=${rr.status} ${JSON.stringify(rr.data)}`);
+    const tMe1 = await T1.get('/api/me');
+    check('Selama transit: lokasi belum berubah, travel aktif', tMe1.data.citizen.region_id === tRegion0 && !!tMe1.data.travel && tMe1.data.travel.toRegionId === tTarget.id, `region=${tMe1.data.region?.name}`);
+    check('Selama transit: kewarganegaraan tidak berubah', tMe1.data.citizen.home_region_id === tHome0, `home=${tMe1.data.homeRegion?.name}`);
+    rr = await T1.post('/api/regions/move', { region_id: tTarget.id });
+    check('Pindah kewarganegaraan saat transit ditolak (400)', rr.status === 400, `status=${rr.status}`);
+    await pool.query('UPDATE citizens SET travel_arrives_at = $1 WHERE id = $2', [Date.now() - 1000, tMe1.data.citizen.id]);
+    const tMe2 = await T1.get('/api/me');
+    check('Setelah waktu habis: tiba di tujuan, transit selesai, home tetap', tMe2.data.citizen.region_id === tTarget.id && !tMe2.data.travel && tMe2.data.citizen.home_region_id === tHome0, `region=${tMe2.data.region?.name} home=${tMe2.data.homeRegion?.name}`);
+    rr = await T1.post('/api/regions/move', { region_id: tTarget.id });
+    check('Pindah kewarganegaraan ke wilayah yang didiami berhasil', rr.status === 200 && rr.data.region === tTarget.name, `status=${rr.status} ${rr.data.error || ''}`);
+    const tMe3 = await T1.get('/api/me');
+    check('Kewarganegaraan kini wilayah tujuan', tMe3.data.citizen.home_region_id === tTarget.id, `home=${tMe3.data.homeRegion?.name}`);
+    rr = await T1.post('/api/regions/move', { region_id: tTarget.id });
+    check('Pindah ke wilayah asal sendiri ditolak (400)', rr.status === 400, `status=${rr.status}`);
+    tStop();
+  } else {
+    console.log(tServerLog);
+    tStop();
   }
 
   await pool.end();

@@ -25,12 +25,13 @@ export async function notifyAll(category, title, content = '') {
 // country id=1). Setiap warga punya negara lewat wilayahnya
 // (regions.country_id; NULL = wilayah merdeka / tidak bernegara).
 // getMyCountry(t, citizen) = satu-satunya cara mengambil "negara saya":
-// null bila wilayahnya merdeka. Semua helper angka menerima baris negara
-// (atau null) secara eksplisit — tidak ada lagi fallback ke id=1.
-// t adalah handle transaksi (punya .one) atau { one } di luar transaksi.
+// null bila wilayahnya merdeka. KEWARGANEGARAAN mengikuti home_region_id
+// (wilayah asal) — BUKAN lokasi saat ini: bepergian (travel = kunjungan)
+// tidak memindahkan kewarganegaraan; hanya aksi "Pindah Kewarganegaraan"
+// yang mengubah home_region_id (lihat POST /api/regions/move).
 export async function getMyCountry(t, citizen) {
-  if (!citizen?.region_id) return null;
-  const reg = await t.one('SELECT country_id FROM regions WHERE id = ?', [citizen.region_id]);
+  if (!citizen?.home_region_id) return null;
+  const reg = await t.one('SELECT country_id FROM regions WHERE id = ?', [citizen.home_region_id]);
   if (!reg?.country_id) return null;
   return (await t.one('SELECT * FROM country WHERE id = ?', [reg.country_id])) || null;
 }
@@ -89,13 +90,14 @@ export function ministerRole(country, citizenId) {
   return null;
 }
 export async function isMpCitizen(citizen) {
-  if (!citizen?.party_id || !citizen?.region_id) return false;
+  if (!citizen?.party_id || !citizen?.home_region_id) return false;
   // Kursi parlemen dihitung PER NEGARA (party_seats): anggota partai hanya
-  // anggota parlemen bila partainya punya kursi di parlemen NEGARANYA.
+  // anggota parlemen bila partainya punya kursi di parlemen NEGARANYA
+  // (kewarganegaraan = wilayah asal).
   const row = await one(
     `SELECT ps.seats FROM party_seats ps JOIN regions r ON r.country_id = ps.country_id
      WHERE ps.party_id = ? AND r.id = ? AND ps.seats > 0`,
-    [citizen.party_id, citizen.region_id]);
+    [citizen.party_id, citizen.home_region_id]);
   return !!row;
 }
 // Apakah ada perjanjian dagang AKTIF antara organisasi pembeli & penjual?
@@ -155,10 +157,12 @@ export function registerCivic(app) {
   //    untuk wilayahnya.
   app.get('/api/country', authRequired, citizenRequired, r(async (req, res) => {
     const country = await getMyCountry({ one }, req.citizen);
-    const myRegion = await one('SELECT r.*, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [req.citizen.region_id]);
+    // myRegion di sini = wilayah ASAL (kewarganegaraan): usulan unifikasi
+    // yang terbuka untukmu adalah usulan untuk wilayah asalmu.
+    const myRegion = await one('SELECT r.*, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [req.citizen.home_region_id]);
     const countries = await sql(
       `SELECT c.*, (SELECT COUNT(*) FROM regions WHERE country_id = c.id) AS region_count,
-        (SELECT COUNT(*) FROM citizens ci JOIN regions r ON r.id = ci.region_id WHERE r.country_id = c.id) AS citizen_count,
+        (SELECT COUNT(*) FROM citizens ci JOIN regions r ON r.id = ci.home_region_id WHERE r.country_id = c.id) AS citizen_count,
         (SELECT u.username FROM citizens pc JOIN users u ON u.id = pc.user_id WHERE pc.id = c.president_id) AS president_name
        FROM country c ORDER BY c.id ASC`);
     const president = country?.president_id
@@ -181,7 +185,7 @@ export function registerCivic(app) {
     const openJoins = myRegion?.country_id ? [] : await sql(
       `SELECT j.*, c.name AS country_name FROM country_joins j JOIN country c ON c.id = j.country_id
        WHERE j.region_id = ? AND j.status = 'voting' AND j.ends_at > ? ORDER BY j.created_at DESC`,
-      [req.citizen.region_id, Date.now()]);
+      [req.citizen.home_region_id, Date.now()]);
     const myJoinVotes = openJoins.length
       ? await sql('SELECT join_id, vote FROM country_join_votes WHERE citizen_id = ? AND join_id IN (' + openJoins.map(() => '?').join(',') + ')', [req.citizen.id, ...openJoins.map((j) => j.id)])
       : [];
@@ -217,7 +221,7 @@ export function registerCivic(app) {
   app.get('/api/countries', authRequired, citizenRequired, r(async (req, res) => {
     const rows = await sql(
       `SELECT c.*, (SELECT COUNT(*) FROM regions WHERE country_id = c.id) AS region_count,
-        (SELECT COUNT(*) FROM citizens ci JOIN regions r ON r.id = ci.region_id WHERE r.country_id = c.id) AS citizen_count,
+        (SELECT COUNT(*) FROM citizens ci JOIN regions r ON r.id = ci.home_region_id WHERE r.country_id = c.id) AS citizen_count,
         (SELECT u.username FROM citizens pc JOIN users u ON u.id = pc.user_id WHERE pc.id = c.president_id) AS president_name
        FROM country c ORDER BY c.id ASC`);
     res.json({ countries: rows.map((c) => ({ ...countrySummary(c), region_count: Number(c.region_count), citizen_count: Number(c.citizen_count), president_name: c.president_name || 'Kosong', president_title: systemDef(c.system).presidentTitle })) });
@@ -242,16 +246,19 @@ export function registerCivic(app) {
     if (!ide) return res.status(400).json({ error: 'Ideologi tidak dikenal.' });
     const sys = GOVERNMENT_SYSTEMS.find((x) => x.id === system);
     if (!sys) return res.status(400).json({ error: 'Sistem pemerintahan tidak dikenal.' });
-    const myRegion = await one('SELECT * FROM regions WHERE id = ?', [c.region_id]);
-    if (!myRegion) return res.status(400).json({ error: 'Wilayahmu tidak ditemukan.' });
-    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayahmu sudah bernegara. Pindah ke wilayah merdeka dulu untuk mendirikan negara.' });
+    // Negara hanya bisa didirikan di wilayah ASAL (home_region_id) yang
+    // masih merdeka — warga yang sedang berkunjung di wilayah lain tidak
+    // bisa mendirikan negara di sana.
+    const myRegion = await one('SELECT * FROM regions WHERE id = ?', [c.home_region_id]);
+    if (!myRegion) return res.status(400).json({ error: 'Wilayah asalmu tidak ditemukan.' });
+    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayah asalmu sudah bernegara. Pindah kewarganegaraan ke wilayah merdeka dulu untuk mendirikan negara.' });
     const taken = await one('SELECT id FROM country WHERE LOWER(name) = LOWER(?)', [cleanName]);
     if (taken) return res.status(400).json({ error: 'Nama negara sudah dipakai.' });
     const now = Date.now();
     const countryId = await tx(async (t) => {
       await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
-      const reg = await t.one(forUpdate('SELECT * FROM regions WHERE id = ?'), [c.region_id]);
-      if (reg.country_id) throw Object.assign(new Error('Wilayahmu baru saja bergabung dengan negara lain.'), { status: 400 });
+      const reg = await t.one(forUpdate('SELECT * FROM regions WHERE id = ?'), [c.home_region_id]);
+      if (reg.country_id) throw Object.assign(new Error('Wilayah asalmu baru saja bergabung dengan negara lain.'), { status: 400 });
       const dup = await t.one('SELECT id FROM country WHERE LOWER(name) = LOWER(?)', [cleanName]);
       if (dup) throw Object.assign(new Error('Nama negara sudah dipakai.'), { status: 400 });
       const ins = await t.run(
@@ -285,17 +292,19 @@ export function registerCivic(app) {
     if (!target) return res.status(404).json({ error: 'Negara tidak ditemukan.' });
     const c = req.citizen;
     if (c.level < COUNTRY_JOIN_MIN_LEVEL) return res.status(400).json({ error: `Mengusulkan unifikasi butuh Level ${COUNTRY_JOIN_MIN_LEVEL}.` });
-    const myRegion = await one('SELECT * FROM regions WHERE id = ?', [c.region_id]);
-    if (!myRegion) return res.status(400).json({ error: 'Wilayahmu tidak ditemukan.' });
-    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayahmu sudah bernegara — unifikasi hanya untuk wilayah merdeka.' });
+    // Yang bergabung adalah wilayah ASAL pengusul (kewarganegaraannya) —
+    // harus masih merdeka.
+    const myRegion = await one('SELECT * FROM regions WHERE id = ?', [c.home_region_id]);
+    if (!myRegion) return res.status(400).json({ error: 'Wilayah asalmu tidak ditemukan.' });
+    if (myRegion.country_id) return res.status(400).json({ error: 'Wilayah asalmu sudah bernegara — unifikasi hanya untuk wilayah merdeka.' });
     const existing = await one("SELECT id FROM country_joins WHERE region_id = ? AND status = 'voting' AND ends_at > ?", [myRegion.id, Date.now()]);
-    if (existing) return res.status(400).json({ error: 'Sudah ada usulan unifikasi yang sedang divoting untuk wilayahmu.' });
+    if (existing) return res.status(400).json({ error: 'Sudah ada usulan unifikasi yang sedang divoting untuk wilayah asalmu.' });
     const now = Date.now();
     const joinId = await tx(async (t) => {
-      const reg = await t.one(forUpdate('SELECT * FROM regions WHERE id = ?'), [c.region_id]);
-      if (reg.country_id) throw Object.assign(new Error('Wilayahmu baru saja bergabung dengan negara lain.'), { status: 400 });
+      const reg = await t.one(forUpdate('SELECT * FROM regions WHERE id = ?'), [c.home_region_id]);
+      if (reg.country_id) throw Object.assign(new Error('Wilayah asalmu baru saja bergabung dengan negara lain.'), { status: 400 });
       const dup = await t.one("SELECT id FROM country_joins WHERE region_id = ? AND status = 'voting' AND ends_at > ?", [reg.id, now]);
-      if (dup) throw Object.assign(new Error('Sudah ada usulan unifikasi yang sedang divoting untuk wilayahmu.'), { status: 400 });
+      if (dup) throw Object.assign(new Error('Sudah ada usulan unifikasi yang sedang divoting untuk wilayah asalmu.'), { status: 400 });
       const j = await t.run(
         "INSERT INTO country_joins (country_id, region_id, proposer_id, yes, no, status, ends_at, created_at) VALUES (?,?,?,1,0,'voting',?,?) RETURNING id",
         [target.id, reg.id, c.id, now + COUNTRY_JOIN_VOTE_DAYS * 24 * 60 * 60 * 1000, now]);
@@ -311,7 +320,7 @@ export function registerCivic(app) {
       `SELECT j.*, c.name AS country_name, r.name AS region_name FROM country_joins j
        JOIN country c ON c.id = j.country_id JOIN regions r ON r.id = j.region_id
        WHERE j.region_id = ? AND j.status = 'voting' AND j.ends_at > ? ORDER BY j.created_at DESC`,
-      [req.citizen.region_id, Date.now()]);
+      [req.citizen.home_region_id, Date.now()]);
     const myVotes = rows.length
       ? await sql('SELECT join_id, vote FROM country_join_votes WHERE citizen_id = ? AND join_id IN (' + rows.map(() => '?').join(',') + ')', [req.citizen.id, ...rows.map((j) => j.id)])
       : [];
@@ -325,7 +334,7 @@ export function registerCivic(app) {
     if (!['yes', 'no'].includes(vote)) return res.status(400).json({ error: 'Pilihan suara tidak dikenal.' });
     const j = await one("SELECT * FROM country_joins WHERE id = ? AND status = 'voting' AND ends_at > ?", [req.params.id, Date.now()]);
     if (!j) return res.status(404).json({ error: 'Usulan unifikasi tidak ditemukan / voting sudah ditutup.' });
-    if (req.citizen.region_id !== j.region_id) return res.status(403).json({ error: 'Hanya warga wilayah yang diusulkan yang bisa memilih.' });
+    if (req.citizen.home_region_id !== j.region_id) return res.status(403).json({ error: 'Hanya warga wilayah yang diusulkan yang bisa memilih.' });
     const col = vote === 'yes' ? 'yes' : 'no';
     await tx(async (t) => {
       const ins = await t.run('INSERT INTO country_join_votes (join_id, citizen_id, vote) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING join_id', [j.id, req.citizen.id, vote]);

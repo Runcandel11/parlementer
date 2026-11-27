@@ -46,6 +46,51 @@ export function formatCooldownMs(ms) {
   return `${s} dtk`;
 }
 
+// --- Perjalanan: waktu tempuh antar wilayah (27 Nov 2026) ---
+// Bepergian bukan lagi instan — perjalanan butuh waktu berdasar jarak
+// antar ibu kota wilayah. Koordinat di bawah adalah ibu kota provinsi
+// (data publik), dipakai menghitung jarak haversine.
+// Waktu tempuh (menit) = 2 menit dasar + 1 menit per 100 km, minimal 2,
+// maksimal 30. Acuan (saran Vincent, tiket #8): Kepri → Jakarta ±830 km
+// = 10 menit. Jakarta → Jawa Barat ±116 km = 3 menit; terjauh (Jakarta →
+// Papua ±3.750 km) dipangkas ke 30 menit agar tetap bisa dimainkan.
+export const REGION_COORDS = {
+  'Kepulauan Riau': [0.92, 104.45],
+  'Jakarta': [-6.21, 106.85],
+  'Jawa Barat': [-6.91, 107.61],
+  'Jawa Tengah': [-6.97, 110.42],
+  'Jawa Timur': [-7.26, 112.75],
+  'Sumatera Utara': [3.59, 98.67],
+  'Sumatera Barat': [-0.95, 100.35],
+  'Sumatera Selatan': [-2.99, 104.76],
+  'Kalimantan Barat': [-0.03, 109.32],
+  'Kalimantan Timur': [-0.50, 117.15],
+  'Kalimantan Selatan': [-3.32, 114.59],
+  'Sulawesi Selatan': [-5.15, 119.43],
+  'Sulawesi Utara': [1.47, 124.85],
+  'Bali': [-8.67, 115.22],
+  'Nusa Tenggara Barat': [-8.58, 116.12],
+  'Nusa Tenggara Timur': [-10.18, 123.58],
+  'Papua': [-2.53, 140.72],
+};
+function haversineKm(a, b) {
+  const R = 6371;
+  const dLat = (b[0] - a[0]) * Math.PI / 180;
+  const dLon = (b[1] - a[1]) * Math.PI / 180;
+  const la1 = a[0] * Math.PI / 180, la2 = b[0] * Math.PI / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+export function travelMinutesFor(fromName, toName) {
+  const a = REGION_COORDS[fromName], b = REGION_COORDS[toName];
+  if (!a || !b) return 10; // fallback bila koordinat belum ada
+  return Math.min(30, Math.max(2, Math.round(2 + haversineKm(a, b) / 100)));
+}
+// Jeda pindah kewarganegaraan: 7 hari sejak pindah terakhir (anti-lompat
+// pemilu/unifikasi — tanpa jeda, warga bisa pindah, memilih, lalu pindah
+// lagi). Pindah pertama bebas (home_changed_at = 0 = belum pernah pindah).
+export const MOVE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+
 // Makan: Makanan T1..T5 memberi 10/20/30/40/50 energi. Batas harian 10 unit.
 export function foodEnergy(tier) { return tier * 10; }
 

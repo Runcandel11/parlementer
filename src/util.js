@@ -84,11 +84,38 @@ export async function loadCitizen(userId) {
     [userId],
   );
   if (!c) return null;
+  // Kedatangan malas (perjalanan 27 Nov 2026): bila waktu tempuh sudah
+  // habis, warga resmi tiba di wilayah tujuan — diselesaikan di sini
+  // supaya SETIAP pembacaan warga berikutnya sudah melihat lokasi baru.
+  // Gagal menyelesaikan tidak boleh menggagalkan pembacaan data.
+  let row = c;
+  try { row = await settleTravel(row); }
+  catch (e) { console.error('[travel] gagal menyelesaikan kedatangan:', e.message); }
   // Regen energi malas (Tahap 4): tiap kali data warga dibaca, pulihkan
   // +2/menit dari waktu yang berlalu — pemain offline pun pulih saat kembali.
   // Gagal regen tidak boleh menggagalkan pembacaan data.
-  try { return await applyEnergyRegen(c); }
-  catch (e) { console.error('[regen] gagal:', e.message); return c; }
+  try { return await applyEnergyRegen(row); }
+  catch (e) { console.error('[regen] gagal:', e.message); return row; }
+}
+
+// Selesaikan perjalanan yang waktunya sudah habis: pindahkan region_id ke
+// wilayah tujuan + bersihkan status transit. UPDATE bersyarat (cocokkan
+// tujuan + jam tiba lama) mencegah dua request paralel menyelesaikan
+// perjalanan yang sama dua kali — pola yang sama seperti regen energi.
+// Mengembalikan baris warga (yang sudah tiba) atau baris asli bila belum
+// waktunya / tidak sedang bepergian.
+export async function settleTravel(c) {
+  if (!c.travel_to_region_id || !c.travel_arrives_at) return c;
+  if (Date.now() < c.travel_arrives_at) return c;
+  const upd = await run(
+    'UPDATE citizens SET region_id = ?, travel_to_region_id = NULL, travel_arrives_at = 0 WHERE id = ? AND travel_to_region_id = ? AND travel_arrives_at = ?',
+    [c.travel_to_region_id, c.id, c.travel_to_region_id, c.travel_arrives_at]);
+  if (!upd.changes) {
+    // Kalah race: baca ulang baris yang sudah diselesaikan request lain.
+    const fresh = await one('SELECT * FROM citizens WHERE id = ?', [c.id]);
+    return fresh ? { ...c, ...fresh } : c;
+  }
+  return { ...c, region_id: c.travel_to_region_id, travel_to_region_id: null, travel_arrives_at: 0 };
 }
 
 // Regen energi malas (Tahap 4): +2 tiap 1 menit sejak energy_updated_at,

@@ -263,7 +263,9 @@ export async function runDailyTick() {
     if (passed) {
       await run("UPDATE country_joins SET status = 'passed' WHERE id = ?", [j.id]);
       await run('UPDATE regions SET country_id = ? WHERE id = ? AND country_id IS NULL', [j.country_id, j.region_id]);
-      await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) SELECT id, ?, ?, ?, ? FROM citizens WHERE region_id = ?',
+      // Notifikasi ke WARGA wilayah itu (kewarganegaraan = home_region_id),
+      // bukan sekadar yang sedang berada di sana.
+      await run('INSERT INTO notifications (citizen_id, category, title, content, created_at) SELECT id, ?, ?, ?, ? FROM citizens WHERE home_region_id = ?',
         ['POLITIK', `${region.name} bergabung dengan ${country.name}`, `Voting unifikasi lolos (${j.yes} YA vs ${j.no} TIDAK). ${region.name} kini bagian dari ${country.name}.`, now, j.region_id]);
       await notify(j.proposer_id, 'POLITIK', 'Unifikasi berhasil', `${region.name} resmi bergabung dengan ${country.name}.`);
     } else {

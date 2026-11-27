@@ -139,6 +139,14 @@ async function main() {
   if (meA5.data.citizen.region_id !== job.region_id) {
     r = await A.post('/api/regions/travel', { region_id: job.region_id });
     check('A bepergian ke wilayah lowongan (biaya 1 Tiket)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+    // Waktu tempuh (27 Nov 2026): perjalanan belum tiba — paksa tiba
+    // dengan memundurkan jam tiba di DB, lalu /api/me menyelesaikan
+    // kedatangan. Lamaran mensyaratkan warga BERADA di wilayah lowongan.
+    const db5 = new DatabaseSync(DB_PATH);
+    db5.prepare('UPDATE citizens SET travel_arrives_at = ? WHERE id = ?').run(Date.now() - 1000, meA5.data.citizen.id);
+    db5.close();
+    r = await A.get('/api/me');
+    check('A tiba di wilayah lowongan setelah waktu tempuh', r.data.citizen.region_id === job.region_id, `region=${r.data.region?.name}`);
   }
   r = await A.post('/api/jobs/apply', { job_id: job.id });
   check('Lamar pekerjaan berhasil', r.status === 200 && r.data.ok);
@@ -182,7 +190,12 @@ async function main() {
   const db6b = new DatabaseSync(DB_PATH);
   const meA6b = (await A.get('/api/me')).data.citizen;
   const goldA6b = meA6b.gold;
-  const regionA6b = (await A.get('/api/me')).data.region.name;
+  // Ibu kota Nusantara = wilayah ASAL A (home_region_id) — dicatat untuk
+  // [22]/[22d]/[28] yang dulu hardcode region 1 sebagai ibu kota.
+  const nusantaraCapitalId = meA6b.home_region_id;
+  // Ibu kota = wilayah ASAL A (home_region_id) — pendirian negara
+  // mengikuti kewarganegaraan, bukan lokasi kunjungan saat ini.
+  const regionA6b = (await A.get('/api/me')).data.homeRegion.name;
   db6b.prepare('UPDATE citizens SET level = 10 WHERE id = ?').run(meA6b.id);
   r = await A.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
   check('Dirikan negara dengan emas <100 ditolak', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
@@ -201,7 +214,7 @@ async function main() {
   check('Wilayah sudah bernegara tidak bisa mendirikan negara lagi', r.status === 400, `status=${r.status}`);
   r = await A.get('/api/country');
   check('A kini warga Nusantara', r.data.country?.name === 'Nusantara', JSON.stringify(r.data.country));
-  check('Ibu kota = wilayah A saat mendirikan', r.data.country?.capital === regionA6b, `capital=${r.data.country?.capital} wilayah=${regionA6b}`);
+  check('Ibu kota = wilayah asal A', r.data.country?.capital === regionA6b, `capital=${r.data.country?.capital} wilayah=${regionA6b}`);
   r = await A.get('/api/countries');
   check('Dunia kini 1 negara', (r.data.countries || []).length === 1, `countries=${(r.data.countries || []).length}`);
   r = await A.get('/api/regions');
@@ -231,10 +244,12 @@ async function main() {
   db.prepare('UPDATE inventory SET qty = qty + 17 WHERE citizen_id = ? AND commodity_id = ? AND tier = 1').run(meB.data.citizen.id, comRow.id);
   db.close();
   // Redesain dunia: B lahir di wilayah acak (merdeka, pajak 0%) — pindah
-  // B ke wilayah A (Nusantara) agar pajak penjual 2% berlaku di bawah ini.
+  // B ke wilayah asal A (Nusantara) agar pajak penjual 2% berlaku di bawah
+  // ini. Pajak mengikuti KEWARGANEGARAAN (home_region_id), jadi keduanya
+  // disetel; pasar sendiri tidak dibatasi wilayah.
   const db7 = new DatabaseSync(DB_PATH);
-  const regionA7 = (await A.get('/api/me')).data.citizen.region_id;
-  db7.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(regionA7, meB.data.citizen.id);
+  const regionA7 = (await A.get('/api/me')).data.citizen.home_region_id;
+  db7.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(regionA7, regionA7, meB.data.citizen.id);
   db7.close();
   r = await B.post('/api/market/sell', { scope: 'local', commodity_id: makanan.id, tier: 1, qty: 10, price: 9 });
   check('B memasang penawaran jual 10× Makanan @ 9 USD', r.status === 200 && !!r.data.offerId, `offerId=${r.data.offerId}`);
@@ -265,20 +280,86 @@ async function main() {
   r = await A.get('/api/me');
   check('Emas 53, USD 515', r.data.citizen.gold === 53 && eq(r.data.citizen.usd, 515), `emas=${r.data.citizen.gold} usd=${r.data.citizen.usd}`);
 
-  console.log('\n[9] Peta & perjalanan');
+  console.log('\n[9] Peta & perjalanan (kunjungan + waktu tempuh, 27 Nov 2026)');
   r = await A.get('/api/regions');
   check('17 wilayah terdaftar', r.data.regions.length === 17, `jumlah=${r.data.regions.length}`);
   const jakarta = r.data.regions.find((x) => x.name === 'Jakarta');
+  check('Daftar wilayah mencantumkan waktu tempuh dari lokasi saat ini', r.data.regions.every((x) => typeof x.travelMinutes === 'number' && x.travelMinutes >= 0), `contoh Jakarta=${jakarta.travelMinutes} mnt`);
+  check('Kepri → Jakarta ±10 menit (jarak ±830 km)', jakarta.travelMinutes >= 8 && jakarta.travelMinutes <= 12, `Jakarta dari Kepri=${jakarta.travelMinutes} mnt`);
+  const homeBefore = (await A.get('/api/me')).data.citizen.home_region_id;
   const tiketBefore9 = (await A.get('/api/inventory')).data.items.find((i) => i.name === 'Tiket')?.qty ?? 0;
   r = await A.post('/api/regions/travel', { region_id: jakarta.id });
-  check('Perjalanan ke Jakarta berhasil (1 Tiket)', r.status === 200 && r.data.region === 'Jakarta');
+  check('Perjalanan ke Jakarta dimulai (1 Tiket, ada waktu tempuh)', r.status === 200 && r.data.region === 'Jakarta' && r.data.inTransit === true && r.data.travelMinutes > 0 && r.data.arrivesAt > Date.now(), `status=${r.status} ${JSON.stringify(r.data)}`);
   r = await A.get('/api/me');
-  check('Lokasi kini Jakarta', r.data.region.name === 'Jakarta');
+  check('Masih transit: lokasi BELUM berubah + status perjalanan ada', r.data.region.name !== 'Jakarta' && !!r.data.travel && r.data.travel.toRegionName === 'Jakarta' && r.data.travel.remainingMs > 0, `region=${r.data.region.name} travel=${JSON.stringify(r.data.travel)}`);
+  check('Kewarganegaraan TIDAK berubah selama perjalanan (bug LIO)', r.data.citizen.home_region_id === homeBefore, `home=${r.data.homeRegion?.name}`);
+  check('Negara tetap Nusantara selama kunjungan (pajak/voting ikut asal)', r.data.country?.name === 'Nusantara', JSON.stringify(r.data.country));
+  r = await A.post('/api/regions/travel', { region_id: jakarta.id });
+  check('Bepergian lagi saat transit ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  // Paksa tiba: mundurkan jam tiba di DB, lalu /api/me menyelesaikan
+  // kedatangan (penyelesaian malas — tanpa cron/tick).
+  const db9 = new DatabaseSync(DB_PATH);
+  db9.prepare('UPDATE citizens SET travel_arrives_at = ? WHERE id = ?').run(Date.now() - 1000, (await A.get('/api/me')).data.citizen.id);
+  db9.close();
+  r = await A.get('/api/me');
+  check('Setelah waktu habis: lokasi kini Jakarta, transit selesai', r.data.region.name === 'Jakarta' && !r.data.travel, `region=${r.data.region.name} travel=${JSON.stringify(r.data.travel)}`);
+  check('Kewarganegaraan tetap wilayah asal setelah tiba', r.data.citizen.home_region_id === homeBefore, `home=${r.data.homeRegion?.name}`);
+  check('Negara tetap Nusantara setelah tiba di Jakarta', r.data.country?.name === 'Nusantara', JSON.stringify(r.data.country));
   r = await A.get('/api/inventory');
   const tiket = r.data.items.find((i) => i.name === 'Tiket');
   // A mungkin sudah memakai 1 Tiket di [5] (bepergian ke wilayah lowongan
   // karena lahir acak) — jadi yang dicek adalah pengurangan 1, bukan angka mutlak.
   check('Sisa Tiket T1 berkurang 1 setelah perjalanan', tiket && tiket.qty === tiketBefore9 - 1, `tiket=${tiket?.qty} (sebelum ${tiketBefore9})`);
+  r = await A.post('/api/regions/travel', { region_id: jakarta.id });
+  check('Bepergian ke wilayah sendiri ditolak (400)', r.status === 400, `status=${r.status}`);
+
+  console.log('\n[9b] Pindah kewarganegaraan (aksi terpisah dari travel)');
+  // A kini di Jakarta (tiba di [9]); kewarganegaraan masih wilayah asal
+  // (ibu kota Nusantara). Pindah ke Jakarta — harus berhasil karena A
+  // sedang berada di sana.
+  r = await A.post('/api/regions/move', { region_id: jakarta.id });
+  check('Pindah kewarganegaraan ke Jakarta berhasil (sedang di sana)', r.status === 200 && r.data.region === 'Jakarta', `status=${r.status} ${r.data.error || ''}`);
+  const meA9b = (await A.get('/api/me')).data;
+  check('Kewarganegaraan kini Jakarta', meA9b.citizen.home_region_id === jakarta.id, `home=${meA9b.homeRegion?.name}`);
+  check('Negara mengikuti kewarganegaraan baru (Jakarta merdeka → tanpa negara)', meA9b.country === null, JSON.stringify(meA9b.country));
+  // Pindah lagi langsung ditolak — tapi A harus berada di wilayah tujuan
+  // dulu; bepergian kembali ke wilayah asal lama lalu coba pindah:
+  r = await A.post('/api/regions/travel', { region_id: homeBefore });
+  check('A bepergian kembali ke wilayah asal lama', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const db9b = new DatabaseSync(DB_PATH);
+  db9b.prepare('UPDATE citizens SET travel_arrives_at = ? WHERE id = ?').run(Date.now() - 1000, meA9b.citizen.id);
+  db9b.close();
+  await A.get('/api/me'); // selesaikan kedatangan
+  r = await A.post('/api/regions/move', { region_id: homeBefore });
+  check('Pindah lagi sebelum 7 hari ditolak (400, jeda)', r.status === 400 && /hari/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  // Mundurkan jam pindah 8 hari → pindah berhasil, negara kembali Nusantara.
+  const db9c = new DatabaseSync(DB_PATH);
+  db9c.prepare('UPDATE citizens SET home_changed_at = ? WHERE id = ?').run(Date.now() - 8 * 24 * 60 * 60 * 1000, meA9b.citizen.id);
+  db9c.close();
+  r = await A.post('/api/regions/move', { region_id: homeBefore });
+  check('Setelah 7 hari: pindah kembali ke wilayah asal berhasil', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const meA9c = (await A.get('/api/me')).data;
+  check('Kewarganegaraan kembali wilayah asal; negara kembali Nusantara', meA9c.citizen.home_region_id === homeBefore && meA9c.country?.name === 'Nusantara', `home=${meA9c.homeRegion?.name} country=${meA9c.country?.name}`);
+  // Pindah ke wilayah yang TIDAK sedang didiami ditolak:
+  r = await A.post('/api/regions/move', { region_id: jakarta.id });
+  check('Pindah ke wilayah yang tidak didiami ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  // Pindah saat transit ditolak: mulai perjalanan ke Jakarta, coba pindah
+  // sebelum tiba. Tiket awal A (3) sudah habis dipakai 3 perjalanan
+  // sebelumnya — tambah 1 Tiket lewat DB tes agar perjalanan uji ini bisa
+  // dimulai.
+  const db9t = new DatabaseSync(DB_PATH);
+  const tiketId9 = db9t.prepare("SELECT id FROM commodities WHERE name = 'Tiket'").get().id;
+  db9t.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,1) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = qty + 1').run(meA9b.citizen.id, tiketId9);
+  db9t.close();
+  r = await A.post('/api/regions/travel', { region_id: jakarta.id });
+  check('A bepergian lagi ke Jakarta (untuk uji pindah saat transit)', r.status === 200, `status=${r.status}`);
+  r = await A.post('/api/regions/move', { region_id: jakarta.id });
+  check('Pindah kewarganegaraan saat transit ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  const db9d = new DatabaseSync(DB_PATH);
+  db9d.prepare('UPDATE citizens SET travel_arrives_at = ? WHERE id = ?').run(Date.now() - 1000, meA9b.citizen.id);
+  db9d.close();
+  r = await A.get('/api/me');
+  check('A tiba di Jakarta; kewarganegaraan tetap wilayah asal (bukan Jakarta)', r.data.region.name === 'Jakarta' && r.data.citizen.home_region_id === homeBefore, `region=${r.data.region.name} home=${r.data.homeRegion?.name}`);
 
   console.log('\n[10] Obrolan Global & laporan');
   r = await A.get('/api/chat/global');
@@ -363,7 +444,7 @@ async function main() {
   r = await A.get('/api/elections');
   check('Pemilu terdaftar (dijadwalkan otomatis)', Array.isArray(r.data.elections));
   r = await A.get('/api/country');
-  check('A di Jakarta (merdeka): belum bernegara, tapi Nusantara terdaftar', r.data.country === null && (r.data.countries || []).length === 1 && r.data.countries[0].name === 'Nusantara', JSON.stringify(r.data.countries));
+  check('A di Jakarta (kunjungan): tetap warga Nusantara (kewarganegaraan ikut asal, bukan lokasi)', r.data.country?.name === 'Nusantara' && (r.data.countries || []).length === 1, JSON.stringify(r.data.countries));
 
   console.log('\n[12] Daily tick — dunia maju 1 hari');
   // A masih login, energi 10 setelah makan. Mundurkan tanggal tick ke kemarin lewat DB tes.
@@ -933,7 +1014,8 @@ async function main() {
   // Redesain dunia: C/D lahir di wilayah acak (merdeka, pajak 0%) —
   // pindah keduanya ke wilayah Nusantara (region 1, ibu kota) agar pajak
   // penjual 2% + kas negara bisa dicek di [22c]/[22d] di bawah ini.
-  db4.prepare('UPDATE citizens SET region_id = 1 WHERE id IN (?,?)').run(cId, dId);
+  // Pajak mengikuti kewarganegaraan (home_region_id), jadi keduanya disetel.
+  db4.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id IN (?,?)').run(nusantaraCapitalId, nusantaraCapitalId, cId, dId);
   const setInv = (citizenId, commodityId, qty) => db4.prepare(
     'INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = ?')
     .run(citizenId, commodityId, qty, qty);
@@ -1002,7 +1084,7 @@ async function main() {
   // Redesain dunia: A di Jakarta (merdeka) — pindah A ke wilayah Nusantara
   // (region 1, sama seperti B sejak [7]) agar kas negara bisa dibaca.
   const db22d = new DatabaseSync(DB_PATH);
-  db22d.prepare("UPDATE citizens SET region_id = 1 WHERE id IN (SELECT c.id FROM citizens c JOIN users u ON u.id = c.user_id WHERE u.username IN ('warga_satu','warga_dua'))").run();
+  db22d.prepare("UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id IN (SELECT c.id FROM citizens c JOIN users u ON u.id = c.user_id WHERE u.username IN ('warga_satu','warga_dua'))").run(nusantaraCapitalId, nusantaraCapitalId);
   db22d.close();
   const treasury2 = (await A.get('/api/country')).data.country.treasury_usd;
   const usdA0 = (await A.get('/api/me')).data.citizen.usd;
@@ -1213,20 +1295,22 @@ async function main() {
   G.extraHeaders = { 'X-Forwarded-For': '127.0.0.3' };
   r = await G.post('/api/auth/register', { email: 'gabung@test.local', password: 'rahasia123', username: 'warga_gabung' });
   check('G mendaftar (IP berbeda, lewati batas 20/IP)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
-  let gRegionId = (await G.get('/api/me')).data.citizen.region_id;
+  // Usulan unifikasi mengikuti wilayah ASAL (home_region_id) pengusul.
+  let gRegionId = (await G.get('/api/me')).data.citizen.home_region_id;
   const gCitizenId = (await G.get('/api/me')).data.citizen.id;
-  if (gRegionId === 1) { gRegionId = 3; db28.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(3, gCitizenId); }
+  if (gRegionId === nusantaraCapitalId) { gRegionId = [3, 4, 5].find((x) => x !== nusantaraCapitalId); db28.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(gRegionId, gRegionId, gCitizenId); }
   db28.prepare('UPDATE citizens SET level = 5 WHERE id = ?').run(gCitizenId);
   r = await G.post('/api/countries/1/join', {});
   check('G (Level 5, wilayah merdeka) mengusulkan wilayahnya gabung Nusantara', r.status === 200 && !!r.data.joinId, `status=${r.status} ${r.data.error || ''}`);
   const joinId = r.data.joinId;
   r = await G.post('/api/countries/1/join', {});
   check('Usulan unifikasi kedua dari wilayah yang sama ditolak (400)', r.status === 400, `status=${r.status}`);
-  // Pindahkan C/D/E ke wilayah G agar bisa memilih; F dipindah menjauh
-  // agar tes 403 "bukan warga wilayah" deterministik.
-  db28.prepare('UPDATE citizens SET region_id = ? WHERE id IN (?,?,?)').run(gRegionId, cId, dId, eId);
+  // Pindahkan C/D/E ke wilayah G agar bisa memilih (kewarganegaraan =
+  // home_region_id yang menentukan hak pilih); F dipindah menjauh agar
+  // tes 403 "bukan warga wilayah" deterministik.
+  db28.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id IN (?,?,?)').run(gRegionId, gRegionId, cId, dId, eId);
   const fAwayRegion = gRegionId === 5 ? 6 : 5;
-  db28.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(fAwayRegion, fId);
+  db28.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(fAwayRegion, fAwayRegion, fId);
   r = await C.post(`/api/countries/joins/${joinId}/vote`, { vote: 'yes' });
   check('C (warga wilayah G) memilih YA', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
   r = await D.post(`/api/countries/joins/${joinId}/vote`, { vote: 'yes' });
@@ -1237,6 +1321,14 @@ async function main() {
   check('Suara ganda ditolak (400)', r.status === 400, `status=${r.status}`);
   r = await F.post(`/api/countries/joins/${joinId}/vote`, { vote: 'yes' });
   check('Bukan warga wilayah tidak bisa memilih (403)', r.status === 403, `status=${r.status}`);
+  // Pengunjung tidak bisa memilih: pindahkan C ke wilayah G secara FISIK
+  // (region_id) tapi kewarganegaraannya tetap di tempat lain — voting
+  // harus tetap ditolak 403.
+  db28.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(gRegionId, fAwayRegion, cId);
+  r = await C.post(`/api/countries/joins/${joinId}/vote`, { vote: 'yes' });
+  check('Pengunjung wilayah (bukan warga) tidak bisa memilih (403)', r.status === 403, `status=${r.status}`);
+  // Kembalikan kewarganegaraan C ke wilayah G agar [28b]/[28c] tidak berubah.
+  db28.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(gRegionId, gRegionId, cId);
   db28.prepare('UPDATE country_joins SET ends_at = ? WHERE id = ?').run(Date.now() - 1000, joinId);
   await forceTick(G);
   const joinRow = db28.prepare('SELECT status, yes, no FROM country_joins WHERE id = ?').get(joinId);
@@ -1247,11 +1339,12 @@ async function main() {
   H.extraHeaders = { 'X-Forwarded-For': '127.0.0.4' };
   r = await H.post('/api/auth/register', { email: 'duplikat@test.local', password: 'rahasia123', username: 'warga_duplikat' });
   check('H mendaftar (IP berbeda)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
-  let hRegionId = (await H.get('/api/me')).data.citizen.region_id;
+  // Pendirian negara mengikuti wilayah ASAL (home_region_id) H.
+  let hRegionId = (await H.get('/api/me')).data.citizen.home_region_id;
   const hCitizenId = (await H.get('/api/me')).data.citizen.id;
   if (db28.prepare('SELECT country_id FROM regions WHERE id = ?').get(hRegionId).country_id) {
-    hRegionId = [4, 5, 6, 7].find((x) => x !== gRegionId);
-    db28.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(hRegionId, hCitizenId);
+    hRegionId = [4, 5, 6, 7].find((x) => x !== gRegionId && x !== nusantaraCapitalId);
+    db28.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(hRegionId, hRegionId, hCitizenId);
   }
   db28.prepare('UPDATE citizens SET level = 10, gold = 200 WHERE id = ?').run(hCitizenId);
   r = await H.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
@@ -1348,7 +1441,7 @@ async function main() {
   check('Presiden B mengubah ideologi → Sosialisme', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
   r = await A.post('/api/country/ideology', { ideology: 'Liberalisme' });
   check('Bukan presiden tidak bisa mengubah ideologi (403)', r.status === 403, `status=${r.status}`);
-  db28.prepare('UPDATE citizens SET region_id = 1 WHERE id = ?').run(fId);
+  db28.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(nusantaraCapitalId, nusantaraCapitalId, fId);
   r = await F.post('/api/claim', {});
   check('Klaim Sosialisme: +7 emas (5+2)', r.status === 200 && r.data.reward.gold === 7, JSON.stringify(r.data));
   r = await B.post('/api/country/ideology', { ideology: 'Konservatisme' });
@@ -1493,6 +1586,10 @@ async function main() {
   const tiket0 = invQty5(cId, (await C.get('/api/market?scope=local')).data.commodities.find((x) => x.name === 'Tiket').id);
   r = await C.post('/api/regions/travel', { region_id: targetRegion.id });
   check('Perjalanan memakai 2 Tiket (3 → 1)', r.status === 200 && invQty5(cId, (await C.get('/api/market?scope=local')).data.commodities.find((x) => x.name === 'Tiket').id) === tiket0 - 2, `tiket ${tiket0} → ${invQty5(cId, (await C.get('/api/market?scope=local')).data.commodities.find((x) => x.name === 'Tiket').id)}`);
+  // Waktu tempuh (27 Nov 2026): paksa tiba dulu — kalau tidak, perjalanan
+  // kedua ditolak karena masih transit, bukan karena tiket kurang.
+  db5.prepare('UPDATE citizens SET travel_arrives_at = ? WHERE id = ?').run(Date.now() - 1000, cId);
+  await C.get('/api/me');
   r = await C.post('/api/regions/travel', { region_id: regions5.find((x) => x.id !== targetRegion.id).id });
   check('Perjalanan kedua ditolak: Tiket kurang (butuh 2)', r.status === 400 && /2 Tiket/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
 

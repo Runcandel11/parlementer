@@ -12,7 +12,7 @@ import { getMyCountry, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasT
 import {
   WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
   xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
-  energyCapFor, DAILY_MISSIONS, CHRONICLE,
+  energyCapFor, DAILY_MISSIONS, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
   PRICE_BAND, WASH_TRADE,
@@ -277,9 +277,9 @@ export function registerCore(app) {
       const startRegion = await t.one('SELECT id, name FROM regions ORDER BY RANDOM() LIMIT 1');
       const startRegionId = startRegion ? startRegion.id : 1;
       const citizen = await t.run(
-        `INSERT INTO citizens (user_id, level, xp, energy, energy_updated_at, gold, usd, region_id, home_region_id, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
-        [user.id, 1, 0, 100, now, 50, 500, startRegionId, startRegionId, now]);
+        `INSERT INTO citizens (user_id, level, xp, energy, energy_updated_at, gold, usd, region_id, home_region_id, home_changed_at, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+        [user.id, 1, 0, 100, now, 50, 500, startRegionId, startRegionId, 0, now]);
       // Paket awal: 3 Makanan T1, 3 Senjata T1, 3 Tiket T1.
       for (const name of ['Makanan', 'Senjata', 'Tiket']) {
         const com = await t.one('SELECT id FROM commodities WHERE name = ?', [name]);
@@ -375,6 +375,16 @@ export function registerCore(app) {
     }
     const region = await one('SELECT r.*, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [c.region_id]);
     const country = await getMyCountry({ one }, c);
+    // Wilayah asal / kewarganegaraan (27 Nov 2026): bisa berbeda dari
+    // region (lokasi saat ini) bila warga sedang berkunjung ke wilayah lain.
+    const homeRegion = c.home_region_id ? await one('SELECT r.*, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [c.home_region_id]) : null;
+    // Status perjalanan yang sedang berjalan: null bila tidak bepergian.
+    // arrivesAt/remainingMs dipakai hitung mundur di UI. Bila jam tiba
+    // sudah lewat, settleTravel di loadCitizen sudah menyelesaikan
+    // kedatangan — penjaga > Date.now() di sini hanya pengaman.
+    const travel = c.travel_to_region_id && c.travel_arrives_at > Date.now()
+      ? { toRegionId: c.travel_to_region_id, toRegionName: (await one('SELECT name FROM regions WHERE id = ?', [c.travel_to_region_id]))?.name || '', arrivesAt: c.travel_arrives_at, remainingMs: Math.max(0, c.travel_arrives_at - Date.now()) }
+      : null;
     const parliamentOpensAt = await getParliamentOpensAt();
     const party = c.party_id ? await one('SELECT id, name, tag FROM parties WHERE id = ?', [c.party_id]) : null;
     const job = c.job_id ? await one('SELECT j.*, co.name AS company_name FROM jobs j LEFT JOIN companies co ON co.id = j.company_id WHERE j.id = ?', [c.job_id]) : null;
@@ -435,7 +445,8 @@ export function registerCore(app) {
       },
       citizen: { ...c, isPremium, energyCap, trainCosts, trainCooldowns },
       referral,
-      region, country: countrySummary(country),
+      region, homeRegion: homeRegion ? { id: homeRegion.id, name: homeRegion.name, type: homeRegion.type, country_id: homeRegion.country_id, country_name: homeRegion.country_name } : null,
+      travel, country: countrySummary(country),
       // Parlemen: status buka + tanggal buka (untuk countdown di HUD).
       parliamentOpen: Date.now() >= parliamentOpensAt,
       parliamentOpensAt,
@@ -717,7 +728,9 @@ export function registerCore(app) {
     let u = await one(q + 'u.username = ?', [req.params.username]);
     if (!u) u = await one(q + 'LOWER(u.username) = LOWER(?)', [req.params.username]);
     if (!u) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
-    const region = await one('SELECT r.name, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [u.region_id]);
+    // Profil menunjukkan wilayah ASAL (kewarganegaraan, home_region_id) —
+    // bukan lokasi kunjungan saat ini.
+    const region = await one('SELECT r.name, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [u.home_region_id]);
     const party = u.party_id ? await one('SELECT name, tag FROM parties WHERE id = ?', [u.party_id]) : null;
     const companies = await sql('SELECT id, name, type FROM companies WHERE owner_id = ?', [u.id]);
     const articles = await sql('SELECT id, title, created_at FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT 5', [u.id]);
@@ -1378,7 +1391,13 @@ export function registerCore(app) {
         (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
         (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion
        FROM regions r LEFT JOIN country c ON c.id = r.country_id ORDER BY r.id`);
-    res.json({ regions: rows, mine: req.citizen.region_id });
+    // Waktu tempuh dari LOKASI SAAT INI (27 Nov 2026) + biaya perjalanan
+    // dari NEGARA PEMANGGIL (kewarganegaraan, 1 atau 2 Tiket). `home` =
+    // wilayah kewarganegaraan pemanggil.
+    const myRegion = await one('SELECT name FROM regions WHERE id = ?', [req.citizen.region_id]);
+    const myCountry = await getMyCountry({ one }, req.citizen);
+    const regions = rows.map((r) => ({ ...r, travelMinutes: r.id === req.citizen.region_id ? 0 : travelMinutesFor(myRegion?.name, r.name) }));
+    res.json({ regions, mine: req.citizen.region_id, home: req.citizen.home_region_id, travelTickets: getTravelTickets({ one }, myCountry) });
   }));
 
   app.get('/api/regions/:id', authRequired, citizenRequired, r(async (req, res) => {
@@ -1396,7 +1415,8 @@ export function registerCore(app) {
     // biaya perjalanan dari NEGARA PEMANGGIL (1 atau 2 Tiket).
     const regionCountry = reg.country_id ? await one('SELECT * FROM country WHERE id = ?', [reg.country_id]) : null;
     const myCountry = await getMyCountry({ one }, req.citizen);
-    res.json({ region: reg, war, mySupport: !!mySupport, mine: req.citizen.region_id === reg.id, home: req.citizen.home_region_id === reg.id, travelTickets: getTravelTickets({ one }, myCountry), taxIncome: Math.round(getIncomeTaxRate({ one }, regionCountry) * 100 * 100) / 100, country: countrySummary(regionCountry) });
+    const myRegion = await one('SELECT name FROM regions WHERE id = ?', [req.citizen.region_id]);
+    res.json({ region: reg, war, mySupport: !!mySupport, mine: req.citizen.region_id === reg.id, home: req.citizen.home_region_id === reg.id, travelTickets: getTravelTickets({ one }, myCountry), travelMinutes: reg.id === req.citizen.region_id ? 0 : travelMinutesFor(myRegion?.name, reg.name), taxIncome: Math.round(getIncomeTaxRate({ one }, regionCountry) * 100 * 100) / 100, country: countrySummary(regionCountry) });
   }));
 
   app.post('/api/regions/travel', authRequired, citizenRequired, r(async (req, res) => {
@@ -1404,12 +1424,21 @@ export function registerCore(app) {
     const c = req.citizen;
     const target = await one('SELECT * FROM regions WHERE id = ?', [region_id]);
     if (!target) return res.status(404).json({ error: 'Wilayah tidak ditemukan.' });
+    // TRAVEL = KUNJUNGAN (27 Nov 2026): bepergian TIDAK memindahkan
+    // kewarganegaraan — home_region_id tetap. Perjalanan butuh WAKTU
+    // TEMPUH berdasar jarak ibu kota (travelMinutesFor: 2 + 1 mnt/100 km,
+    // 2–30 mnt); warga tiba saat jam tiba tercapai — kedatangan diselesaikan
+    // malas oleh loadCitizen (settleTravel) saat data warga dibaca.
     // Biaya perjalanan dari UU negara PEMANGGIL yang berlaku (Tahap 5):
-    // 1 atau 2 Tiket. Tanpa negara = 1 Tiket.
+    // 1 atau 2 Tiket — TIDAK BERUBAH. Tanpa negara = 1 Tiket.
     const ticketsNeeded = getTravelTickets({ one }, await getMyCountry({ one }, c));
-    // Atomik: kunci baris warga, pakai tiket + pindah di dalam tx yang sama.
+    const from = await one('SELECT name FROM regions WHERE id = ?', [c.region_id]);
+    const minutes = travelMinutesFor(from?.name, target.name);
+    const arrivesAt = Date.now() + minutes * 60 * 1000;
+    // Atomik: kunci baris warga, pakai tiket + catat perjalanan di dalam tx.
     await tx(async (t) => {
       const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
+      if (locked.travel_to_region_id) throw Object.assign(new Error('Kamu sedang dalam perjalanan. Tunggu sampai tiba dulu.'), { status: 400 });
       if (locked.region_id === target.id) throw Object.assign(new Error('Kamu sudah berada di wilayah ini.'), { status: 400 });
       // Tiket: pakai T1 dulu, lalu tingkat lebih tinggi — sebanyak yang
       // dibutuhkan UU saat ini (1 atau 2).
@@ -1423,10 +1452,42 @@ export function registerCore(app) {
         }
       }
       if (used < ticketsNeeded) throw Object.assign(new Error(`Butuh ${ticketsNeeded} Tiket untuk bepergian. Beli di pasar.`), { status: 400 });
-      await t.run('UPDATE citizens SET region_id = ? WHERE id = ?', [target.id, locked.id]);
+      await t.run('UPDATE citizens SET travel_to_region_id = ?, travel_arrives_at = ? WHERE id = ?', [target.id, arrivesAt, locked.id]);
     });
     await chronicleDone(c, 'travel');
-    res.json({ ok: true, region: target.name });
+    res.json({ ok: true, region: target.name, travelMinutes: minutes, arrivesAt, inTransit: true });
+  }));
+
+  // ---------- PINDAH KEWARGANEGARAAN (27 Nov 2026) ----------
+  // Aksi TERPISAH dari travel: hanya lewat endpoint ini home_region_id
+  // berubah. Syarat: (1) tidak sedang dalam perjalanan, (2) target harus
+  // wilayah tempat warga BERADA SAAT INI (harus bepergian dulu ke sana —
+  // pindah kewarganegaraan tanpa mengunjungi wilayahnya tidak mungkin),
+  // (3) target bukan wilayah asal saat ini, (4) jeda 7 hari sejak pindah
+  // terakhir (anti-lompat pemilu/unifikasi). GRATIS — biayanya adalah
+  // tiket perjalanan + jedanya. Negara/pajak/voting mengikuti wilayah
+  // asal BARU begitu pindah (getMyCountry membaca home_region_id).
+  app.post('/api/regions/move', authRequired, citizenRequired, r(async (req, res) => {
+    const { region_id } = req.body || {};
+    const c = req.citizen;
+    const target = await one('SELECT * FROM regions WHERE id = ?', [region_id]);
+    if (!target) return res.status(404).json({ error: 'Wilayah tidak ditemukan.' });
+    if (c.travel_to_region_id) return res.status(400).json({ error: 'Kamu sedang dalam perjalanan. Pindah kewarganegaraan bisa dilakukan setelah tiba.' });
+    if (c.region_id !== target.id) return res.status(400).json({ error: `Kamu harus berada di ${target.name} dulu untuk pindah kewarganegaraan ke sana. Bepergian ke sana dulu.` });
+    if (c.home_region_id === target.id) return res.status(400).json({ error: `${target.name} sudah menjadi wilayah kewarganegaraanmu.` });
+    if (c.home_changed_at && Date.now() - c.home_changed_at < MOVE_COOLDOWN_MS) {
+      const days = Math.ceil((c.home_changed_at + MOVE_COOLDOWN_MS - Date.now()) / (24 * 60 * 60 * 1000));
+      return res.status(400).json({ error: `Pindah kewarganegaraan bisa dilakukan lagi dalam ${days} hari.` });
+    }
+    // UPDATE bersyarat = penjaga race: bila perjalanan dimulai bersamaan
+    // atau jeda belum lewat, perubahan tidak terjadi (changes = 0).
+    const upd = await run(
+      'UPDATE citizens SET home_region_id = ?, home_changed_at = ? WHERE id = ? AND travel_to_region_id IS NULL AND region_id = ? AND home_region_id <> ? AND (home_changed_at = 0 OR home_changed_at <= ?)',
+      [target.id, Date.now(), c.id, target.id, target.id, Date.now() - MOVE_COOLDOWN_MS]);
+    if (!upd.changes) return res.status(400).json({ error: 'Tidak bisa pindah kewarganegaraan sekarang. Pastikan kamu sudah tiba, sedang berada di wilayah tujuan, dan jeda 7 hari sudah lewat.' });
+    const country = await getMyCountry({ one }, { ...c, home_region_id: target.id });
+    await notify(c.id, 'SISTEM', 'Kewarganegaraan pindah', `Kewarganegaraanmu kini ${target.name}${country ? ` — kamu kini warga ${country.name}.` : ' (wilayah merdeka).'}`);
+    res.json({ ok: true, region: target.name, country: country ? country.name : null });
   }));
 
   app.post('/api/regions/rebel', authRequired, citizenRequired, r(async (req, res) => {
@@ -1558,11 +1619,13 @@ export function registerCore(app) {
     const regionsN = await one('SELECT COUNT(*) AS n FROM regions');
     const countriesN = await one('SELECT COUNT(*) AS n FROM country');
     const freeRegions = await one('SELECT COUNT(*) AS n FROM regions WHERE country_id IS NULL');
+    // "PEMIMPIN TIAP DAFTAR" mengikuti KEWARGANEGARAAN (home_region_id):
+    // Level Tertinggi menampilkan wilayah asal + negara asal pemain.
     const topLevel = await sql(`SELECT u.username, c.level, c.xp, r.name AS region_name, co.name AS country_name
-      FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.region_id
+      FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.home_region_id
       LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 3`);
     const topRegions = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, co.name AS country_name
-      FROM regions r LEFT JOIN citizens c ON c.region_id = r.id LEFT JOIN country co ON co.id = r.country_id
+      FROM regions r LEFT JOIN citizens c ON c.home_region_id = r.id LEFT JOIN country co ON co.id = r.country_id
       GROUP BY r.id, r.name, r.type, co.name ORDER BY citizens DESC, r.name ASC LIMIT 3`);
     const topParties = await sql(`SELECT p.id, p.name, p.tag, COUNT(pm.citizen_id) AS members
       FROM parties p LEFT JOIN party_members pm ON pm.party_id = p.id
@@ -1578,18 +1641,18 @@ export function registerCore(app) {
     const warActive = await one("SELECT COUNT(*) AS n FROM wars WHERE region_id = ? AND status = 'active'", [req.citizen.region_id]);
     const mySupport = await one('SELECT COUNT(*) AS n FROM war_support WHERE region_id = ? AND citizen_id = ?', [req.citizen.region_id, req.citizen.id]);
     const myCountryCitizens = myRegion.country_id
-      ? await one('SELECT COUNT(*) AS n FROM citizens c JOIN regions r ON r.id = c.region_id WHERE r.country_id = ?', [myRegion.country_id])
+      ? await one('SELECT COUNT(*) AS n FROM citizens c JOIN regions r ON r.id = c.home_region_id WHERE r.country_id = ?', [myRegion.country_id])
       : { n: 0 };
     // Daftar lengkap (?full=level|regions|parties, maks 50) untuk LIHAT SEMUA.
     const full = req.query.full;
     let fullList = null;
     if (full === 'level') {
       fullList = await sql(`SELECT u.username, c.level, c.xp, r.name AS region_name, co.name AS country_name
-        FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.region_id
+        FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.home_region_id
         LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 50`);
     } else if (full === 'regions') {
       fullList = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, co.name AS country_name
-        FROM regions r LEFT JOIN citizens c ON c.region_id = r.id LEFT JOIN country co ON co.id = r.country_id
+        FROM regions r LEFT JOIN citizens c ON c.home_region_id = r.id LEFT JOIN country co ON co.id = r.country_id
         GROUP BY r.id, r.name, r.type, co.name ORDER BY citizens DESC, r.name ASC LIMIT 50`);
     } else if (full === 'parties') {
       fullList = await sql(`SELECT p.id, p.name, p.tag, COUNT(pm.citizen_id) AS members
