@@ -12,7 +12,7 @@ import { getMyCountry, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasT
 import {
   VERSION, WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
   xpForLevel, xpGainForShift, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
-  energyCapFor, DAILY_MISSIONS, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS,
+  energyCapFor, DAILY_MISSIONS, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS, REGION_COORDS,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, FACTORY_INPUT, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
   PRICE_BAND, WASH_TRADE,
@@ -615,6 +615,23 @@ export function registerCore(app) {
     });
     res.json({ ok: true, reward: ch.reward });
   }));
+
+  // Kunjungan peta (v2.5.0): menandai tugas kronik 'map' selesai. Hanya
+  // kunci yang dikenal yang diterima; idempotent (chronicleDone sudah
+  // memeriksa duplikat).
+  app.post('/api/chronicle/visit', authRequired, citizenRequired, r(async (req, res) => {
+    const { key } = req.body || {};
+    if (key !== 'map') return res.status(400).json({ error: 'Kunjungan tidak dikenal.' });
+    await chronicleDone(req.citizen, 'map');
+    res.json({ ok: true });
+  }));
+
+  // ---------- PETA: koordinat ibu kota + kunjungan kronik ----------
+  // /api/regions menyertakan coords (REGION_COORDS) supaya peta besar di
+  // klien bisa menaruh penanda KAMU + label di posisi geografis nyata.
+  // POST /api/chronicle/visit menandai tugas kronik 'map' (Jelajahi peta)
+  // saat pemain membuka peta besar — sebelumnya tugas ini tidak pernah
+  // ditandai selesai oleh endpoint mana pun.
 
   // ---------- INVENTARIS ----------
   app.get('/api/inventory', authRequired, citizenRequired, r(async (req, res) => {
@@ -1565,7 +1582,7 @@ export function registerCore(app) {
     // wilayah kewarganegaraan pemanggil.
     const myRegion = await one('SELECT name FROM regions WHERE id = ?', [req.citizen.region_id]);
     const myCountry = await getMyCountry({ one }, req.citizen);
-    const regions = rows.map((r) => ({ ...r, travelMinutes: r.id === req.citizen.region_id ? 0 : travelMinutesFor(myRegion?.name, r.name) }));
+    const regions = rows.map((r) => ({ ...r, coords: REGION_COORDS[r.name] || null, travelMinutes: r.id === req.citizen.region_id ? 0 : travelMinutesFor(myRegion?.name, r.name) }));
     res.json({ regions, mine: req.citizen.region_id, home: req.citizen.home_region_id, travelTickets: getTravelTickets({ one }, myCountry) });
   }));
 

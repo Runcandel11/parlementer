@@ -33,7 +33,8 @@
     "test:ssl": "node test/ssl-warning.mjs",
     "test:jobs-region": "node test/jobs-region-dom.js",
     "test:ui-icons": "node test/ui-icons-dom.js",
-    "test:company-dom": "node test/company-dom.js"
+    "test:company-dom": "node test/company-dom.js",
+    "test:map-dom": "node test/map-dom.js"
   },
   "type": "module",
   "version": "1.0.0"

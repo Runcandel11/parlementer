@@ -2319,35 +2319,205 @@ ROUTES.companies = async () => {
 };
 
 // ---------- PETA & WILAYAH ----------
+// ---------- PETA BESAR (v2.5.0) ----------
+// Bentuk wilayah yang disederhanakan (garis bujur, lintang) — cukup untuk
+// dikenali sebagai Indonesia: Sumatra diagonal, Jawa memanjang, Kalimantan
+// besar, Sulawesi, Papua. Diproyeksikan equirectangular ke viewBox SVG
+// 1000×360 (lon 94–142, lat 6 s.d. −11).
+const MAP_PROJ = { lonMin: 94, lonMax: 142, latMax: 6, latMin: -11, w: 1000, h: 360 };
+const mapX = (lon) => ((lon - MAP_PROJ.lonMin) / (MAP_PROJ.lonMax - MAP_PROJ.lonMin)) * MAP_PROJ.w;
+const mapY = (lat) => ((MAP_PROJ.latMax - lat) / (MAP_PROJ.latMax - MAP_PROJ.latMin)) * MAP_PROJ.h;
+const MAP_SHAPES = {
+  'Sumatera Utara': { poly: [[97.8, 1.3], [98.0, 3.0], [98.6, 4.3], [99.6, 4.5], [100.4, 3.6], [100.3, 2.2], [99.6, 1.1], [98.6, 0.9]] },
+  'Sumatera Barat': { poly: [[99.6, 0.4], [100.6, 0.4], [101.3, -0.8], [101.2, -2.0], [100.3, -3.0], [99.7, -2.2], [99.5, -0.8]] },
+  'Sumatera Selatan': { poly: [[102.7, -1.0], [104.0, -1.3], [105.5, -2.2], [106.2, -3.2], [105.5, -4.3], [104.2, -4.4], [103.0, -3.5], [102.5, -2.0]] },
+  'Kepulauan Riau': { poly: [[104.0, 0.5], [104.6, 0.6], [105.0, 1.0], [104.8, 1.4], [104.2, 1.3], [103.9, 0.9]], sats: [[103.6, 0.2, 0.14], [105.3, 0.9, 0.12]] },
+  'Jakarta': { poly: [[106.65, -6.05], [106.95, -6.05], [107.0, -6.3], [106.7, -6.35]] },
+  'Jawa Barat': { poly: [[105.6, -6.3], [106.5, -6.1], [107.8, -6.0], [108.5, -6.7], [108.3, -7.5], [107.0, -7.9], [105.9, -7.5], [105.5, -6.9]] },
+  'Jawa Tengah': { poly: [[108.5, -6.7], [109.8, -6.4], [111.2, -6.8], [111.4, -7.5], [110.6, -8.1], [109.3, -8.0], [108.6, -7.4]] },
+  'Jawa Timur': { poly: [[111.4, -6.9], [112.6, -6.7], [113.8, -7.0], [114.5, -7.6], [114.3, -8.2], [112.8, -8.3], [111.6, -7.7]], extra: [[112.6, -6.9], [113.5, -6.85], [114.1, -7.05], [113.6, -7.3], [112.8, -7.2]] },
+  'Bali': { poly: [[114.4, -8.2], [115.2, -8.1], [115.7, -8.3], [115.6, -8.8], [114.9, -8.8], [114.4, -8.5]] },
+  'Nusa Tenggara Barat': { poly: [[115.9, -8.3], [116.8, -8.3], [117.5, -8.5], [118.5, -8.4], [119.3, -8.7], [119.0, -9.1], [117.0, -9.0], [116.0, -8.8]] },
+  'Nusa Tenggara Timur': { poly: [[119.3, -8.6], [120.5, -8.5], [122.0, -8.4], [123.0, -8.7], [122.5, -9.2], [120.0, -9.2], [119.2, -8.9]], extra: [[123.6, -9.2], [124.6, -9.4], [125.6, -9.8], [125.3, -10.4], [124.3, -10.4], [123.7, -9.9]] },
+  'Kalimantan Barat': { poly: [[108.8, 1.5], [109.9, 2.3], [111.0, 1.2], [110.9, -0.5], [110.2, -2.0], [109.3, -2.9], [108.7, -1.8], [108.6, 0.2]] },
+  'Kalimantan Selatan': { poly: [[114.3, -1.9], [115.4, -2.1], [116.4, -2.9], [116.2, -3.9], [115.2, -4.1], [114.4, -3.4], [114.2, -2.6]] },
+  'Kalimantan Timur': { poly: [[114.6, -0.8], [115.6, -0.3], [116.8, 0.3], [117.9, 1.2], [118.1, 2.6], [117.4, 4.2], [116.2, 3.4], [115.2, 2.2], [114.6, 0.8], [114.4, -0.2]] },
+  'Sulawesi Selatan': { poly: [[119.2, -2.9], [120.3, -3.2], [121.1, -4.2], [120.8, -5.2], [120.2, -6.0], [119.4, -5.9], [119.1, -4.4], [119.0, -3.5]] },
+  'Sulawesi Utara': { poly: [[120.4, 0.3], [121.5, 0.6], [122.8, 0.9], [124.0, 1.3], [124.9, 1.5], [124.6, 0.7], [123.5, 0.4], [122.0, 0.2], [120.8, -0.1]] },
+  'Papua': { poly: [[131.0, -0.9], [133.5, -1.2], [136.0, -1.6], [138.5, -2.0], [141.0, -2.7], [140.8, -4.2], [139.5, -5.5], [137.5, -7.0], [135.5, -8.2], [134.0, -7.2], [132.5, -5.5], [131.2, -3.5], [130.9, -1.8]] },
+};
+// Daratan sekitar (latar, tidak interaktif): Semenanjung Malaya, Borneo
+// utara, Papua Nugini, Mindanao selatan.
+const MAP_BG_LAND = [
+  [[99.5, 6.5], [101.0, 6.0], [102.5, 4.5], [103.8, 2.5], [104.3, 1.5], [103.5, 1.3], [102.0, 2.0], [100.5, 3.5], [99.8, 5.0]],
+  [[109.0, 1.2], [111.0, 2.0], [113.0, 3.2], [115.0, 4.5], [116.5, 6.5], [117.6, 6.2], [116.5, 4.8], [115.0, 3.5], [113.0, 2.2], [111.0, 1.4]],
+  [[141.0, -2.7], [143.0, -3.0], [145.0, -4.2], [146.0, -6.0], [144.0, -8.0], [142.0, -8.5], [141.0, -6.0]],
+  [[124.5, 5.8], [126.0, 5.9], [126.5, 4.6], [125.2, 4.2], [124.3, 5.0]],
+];
+// Warna negara (deterministik dari id negara — bendera ditentukan parlemen
+// nanti, jadi warna saja yang membedakan negara di peta).
+const COUNTRY_COLORS = ['#d43d2a', '#2e8b57', '#2f6fb2', '#8e44ad', '#c96a12', '#0f766e', '#b8860b', '#6d28d9'];
+const countryColor = (id) => COUNTRY_COLORS[((Number(id) || 1) - 1) % COUNTRY_COLORS.length];
+// Label wilayah kecil digeser supaya tidak menumpuk poligon tetangga.
+const MAP_LABEL_DY = { 'Jakarta': -16, 'Bali': 15, 'Kepulauan Riau': -15, 'Nusa Tenggara Barat': 12 };
+// Wilayah kecil (Jakarta, Bali, Kepri) dapat lingkaran klik tak terlihat
+// supaya tetap mudah diketuk di HP.
+const MAP_SMALL = new Set(['Jakarta', 'Bali', 'Kepulauan Riau']);
+
 ROUTES.map = async () => {
   const data = await api('/api/regions');
+  // Tandai tugas kronik 'map' (Jelajahi peta) — gagal diam-diam bila sesi habis.
+  post('/api/chronicle/visit', { key: 'map' }).catch(() => {});
   // Banner transit (27 Nov 2026): selama bepergian, tombol travel di
   // semua kartu nonaktif — warga tiba saat waktunya habis.
   const transitBanner = ME.travel ? `<div class="panel"><p class="teal-text" style="margin:0">✈️ Dalam perjalanan ke <b>${esc(ME.travel.toRegionName)}</b> — tiba dalam ${fmtCountdown(ME.travel.remainingMs)} lagi.</p></div>` : '';
-  $('#page').innerHTML = page('PETA DUNIA', '17 wilayah belum bernegara. Klik wilayah untuk detail dan bepergian.', `
+  const byId = new Map(data.regions.map((r) => [r.id, r]));
+  const freeCount = data.regions.filter((r) => !r.country_name).length;
+  const pts = (poly) => poly.map(([lo, la]) => `${mapX(lo).toFixed(1)},${mapY(la).toFixed(1)}`).join(' ');
+  const centroid = (poly) => {
+    const s = poly.reduce(([ax, ay], [lo, la]) => [ax + mapX(lo), ay + mapY(la)], [0, 0]);
+    return [s[0] / poly.length, s[1] / poly.length];
+  };
+  // Label nama negara (satu per negara, di tengah wilayah-wilayahnya).
+  const countryGroups = new Map();
+  data.regions.forEach((r) => {
+    if (!r.country_id) return;
+    const g = countryGroups.get(r.country_id) || { name: r.country_name, pts: [] };
+    const shape = MAP_SHAPES[r.name];
+    if (shape) g.pts.push(centroid(shape.poly));
+    countryGroups.set(r.country_id, g);
+  });
+  const countryLabels = [...countryGroups.values()].map((g) => {
+    const [cx, cy] = [g.pts.reduce((s, p) => s + p[0], 0) / g.pts.length, g.pts.reduce((s, p) => s + p[1], 0) / g.pts.length];
+    return `<text class="map-country-label" x="${cx.toFixed(1)}" y="${cy.toFixed(1)}">${esc(g.name.toUpperCase())}</text>`;
+  }).join('');
+  const mine = byId.get(data.mine);
+  const mineXY = mine?.coords ? [mapX(mine.coords[1]), mapY(mine.coords[0])] : null;
+  $('#page').innerHTML = page('PETA DUNIA', `${freeCount} wilayah belum bernegara · klik wilayah untuk memilih, klik dua kali untuk detail.`, `
   ${transitBanner}
   <div class="panel"><h3>🔍 CARI WILAYAH</h3>
-    <input id="region-search" placeholder="Cari wilayah...">
+    <input id="map-search" placeholder="Cari wilayah..." autocomplete="off">
+    <p class="muted small" id="map-search-count" style="margin:6px 0 0"></p>
   </div>
-  <div id="region-list">
-  ${data.regions.map((r) => `
-    <div class="card region-card" data-name="${esc(r.name.toLowerCase())}">
+  <div class="panel big-map-panel">
+    <div class="map-zoom">
+      <button class="btn-ghost btn-sm" id="map-zoom-out" type="button" aria-label="Perkecil peta">−</button>
+      <button class="btn-ghost btn-sm" id="map-zoom-in" type="button" aria-label="Perbesar peta">+</button>
+      <button class="btn-ghost btn-sm" id="map-zoom-reset" type="button" aria-label="Reset zoom">⟲</button>
+    </div>
+    <div class="big-map-wrap" id="big-map-wrap">
+      <svg id="big-map" viewBox="0 0 1000 360" role="img" aria-label="Peta dunia Parlementer — 17 wilayah Indonesia">
+        <rect class="map-ocean" x="0" y="0" width="1000" height="360"></rect>
+        ${MAP_BG_LAND.map((poly) => `<polygon class="map-bg-land" points="${pts(poly)}"></polygon>`).join('')}
+        <text class="map-sea" x="${mapX(112)}" y="${mapY(4.8)}">LAUT CINA SELATAN</text>
+        <text class="map-sea" x="${mapX(111)}" y="${mapY(-5.0)}">LAUT JAWA</text>
+        <text class="map-sea" x="${mapX(103)}" y="${mapY(-8.8)}">SAMUDRA HINDIA</text>
+        ${data.regions.map((r) => {
+          const shape = MAP_SHAPES[r.name];
+          const free = !r.country_name;
+          const [cx, cy] = r.coords ? [mapX(r.coords[1]), mapY(r.coords[0])] : (shape ? centroid(shape.poly) : [500, 180]);
+          const [qx, qy] = shape ? centroid(shape.poly) : [cx, cy];
+          const ly = cy + (MAP_LABEL_DY[r.name] || 0);
+          const poly = shape
+            ? `<polygon class="map-region" data-region-id="${r.id}" points="${pts(shape.poly)}" ${free ? '' : `style="fill:${countryColor(r.country_id)}"`} tabindex="0" role="button" aria-label="${esc(r.name)} — ${esc(r.country_name || 'Belum Bernegara')}"><title>${esc(r.name)} — ${r.population} warga · ${esc(r.country_name || 'Belum Bernegara')}</title></polygon>
+            ${shape.extra ? `<polygon class="map-region" data-region-id="${r.id}" points="${pts(shape.extra)}" ${free ? '' : `style="fill:${countryColor(r.country_id)}"`} tabindex="0" role="button" aria-label="${esc(r.name)} — ${esc(r.country_name || 'Belum Bernegara')}"></polygon>` : ''}
+            ${(shape.sats || []).map(([lo, la, rad]) => `<circle class="map-region map-sat" data-region-id="${r.id}" cx="${mapX(lo).toFixed(1)}" cy="${mapY(la).toFixed(1)}" r="${(rad * MAP_PROJ.w / (MAP_PROJ.lonMax - MAP_PROJ.lonMin)).toFixed(1)}" ${free ? '' : `style="fill:${countryColor(r.country_id)}"`}></circle>`).join('')}`
+            : `<circle class="map-region" data-region-id="${r.id}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="10" ${free ? '' : `style="fill:${countryColor(r.country_id)}"`} tabindex="0" role="button" aria-label="${esc(r.name)}"><title>${esc(r.name)}</title></circle>`;
+          return `<g class="map-region-g ${free ? 'free' : 'owned'}" data-region-id="${r.id}" data-name="${esc(r.name.toLowerCase())}">
+            ${poly}
+            ${free ? `<text class="map-q" x="${qx.toFixed(1)}" y="${(qy + 7).toFixed(1)}">?</text>` : ''}
+            <text class="map-label" x="${cx.toFixed(1)}" y="${ly.toFixed(1)}">${esc(r.name.toUpperCase())}</text>
+            ${MAP_SMALL.has(r.name) ? `<circle class="map-hit" data-region-id="${r.id}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="16"></circle>` : ''}
+          </g>`;
+        }).join('')}
+        ${countryLabels}
+        ${mineXY ? `<g class="map-you" data-region-id="${data.mine}"><circle class="map-you-ring" cx="${mineXY[0].toFixed(1)}" cy="${mineXY[1].toFixed(1)}" r="15"></circle><circle class="map-you-dot" cx="${mineXY[0].toFixed(1)}" cy="${mineXY[1].toFixed(1)}" r="7"></circle><text class="map-you-label" x="${mineXY[0].toFixed(1)}" y="${(mineXY[1] - 22).toFixed(1)}">📍 KAMU</text></g>` : ''}
+      </svg>
+    </div>
+    <p class="muted small" style="margin:8px 0 0">Wilayah abu-abu + "?" = belum bernegara. Warna = negara pemiliknya.</p>
+  </div>
+  <div class="panel" id="map-panel"><h3>📖 POLITIK · NEGARA</h3><div id="map-panel-body"><p class="muted small">Memuat…</p></div></div>`);
+  // --- Panel bawah: ringkasan wilayah yang dipilih ---
+  let selectedId = data.mine;
+  const panelHtml = (r, d) => `
       <div class="panel-head"><h4>${esc(r.name)}</h4><span class="chip">${esc(r.type)} · Skor ${r.city_score}/10</span></div>
       <p class="muted small">${r.population} warga · ${r.companies} perusahaan · Pemberontakan ${r.rebellion}/5${r.resource_bonus ? ' · Bonus: ' + esc(r.resource_bonus) : ''}</p>
       <p class="muted small">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Belum Bernegara'}</p>
-      <div class="row"><button class="btn-gold btn-sm" data-goto="#/regions/${r.id}">Lihat Wilayah</button>
-      ${r.id === data.home ? '<span class="chip gold">🏠 KEWARGANEGARAAN</span>' : ''}
-      ${r.id === data.mine ? '<span class="chip teal">📍 KAMU DI SINI</span>' : ME.travel ? '<span class="chip">✈️ Dalam perjalanan</span>' : `<button class="btn-ghost btn-sm" data-travel="${r.id}">Bepergian (~${r.travelMinutes} mnt · ${data.travelTickets || 1} 🎫)</button>`}</div>
-    </div>`).join('')}
-  </div>`);
-  $('#region-search').addEventListener('input', (e) => {
-    const q = e.target.value.toLowerCase();
-    $('.region-card').forEach((el) => { el.style.display = el.dataset.name.includes(q) ? '' : 'none'; });
+      <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${d ? `${d.taxIncome ?? 0}%` : '…'}</span></div>
+      ${d?.war ? `<p class="red-text small">⚔️ Perang aktif: <b>${esc(d.war.name)}</b></p>` : ''}
+      <div class="row">
+        <button class="btn-gold btn-sm" data-goto="#/regions/${r.id}">Lihat Wilayah</button>
+        ${r.id === data.home ? '<span class="chip gold">🏠 KEWARGANEGARAAN</span>' : ''}
+        ${r.id === data.mine ? '<span class="chip teal">📍 KAMU DI SINI</span>'
+          : ME.travel ? '<span class="chip">✈️ Dalam perjalanan</span>'
+          : `<button class="btn-ghost btn-sm" data-travel="${r.id}">Bepergian (~${r.travelMinutes} mnt · ${data.travelTickets || 1} 🎫)</button>`}
+      </div>`;
+  const selectRegion = async (id) => {
+    selectedId = id;
+    $$('.map-region-g').forEach((el) => el.classList.toggle('selected', Number(el.dataset.regionId) === id));
+    const r = byId.get(id);
+    const body = $('#map-panel-body');
+    if (!r || !body) return;
+    body.innerHTML = panelHtml(r, null);
+    try {
+      const d = await api('/api/regions/' + id);
+      if (selectedId !== id || !document.body.contains(body)) return; // pilihan sudah berpindah
+      body.innerHTML = panelHtml(r, d);
+    } catch { /* panel dasar tetap tampil */ }
+  };
+  // Klik = pilih (panel terisi); klik dua kali = langsung buka detail.
+  const onPick = (e) => {
+    const g = e.target.closest('[data-region-id]');
+    if (!g) return;
+    selectRegion(Number(g.dataset.regionId));
+  };
+  $('#big-map').addEventListener('click', onPick);
+  $('#big-map').addEventListener('dblclick', (e) => {
+    const g = e.target.closest('[data-region-id]');
+    if (g) location.hash = '#/regions/' + g.dataset.regionId;
   });
-  $$('[data-travel]').forEach((b) => b.onclick = async () => {
-    try { const r = await post('/api/regions/travel', { region_id: Number(b.dataset.travel) }); toast(`Dalam perjalanan ke ${r.region} — tiba dalam ~${r.travelMinutes} menit.`); await refreshMe(); route(); }
-    catch (e) { toast(e.message); }
+  $('#big-map').addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset?.regionId) {
+      e.preventDefault();
+      selectRegion(Number(e.target.dataset.regionId));
+    }
   });
+  // Delegasi tombol travel di panel (panel di-render ulang tiap pilihan).
+  $('#map-panel-body').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-travel]');
+    if (!b) return;
+    try {
+      const res = await post('/api/regions/travel', { region_id: Number(b.dataset.travel) });
+      toast(`Dalam perjalanan ke ${res.region} — tiba dalam ~${res.travelMinutes} menit.`);
+      await refreshMe(); route();
+    } catch (err) { toast(err.message); }
+  });
+  // Cari wilayah: yang cocok diberi garis emas, sisanya diredupkan.
+  $('#map-search').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    let n = 0;
+    $$('.map-region-g').forEach((el) => {
+      const match = !q || el.dataset.name.includes(q);
+      el.classList.toggle('match', !!q && match);
+      el.classList.toggle('dim', !!q && !match);
+      if (match) n++;
+    });
+    $('#map-search-count').textContent = q ? `${n} wilayah cocok.` : '';
+  });
+  $('#map-search').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const matches = $$('.map-region-g.match');
+    if (matches.length === 1) selectRegion(Number(matches[0].dataset.regionId));
+  });
+  // Zoom: lebar SVG 100% → 150% → 220% (wadah bisa di-scroll di HP).
+  const zoomLevels = [100, 150, 220];
+  let zoomIdx = 0;
+  const svg = $('#big-map');
+  const applyZoom = () => { svg.style.width = zoomLevels[zoomIdx] + '%'; };
+  $('#map-zoom-in').onclick = () => { zoomIdx = Math.min(zoomLevels.length - 1, zoomIdx + 1); applyZoom(); };
+  $('#map-zoom-out').onclick = () => { zoomIdx = Math.max(0, zoomIdx - 1); applyZoom(); };
+  $('#map-zoom-reset').onclick = () => { zoomIdx = 0; applyZoom(); };
+  await selectRegion(selectedId);
 };
 
 ROUTES.regions = async (id) => {

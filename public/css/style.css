@@ -725,6 +725,66 @@ body {
   color: rgba(255,255,255,.5); line-height: 1; pointer-events: none;
 }
 
+/* ---------- PETA BESAR (v2.5.0, ala Parlamentum) ---------- */
+/* Latar gelap seperti referensi; wilayah tanpa negara = kaca abu-abu +
+   "?" (aturan warna wilayah, pemilik 27 Nov 2026); wilayah bernegara =
+   warna negaranya (inline style dari COUNTRY_COLORS). */
+.big-map-panel { padding: 10px; }
+.map-zoom { display: flex; gap: 6px; margin-bottom: 8px; }
+.map-zoom .btn-ghost { min-width: 36px; font-size: 16px; }
+.big-map-wrap {
+  overflow: auto;
+  background: radial-gradient(ellipse at 50% 30%, #0d1526 0%, #070b14 70%);
+  border: 1px solid var(--line); border-radius: 12px;
+}
+#big-map { display: block; width: 100%; height: auto; }
+.map-ocean { fill: transparent; }
+.map-bg-land { fill: #101a2e; stroke: #1c2a44; stroke-width: 1; }
+.map-sea {
+  font-family: 'Oswald', sans-serif; font-size: 11px; font-weight: 600;
+  fill: rgba(148,163,184,.38); letter-spacing: .3em; text-anchor: middle;
+  pointer-events: none;
+}
+.map-region {
+  fill: #2a3648; stroke: #0a0f1c; stroke-width: 1.2;
+  cursor: pointer; transition: opacity .15s ease;
+}
+.map-region-g.free .map-region { fill: rgba(148,163,184,.30); stroke: rgba(203,213,225,.85); }
+.map-region-g.owned .map-region { stroke: rgba(10,15,28,.9); }
+.map-region:hover, .map-region:focus-visible { stroke: var(--gold); stroke-width: 2.5; outline: none; }
+.map-region-g.selected .map-region { stroke: var(--gold); stroke-width: 2.5; filter: drop-shadow(0 0 6px rgba(212,175,55,.55)); }
+.map-region-g.match .map-region { stroke: var(--gold); stroke-width: 2.5; }
+.map-region-g.dim { opacity: .18; }
+.map-hit { fill: transparent; cursor: pointer; }
+.map-q {
+  font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700;
+  fill: #e6edf5; text-anchor: middle; pointer-events: none; opacity: .85;
+}
+.map-label {
+  font-family: 'Oswald', sans-serif; font-size: 11px; font-weight: 600;
+  fill: #dbe4ee; text-anchor: middle; letter-spacing: .04em;
+  text-transform: uppercase; pointer-events: none;
+  paint-order: stroke; stroke: #0a0f1c; stroke-width: 3px;
+}
+.map-country-label {
+  font-family: 'Oswald', sans-serif; font-size: 15px; font-weight: 700;
+  fill: rgba(230,200,90,.85); letter-spacing: .35em; text-anchor: middle;
+  text-transform: uppercase; pointer-events: none;
+  paint-order: stroke; stroke: #0a0f1c; stroke-width: 3px;
+}
+.map-you-ring { fill: rgba(212,175,55,.18); stroke: var(--gold); stroke-width: 1.5; }
+.map-you-dot { fill: var(--gold); stroke: #0a0f1c; stroke-width: 1.5; }
+.map-you-label {
+  font-family: 'Oswald', sans-serif; font-size: 12px; font-weight: 700;
+  fill: var(--gold-bright); text-anchor: middle; letter-spacing: .05em;
+  paint-order: stroke; stroke: #0a0f1c; stroke-width: 3px;
+}
+@media (max-width: 560px) {
+  .map-label { font-size: 10px; }
+  .map-country-label { font-size: 12px; }
+  .map-q { font-size: 17px; }
+}
+
 /* ---------- landing page (sebelum login) ---------- */
 .auth-view.landing { display: block; padding: 0; }
 .landing-hero {

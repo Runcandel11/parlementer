@@ -16,12 +16,13 @@
 // Update kecil v2.3.1 = rapikan UI atas + ikon: HUD geser ke kanan
 // (padding kiri 16px di HP), kolom kiri HUD seragam 38px (36px di HP),
 // semua ikon di tengah dengan flex (HUD, drawer, peti, tutup drawer).
-// Update sedang v2.4.0 = batch perusahaan: tiap shift karyawan menambah
-// produk ke inventaris pemilik (~1/10 produksi harian per shift penuh),
-// edit perusahaan + foto perusahaan (500 KB, tampil besar) + penjelasan
-// cara kerja di halaman perusahaan.
+// Update sedang v2.5.0 = peta besar ala Parlamentum: peta geografis SVG
+// dari REGION_COORDS (wilayah tanpa negara = kaca abu-abu + "?"; warna
+// negara deterministik per negara), penanda KAMU, "Cari wilayah...",
+// panel bawah POLITIK · NEGARA, zoom; kunjungan ke peta menandai tugas
+// kronik 'map' selesai.
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '2.4.0';
+export const VERSION = '2.5.0';
 
 export const WA_TOPUP_URL = 'https://wa.me/6285220743283';
 export const MINT_RATE = 10; // 1 emas dicetak jadi 10 USD
