@@ -1883,7 +1883,7 @@ function marketPage(scope) {
       <div id="price-chart" style="margin-top:10px"><p class="muted">Memuat grafik…</p></div>
     </div>
     <div class="panel"><h3>🛒 ORDER BELI</h3>
-      <p class="muted small">Pembeli memasang harga yang mereka mau. Punya barangnya? Jual langsung ke order mereka — dana pembeli sudah dikunci, jadi kamu pasti dibayar (dikurangi pajak penghasilan sesuai UU yang berlaku ke kas negara).</p>
+      <p class="muted small">Pembeli memasang harga yang mereka mau. Punya barangnya? Jual langsung ke order mereka — pembeli membayar saat order dipenuhi (dikurangi pajak penghasilan sesuai UU yang berlaku ke kas negara).</p>
       ${data.buyOrders.length ? data.buyOrders.map((o) => `<div class="kv"><span class="k">🧑 ${esc(o.buyer)} · ${esc(o.commodity_name)} T${o.tier} · butuh ${o.qty - o.qty_filled}/${o.qty}<br><small class="muted">${money(o.price)}/unit · Milikmu: ${fmt(own(o.commodity_id, o.tier))}</small></span>
         <span class="v"><input type="number" value="${Math.min(o.qty - o.qty_filled, 10)}" min="1" max="${o.qty - o.qty_filled}" style="width:70px" id="qo-${o.id}">
         <button class="btn-gold btn-sm" data-sell-order="${o.id}">JUAL</button></span></div>`).join('')
@@ -1896,7 +1896,7 @@ function marketPage(scope) {
         <label>JUMLAH (min 10)<input id="buy-qty" type="number" value="10" min="10"></label>
         <label>HARGA / UNIT (${curLabel})<input id="buy-price" type="number" step="0.01" placeholder="cth: ${scope === 'global' ? '9.00' : '164.700'}"></label>
       </div>
-      <p class="muted small">Dana sebesar harga × jumlah langsung dikunci dari saldomu (escrow). Bila order dibatalkan, sisa dana kembali utuh.</p>
+      <p class="muted small">Saldo baru dipotong saat ada penjual yang memenuhi order ini. Bila order dibatalkan, tidak ada dana yang berpindah.</p>
       <button class="btn-gold" id="btn-buy-order">PASANG ORDER BELI</button>
     </div>
     <div class="panel"><h3>🧾 ORDER BELIKU</h3>
@@ -2017,16 +2017,16 @@ function marketPage(scope) {
     $('#btn-buy-order').onclick = async () => {
       try {
         await post('/api/market/buy-order', { scope, commodity_id: Number($('#buy-com').value), tier: Number($('#buy-tier').value), qty: Number($('#buy-qty').value), price: priceInputUsd($('#buy-price')) });
-        toast('Order beli dipasang — dana dikunci.');
+        toast('Order beli dipasang.');
         await refreshMe(); route();
       } catch (e) { toast(e.message); }
     };
     $$('[data-cancel-order]').forEach((b) => b.onclick = async () => {
-      // Tahap 3: batal itu destruktif (order hilang; dana sisa kembali).
-      if (!confirm('Batalkan order beli ini? Sisa dana yang dikunci kembali ke saldomu.')) return;
+      // Batal itu destruktif (order hilang).
+      if (!confirm('Batalkan order beli ini?')) return;
       try {
-        const r = await post('/api/market/buy-order/cancel', { order_id: Number(b.dataset.cancelOrder) });
-        toast(`Order dibatalkan, ${r.currency === 'gold' ? fmt(r.refund, 2) + ' emas' : fmtRp(r.refund)} kembali.`);
+        await post('/api/market/buy-order/cancel', { order_id: Number(b.dataset.cancelOrder) });
+        toast('Order dibatalkan.');
         route();
       } catch (e) { toast(e.message); }
     });

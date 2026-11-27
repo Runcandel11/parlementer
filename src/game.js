@@ -10,8 +10,11 @@
 // Update kecil v2.2.3 = perbaikan upload foto ronde 2: gerbang tipe/ekstensi
 // dihapus, decode lewat <img> jadi satu-satunya penjaga format (avatar,
 // sampul, dan gambar inline artikel).
+// Update sedang v2.3.0 = timing emas pasar: buy-order tanpa escrow — pembeli
+// baru dipotong saat penjual memenuhi order (sell-to-order), bukan saat
+// order dipasang; batal order tanpa refund.
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '2.2.3';
+export const VERSION = '2.3.0';
 
 export const WA_TOPUP_URL = 'https://wa.me/6285220743283';
 export const MINT_RATE = 10; // 1 emas dicetak jadi 10 USD

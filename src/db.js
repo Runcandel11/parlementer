@@ -413,9 +413,10 @@ CREATE TABLE IF NOT EXISTS market_tx (
   total REAL NOT NULL,
   created_at BIGINT NOT NULL
 );
--- Order beli (Tahap 4): dana pembeli dikunci (escrow) saat order dipasang.
--- qty_filled = yang sudah dipenuhi penjual; order terbuka selama
--- qty_filled < qty. Dana sisa kembali saat dibatalkan.
+-- Order beli (Tahap 4; diubah v2.3.0): dana TIDAK dikunci saat order
+-- dipasang — pembeli baru dipotong saat penjual memenuhi order
+-- (sell-to-order). qty_filled = yang sudah dipenuhi penjual; order
+-- terbuka selama qty_filled < qty. Batal order tanpa refund.
 CREATE TABLE IF NOT EXISTS market_buy_orders (
   id ${id},
   buyer_id INTEGER NOT NULL REFERENCES citizens(id),

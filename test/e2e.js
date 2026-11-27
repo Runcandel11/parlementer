@@ -1055,13 +1055,13 @@ async function main() {
   r = await C.post('/api/market/buy-order', { scope: 'local', commodity_id: besiId, tier: 1, qty: 10, price: 100 });
   check('Order beli @100 ditolak (batas wajar)', r.status === 400);
 
-  console.log('  [22c] Order beli + escrow + pajak ke kas negara');
+  console.log('  [22c] Order beli tanpa escrow + pajak ke kas negara');
   const usdC0 = (await C.get('/api/me')).data.citizen.usd;
   check('C mulai dengan 500 USD', usdC0 === 500, `usd=${usdC0}`);
   r = await C.post('/api/market/buy-order', { scope: 'local', commodity_id: besiId, tier: 1, qty: 10, price: 9 });
   check('Order beli 10× Besi @9 dipasang', r.status === 200 && !!r.data.orderId, `status=${r.status} ${r.data.error || ''}`);
   const buyOrderId = r.data.orderId;
-  check('Escrow: 90 USD dikunci (500 → 410)', (await C.get('/api/me')).data.citizen.usd === 410);
+  check('Pasang order TIDAK memotong saldo (tetap 500 USD)', (await C.get('/api/me')).data.citizen.usd === 500);
   r = await C.get('/api/market?scope=local');
   const listedOrder = (r.data.buyOrders || []).find((o) => o.id === buyOrderId);
   check('Order beli tampil di order book', !!listedOrder && listedOrder.buyer === 'tahap4_c' && listedOrder.qty - listedOrder.qty_filled === 10);
@@ -1070,6 +1070,7 @@ async function main() {
   const usdD0 = (await D.get('/api/me')).data.citizen.usd;
   r = await D.post('/api/market/sell-to-order', { order_id: buyOrderId, qty: 6 });
   check('Jual 6 unit ke order beli berhasil', r.status === 200 && r.data.sellerReceives === 52.92, `status=${r.status} ${JSON.stringify(r.data)}`);
+  check('Pembeli dipotong 54 USD saat barang dibeli (500 → 446)', eq((await C.get('/api/me')).data.citizen.usd, 446));
   check('Penjual terima 52,92 USD (54 − pajak 2%)', eq((await D.get('/api/me')).data.citizen.usd, usdD0 + 52.92));
   check('Pembeli terima 6× Besi (10 → 16)', invQty(cId, besiId) === 16, `besi=${invQty(cId, besiId)}`);
   r = await C.get('/api/market?scope=local');
@@ -1084,7 +1085,27 @@ async function main() {
   r = await C.post('/api/market/sell-to-order', { order_id: buyOrderId, qty: 1 });
   check('Jual ke order beli sendiri ditolak (400)', r.status === 400);
   r = await C.post('/api/market/buy-order/cancel', { order_id: buyOrderId });
-  check('Batal order: sisa escrow 36 USD kembali (410 → 446)', r.status === 200 && eq(r.data.refund, 36) && (await C.get('/api/me')).data.citizen.usd === 446, `status=${r.status} ${JSON.stringify(r.data)}`);
+  check('Batal order: tanpa refund, saldo tetap 446', r.status === 200 && eq(r.data.refund, 0) && (await C.get('/api/me')).data.citizen.usd === 446, `status=${r.status} ${JSON.stringify(r.data)}`);
+
+  // Pembeli dipotong SAAT barang dibeli: bila saldo habis saat dipenuhi,
+  // jual gagal 400 dan tidak ada yang berubah.
+  r = await C.post('/api/market/buy-order', { scope: 'local', commodity_id: besiId, tier: 1, qty: 10, price: 9 });
+  check('Order beli baru dipasang (saldo tetap 446)', r.status === 200 && !!r.data.orderId && (await C.get('/api/me')).data.citizen.usd === 446, `status=${r.status} ${r.data.error || ''}`);
+  const buyOrderId2 = r.data.orderId;
+  const usdD1 = (await D.get('/api/me')).data.citizen.usd;
+  const besiD1 = invQty(dId, besiId);
+  db4.prepare('UPDATE citizens SET usd = ? WHERE id = ?').run(50, cId);
+  r = await D.post('/api/market/sell-to-order', { order_id: buyOrderId2, qty: 10 });
+  check('Jual ke order yang pembelinya kehabisan saldo ditolak (400)', r.status === 400 && /Saldo pembeli tidak cukup/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  check('Gagal jual: saldo penjual utuh', eq((await D.get('/api/me')).data.citizen.usd, usdD1));
+  check('Gagal jual: barang penjual utuh', invQty(dId, besiId) === besiD1, `besi=${invQty(dId, besiId)}`);
+  check('Gagal jual: saldo pembeli tetap 50', (await C.get('/api/me')).data.citizen.usd === 50);
+  r = await C.get('/api/market?scope=local');
+  const myOrder2 = (r.data.myBuyOrders || []).find((o) => o.id === buyOrderId2);
+  check('Gagal jual: order tetap 0/10', !!myOrder2 && myOrder2.qty_filled === 0, JSON.stringify(myOrder2));
+  db4.prepare('UPDATE citizens SET usd = ? WHERE id = ?').run(446, cId);
+  r = await C.post('/api/market/buy-order/cancel', { order_id: buyOrderId2 });
+  check('Batal order kedua berhasil', r.status === 200, `status=${r.status}`);
 
   console.log('  [22d] Pajak pasar biasa masuk kas negara (BUG-8)');
   // Redesain dunia: A di Jakarta (merdeka) — pindah A ke wilayah Nusantara

@@ -1222,10 +1222,12 @@ export function registerCore(app) {
   }));
 
   // ---------- ORDER BELI / ORDER BOOK (Tahap 4) ----------
-  // Dana pembeli dikunci (escrow) saat order dipasang; penjual memenuhi
-  // order lewat sell-to-order (penuh atau sebagian). Tanpa mesin pencocokan
-  // otomatis — penjual memilih order yang mau dipenuhi. Semua langkah
-  // atomik (pola Tahap 2: FOR UPDATE + UPDATE bersyarat + cek changes).
+  // Dana TIDAK dikunci saat order dipasang (aturan pemilik 28 Nov 2026):
+  // pembeli baru dipotong saat ada penjual yang memenuhi order lewat
+  // sell-to-order — potong + bayar penjual + pindah barang dalam satu
+  // transaksi atomik. Tanpa mesin pencocokan otomatis — penjual memilih
+  // order yang mau dipenuhi. Semua langkah atomik (pola Tahap 2:
+  // FOR UPDATE + UPDATE bersyarat + cek changes).
   app.post('/api/market/buy-order', authRequired, citizenRequired, r(async (req, res) => {
     const { scope, commodity_id, tier, qty, price } = req.body || {};
     const q = Math.floor(Number(qty) || 0);
@@ -1236,20 +1238,11 @@ export function registerCore(app) {
     const sc = scope === 'global' ? 'global' : 'local';
     const bad = await enforcePriceBand(commodity_id, t, p, req.citizen.id);
     if (bad) return res.status(400).json({ error: `Harga di luar batas wajar (median 14 hari ${bad.median.toFixed(2)} — batas ${bad.lo.toFixed(2)}–${bad.hi.toFixed(2)}).` });
-    const currency = sc === 'global' ? 'gold' : 'usd';
-    const escrow = p * q;
-    const orderId = await tx(async (tx) => {
-      const locked = await tx.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
-      const bal = currency === 'gold' ? locked.gold : locked.usd;
-      if (bal < escrow) throw Object.assign(new Error(`Saldo ${currency === 'gold' ? 'emas' : 'Rupiah'} tidak cukup untuk mengunci ${currency === 'gold' ? escrow.toFixed(2) + ' emas' : fmtRp(escrow)}.`), { status: 400 });
-      const upd = await tx.run(`UPDATE citizens SET ${currency} = ${currency} - ? WHERE id = ? AND ${currency} >= ?`, [escrow, req.citizen.id, escrow]);
-      if (!upd.changes) throw Object.assign(new Error('Saldo tidak cukup.'), { status: 400 });
-      const o = await tx.run(
-        'INSERT INTO market_buy_orders (buyer_id, scope, commodity_id, tier, qty, qty_filled, price, created_at) VALUES (?,?,?,?,?,0,?,?) RETURNING id',
-        [req.citizen.id, sc, commodity_id, t, q, p, Date.now()]);
-      return o.id;
-    });
-    res.json({ ok: true, orderId, escrow });
+    // Order hanya mencatat — saldo pembeli TIDAK dipotong di sini.
+    const o = await tx(async (tx) => tx.run(
+      'INSERT INTO market_buy_orders (buyer_id, scope, commodity_id, tier, qty, qty_filled, price, created_at) VALUES (?,?,?,?,?,0,?,?) RETURNING id',
+      [req.citizen.id, sc, commodity_id, t, q, p, Date.now()]));
+    res.json({ ok: true, orderId: o.id });
   }));
 
   app.post('/api/market/sell-to-order', authRequired, citizenRequired, r(async (req, res) => {
@@ -1280,8 +1273,13 @@ export function registerCore(app) {
       let taxRate = getIncomeTaxRate(t, sellerCountry);
       if (await hasTradePact(t, buyerId, sellerId)) taxRate *= TRADE_PACT_TAX_MULT;
       const sellerReceives = gross * (1 - taxRate);
+      // Pembeli dipotong DI SINI (aturan pemilik 28 Nov 2026) — atomik
+      // dengan pembayaran penjual + perpindahan barang. Bila saldo pembeli
+      // tidak cukup saat order dipenuhi, seluruh penjualan gagal (400) dan
+      // tidak ada yang berubah (transaksi dibatalkan utuh).
+      const pay = await t.run(`UPDATE citizens SET ${currency} = ${currency} - ? WHERE id = ? AND ${currency} >= ?`, [gross, buyer.id, gross]);
+      if (!pay.changes) throw Object.assign(new Error('Saldo pembeli tidak cukup untuk order ini.'), { status: 400 });
       await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [sellerReceives, seller.id]);
-      // Dana pembeli sudah dikunci saat order dipasang — tidak ada tagihan lagi.
       const upd = await t.run('UPDATE market_buy_orders SET qty_filled = qty_filled + ? WHERE id = ? AND qty_filled + ? <= qty', [q, order.id, q]);
       if (!upd.changes) throw Object.assign(new Error('Order beli sudah berubah.'), { status: 400 });
       // Terisi penuh: order selesai dan dihapus dari order book (seperti
@@ -1307,11 +1305,12 @@ export function registerCore(app) {
     const result = await tx(async (t) => {
       const order = await t.one(forUpdate('SELECT * FROM market_buy_orders WHERE id = ? AND buyer_id = ?'), [order_id, req.citizen.id]);
       if (!order) throw Object.assign(new Error('Order beli tidak ditemukan.'), { status: 404 });
-      const refund = order.price * (order.qty - order.qty_filled);
+      // Tidak ada dana yang dikunci saat order dipasang (aturan pemilik
+      // 28 Nov 2026) — batal cukup menghapus order, tanpa refund.
+      // refund: 0 dipertahankan di respons agar UI lama tidak rusak.
       const currency = order.scope === 'global' ? 'gold' : 'usd';
-      await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [refund, req.citizen.id]);
       await t.run('DELETE FROM market_buy_orders WHERE id = ?', [order.id]);
-      return { refund, currency };
+      return { refund: 0, currency };
     });
     res.json({ ok: true, ...result });
   }));
