@@ -93,6 +93,86 @@ function toast(msg) {
   t._h = setTimeout(() => { t.hidden = true; }, 3500);
 }
 
+// Sampul artikel: baca file gambar → crop tengah 1200×630 (rasio 40:21,
+// seperti gambar pratinjau) lewat canvas → data URL JPEG, plus thumbnail
+// 400×210 untuk daftar artikel. Mengembalikan { cover, coverSm } atau null
+// bila file bukan gambar atau hasil akhirnya tetap > 500 KB (thumbnail
+// > 50 KB). Pola sama seperti processAvatarFile (tangga kualitas JPEG).
+async function processCoverFile(file) {
+  if (!file || !file.type.startsWith('image/')) return null;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error('gagal membaca gambar'));
+      i.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = 1200; canvas.height = 630;
+    const ctx = canvas.getContext('2d');
+    const targetRatio = 1200 / 630;
+    const imgRatio = img.width / img.height;
+    let sw, sh, sx, sy;
+    if (imgRatio > targetRatio) { sh = img.height; sw = Math.floor(sh * targetRatio); sx = Math.floor((img.width - sw) / 2); sy = 0; }
+    else { sw = img.width; sh = Math.floor(sw / targetRatio); sx = 0; sy = Math.floor((img.height - sh) / 2); }
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 1200, 630);
+    let cover = null;
+    for (const q of [0.85, 0.6, 0.4]) {
+      const dataUrl = canvas.toDataURL('image/jpeg', q);
+      // 500 KB biner ≈ 682.667 karakter base64.
+      if (dataUrl.length <= 682667) { cover = dataUrl; break; }
+    }
+    if (!cover) return null;
+    // Thumbnail 400×210 dari canvas yang sama (50 KB biner ≈ 68.266 karakter).
+    const sm = document.createElement('canvas');
+    sm.width = 400; sm.height = 210;
+    sm.getContext('2d').drawImage(canvas, 0, 0, 400, 210);
+    let coverSm = null;
+    for (const q of [0.75, 0.6, 0.45]) {
+      const dataUrl = sm.toDataURL('image/jpeg', q);
+      if (dataUrl.length <= 68266) { coverSm = dataUrl; break; }
+    }
+    if (!coverSm) return null;
+    return { cover, coverSm };
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// Gambar di dalam isi artikel: muat dalam lebar maks 1024px (rasio asli
+// dipertahankan) → data URL JPEG. Mengembalikan data URL atau null bila
+// file bukan gambar atau hasil akhirnya tetap > 300 KB biner
+// (≈ 409.600 karakter base64).
+async function processInlineImageFile(file) {
+  if (!file || !file.type.startsWith('image/')) return null;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error('gagal membaca gambar'));
+      i.src = url;
+    });
+    const scale = Math.min(1, 1024 / Math.max(img.width, img.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    for (const q of [0.85, 0.65, 0.45]) {
+      const dataUrl = canvas.toDataURL('image/jpeg', q);
+      if (dataUrl.length <= 409600) return dataUrl;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 // ---------- SUARA KETUKAN (Tahap 4) ----------
 // Ketukan halus disintesis Web Audio API (tanpa file audio, tanpa
 // dependensi). AudioContext dibuat malas saat interaksi pertama — browser
@@ -2372,6 +2452,24 @@ ROUTES['war-world'] = async () => {
 };
 
 // ---------- PERS ----------
+// ---------- GAMBAR ARTIKEL ----------
+// Isi artikel dirender AMAN: seluruh isi di-escape dulu (tag HTML/script
+// apa pun jadi teks biasa), baru penanda gambar [gambar:<data URL>] yang
+// cocok pola ketat (hanya JPEG/PNG/WebP base64) diganti <img>. Penanda
+// yang tidak cocok pola — mis. [gambar:javascript:...] atau SVG — tetap
+// jadi teks biasa, tidak pernah jadi elemen. Server memvalidasi ulang
+// setiap penanda saat artikel diterbitkan, jadi <img> di sini hanya bisa
+// berasal dari data URL gambar yang sudah lolos validasi server.
+function renderArticleContent(content) {
+  const re = /\[gambar:(data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+)\]/g;
+  return esc(content).replace(re, (m, url) => `<img src="${esc(url)}" class="article-img" alt="Gambar artikel" loading="lazy">`);
+}
+// Thumbnail sampul di daftar artikel (cover_sm, maks 50 KB) — kosong bila
+// artikel lama tanpa sampul.
+const articleThumbHtml = (coverSm) => coverSm
+  ? `<img src="${esc(coverSm)}" class="article-thumb" alt="Sampul artikel">`
+  : '';
+
 ROUTES.press = async () => {
   const [stats, list] = await Promise.all([api('/api/press/stats'), api('/api/press/articles?sort=new')]);
   const top = list.articles[0];
@@ -2395,6 +2493,7 @@ ROUTES.press = async () => {
   </div>
   ${top ? `
   <div class="card" style="padding:0;overflow:hidden;cursor:pointer" data-goto="#/press/${top.id}">
+    ${top.cover_sm ? `<img src="${esc(top.cover_sm)}" class="article-cover-hero" alt="Sampul artikel">` : ''}
     <div style="background:linear-gradient(135deg,#1a2c4d,#0d1526);padding:26px 16px 14px">
       <span class="chip">🔥 SEDANG RAMAI</span>
       <h3 style="font-size:24px;margin-top:8px">${esc(top.title)}</h3>
@@ -2404,13 +2503,13 @@ ROUTES.press = async () => {
   </div>` : ''}
   <div class="panel"><h3>🔥 JUGA SEDANG TREN</h3>
     ${list.articles.slice(1).length ? list.articles.slice(1).map((a, i) => `
-      <div class="kv" style="cursor:pointer" data-goto="#/press/${a.id}"><span class="k"><b style="color:var(--gold)">${i + 2}</b> &nbsp;${esc(a.title)}<br><small class="muted">📰 ${esc(a.newspaper_name)} · ${fmtDate(a.created_at)}</small></span>
+      <div class="kv" style="cursor:pointer" data-goto="#/press/${a.id}">${articleThumbHtml(a.cover_sm)}<span class="k" style="flex:1"><b style="color:var(--gold)">${i + 2}</b> &nbsp;${esc(a.title)}<br><small class="muted">📰 ${esc(a.newspaper_name)} · ${fmtDate(a.created_at)}</small></span>
       <span class="v small">👁️ ${fmt(a.views)} 👍 ${a.likes}</span></div>`).join('')
       : '<p class="muted">Belum ada artikel. Jadilah jurnalis pertama!</p>'}
   </div>
   <div class="panel"><h3>📰 SEMUA ARTIKEL</h3><div id="all-articles">
     ${list.articles.length ? list.articles.map((a) => `
-      <div class="kv" style="cursor:pointer" data-goto="#/press/${a.id}"><span class="k">${esc(a.title)}<br><small class="muted">${esc(a.newspaper_name)} · ${esc(a.topic)} · ${fmtDate(a.created_at)}</small></span>
+      <div class="kv" style="cursor:pointer" data-goto="#/press/${a.id}">${articleThumbHtml(a.cover_sm)}<span class="k" style="flex:1">${esc(a.title)}<br><small class="muted">${esc(a.newspaper_name)} · ${esc(a.topic)} · ${fmtDate(a.created_at)}</small></span>
       <span class="v small">👁️ ${fmt(a.views)}</span></div>`).join('') : '<p class="muted">Belum ada artikel.</p>'}
   </div></div>`);
   $$('[data-sort]').forEach((b) => b.onclick = async () => {
@@ -2418,26 +2517,72 @@ ROUTES.press = async () => {
     $$('.tabs .tab').forEach((t) => t.classList.remove('active'));
     b.classList.add('active');
     $('#all-articles').innerHTML = list2.articles.length ? list2.articles.map((a) => `
-      <div class="kv" style="cursor:pointer" data-goto="#/press/${a.id}"><span class="k">${esc(a.title)}<br><small class="muted">${esc(a.newspaper_name)} · ${esc(a.topic)} · ${fmtDate(a.created_at)}</small></span>
+      <div class="kv" style="cursor:pointer" data-goto="#/press/${a.id}">${articleThumbHtml(a.cover_sm)}<span class="k" style="flex:1">${esc(a.title)}<br><small class="muted">${esc(a.newspaper_name)} · ${esc(a.topic)} · ${fmtDate(a.created_at)}</small></span>
       <span class="v small">👁️ ${fmt(a.views)} 👍 ${a.likes}</span></div>`).join('') : '<p class="muted">Belum ada artikel.</p>';
   });
 };
 
 ROUTES['press/new'] = async () => {
   const mine = await api('/api/press/newspapers/mine');
+  let pendingCover = null;
+  let pendingCoverSm = null;
   $('#page').innerHTML = page('TULIS ARTIKEL', '', `
   ${mine.newspapers.length ? `
   <div class="panel"><h3>✏️ Artikel Baru</h3>
     <label>KORAN<select id="art-paper">${mine.newspapers.map((n) => `<option value="${n.id}">${esc(n.name)}</option>`).join('')}</select></label>
     <label>TOPIK<select id="art-topic"><option>Perang</option><option>Ekonomi</option><option>Politik</option><option>Diplomasi</option><option>Panduan</option><option>Pengumuman</option></select></label>
     <label>JUDUL<input id="art-title" placeholder="Judul artikel..."></label>
+    <label>SAMPUL <span class="muted small">(opsional, maks 500 KB)</span>
+      <span class="row" style="margin-top:6px">
+        <input type="file" id="art-cover-file" accept="image/*" hidden>
+        <button class="btn-ghost btn-sm" id="btn-art-cover" type="button">🖼️ Tambah Sampul</button>
+        <button class="btn-ghost btn-sm" id="btn-art-cover-del" type="button" hidden>🗑 Hapus Sampul</button>
+      </span>
+      <span id="art-cover-preview" style="display:block;margin-top:8px"></span>
+    </label>
     <label>ISI<textarea id="art-content" rows="10" placeholder="Tulis beritamu di sini..."></textarea></label>
+    <div class="row" style="margin-bottom:10px">
+      <input type="file" id="art-inline-file" accept="image/*" hidden>
+      <button class="btn-ghost btn-sm" id="btn-art-inline" type="button">🖼️ Sisipkan Gambar di Isi</button>
+      <span class="muted small">maks 3 gambar, masing-masing maks 300 KB</span>
+    </div>
     <button class="btn-gold" id="btn-publish">TERBITKAN</button>
   </div>` : emptyState('📰', 'Kamu belum punya koran', 'Dirikan koran dulu (5 emas) sebelum menulis artikel.')}
   ${!mine.newspapers.length ? `<button class="btn-gold" data-goto="#/newspaper">Dirikan Koran (5 emas)</button>` : ''}`);
+  const coverInput = $('#art-cover-file');
+  $('#btn-art-cover')?.addEventListener('click', () => coverInput.click());
+  $('#btn-art-cover-del')?.addEventListener('click', () => {
+    pendingCover = null; pendingCoverSm = null; coverInput.value = '';
+    $('#art-cover-preview').innerHTML = '';
+    $('#btn-art-cover-del').hidden = true;
+  });
+  coverInput?.addEventListener('change', async () => {
+    const processed = await processCoverFile(coverInput.files[0]);
+    if (!processed) { toast('Sampul harus gambar yang valid dan ukurannya maksimal 500 KB.'); coverInput.value = ''; return; }
+    pendingCover = processed.cover;
+    pendingCoverSm = processed.coverSm;
+    $('#art-cover-preview').innerHTML = `<img src="${esc(pendingCoverSm)}" class="article-cover" alt="Pratinjau sampul">`;
+    $('#btn-art-cover-del').hidden = false;
+  });
+  const inlineInput = $('#art-inline-file');
+  $('#btn-art-inline')?.addEventListener('click', () => inlineInput.click());
+  inlineInput?.addEventListener('change', async () => {
+    const ta = $('#art-content');
+    const existing = (ta.value.match(/\[gambar:/g) || []).length;
+    if (existing >= 3) { toast('Maksimal 3 gambar di dalam isi artikel.'); inlineInput.value = ''; return; }
+    const dataUrl = await processInlineImageFile(inlineInput.files[0]);
+    if (!dataUrl) { toast('Gambar harus valid dan ukurannya maksimal 300 KB.'); inlineInput.value = ''; return; }
+    const marker = `[gambar:${dataUrl}]`;
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? ta.value.length;
+    ta.value = ta.value.slice(0, start) + (start > 0 && !/\s$/.test(ta.value.slice(0, start)) ? '\n' : '') + marker + '\n' + ta.value.slice(end);
+    ta.focus();
+    inlineInput.value = '';
+    toast('Gambar disisipkan di isi artikel.');
+  });
   $('#btn-publish')?.addEventListener('click', async () => {
     try {
-      const r = await post('/api/press/articles', { newspaper_id: Number($('#art-paper').value), title: $('#art-title').value.trim(), content: $('#art-content').value.trim(), topic: $('#art-topic').value });
+      const r = await post('/api/press/articles', { newspaper_id: Number($('#art-paper').value), title: $('#art-title').value.trim(), content: $('#art-content').value.trim(), topic: $('#art-topic').value, cover: pendingCover, cover_sm: pendingCoverSm });
       toast('Artikel diterbitkan!'); location.hash = '#/press/' + r.articleId;
     } catch (e) { toast(e.message); }
   });
@@ -2450,7 +2595,8 @@ async function renderArticle(id) {
   const a = d.article;
   $('#page').innerHTML = page(esc(a.title).toUpperCase(), `📰 ${esc(a.newspaper_name)} · ${fmtDate(a.created_at)} · oleh ${esc(a.author_name)}`, `
   <div class="panel">
-    <p style="white-space:pre-wrap">${esc(a.content)}</p>
+    ${a.cover ? `<img src="${esc(a.cover)}" class="article-cover" alt="Sampul artikel">` : ''}
+    <div class="article-body" style="white-space:pre-wrap">${renderArticleContent(a.content)}</div>
     <div class="row" style="margin-top:14px">
       <button class="btn-ghost" id="btn-like">👍 Suka (${a.likes})</button>
       <button class="btn-ghost" id="btn-dislike">👎 Tidak Suka (${a.dislikes})</button>
@@ -2464,7 +2610,7 @@ async function renderArticle(id) {
     <div class="row" style="margin-top:10px"><input id="comment-text" placeholder="Tulis komentar..."><button class="btn-gold" id="btn-comment">KIRIM</button></div>
   </div>
   ${d.others.length ? `<div class="panel"><h3>📰 LAINNYA DARI ${esc(a.newspaper_name)}</h3>
-    ${d.others.map((o) => `<div class="kv" style="cursor:pointer" data-goto="#/press/${o.id}"><span class="k">${esc(o.title)}</span><span class="v small">👁️ ${fmt(o.views)}</span></div>`).join('')}</div>` : ''}`);
+    ${d.others.map((o) => `<div class="kv" style="cursor:pointer" data-goto="#/press/${o.id}">${articleThumbHtml(o.cover_sm)}<span class="k" style="flex:1">${esc(o.title)}</span><span class="v small">👁️ ${fmt(o.views)}</span></div>`).join('')}</div>` : ''}`);
   const react = async (reaction) => {
     try { await post(`/api/press/articles/${a.id}/react`, { reaction }); route(); }
     catch (e) { toast(e.message); }

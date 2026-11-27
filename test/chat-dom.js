@@ -185,6 +185,47 @@ async function main() {
     check('pesan chat memakai foto avatar (img)', !!avatarImg);
     check('avatar chat tampil 48×48px', !!avatarImg && avatarImg.style.width === '48px' && avatarImg.style.height === '48px', avatarImg ? `${avatarImg.style.width}×${avatarImg.style.height}` : 'tidak ada img');
 
+    // [F] Berita: sampul + gambar di isi (Orang_solo).
+    const npRes = await jarFetch(BASE + '/api/press/newspaper', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Kabar ChatDom' }),
+    });
+    const npJson = await npRes.json();
+    check('dirikan koran untuk tes gambar artikel', npRes.status === 200 && !!npJson.newspaperId, `status=${npRes.status} ${npJson.error || ''}`);
+    const artRes = await jarFetch(BASE + '/api/press/articles', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        newspaper_id: npJson.newspaperId, title: 'Artikel Gambar ChatDom',
+        content: 'Isi artikel bergambar yang cukup panjang untuk aturan minimal. [gambar:' + TINY_JPEG_SM + ']',
+        cover: TINY_JPEG_SM, cover_sm: TINY_JPEG_SM,
+      }),
+    });
+    const artJson = await artRes.json();
+    check('terbitkan artikel bergambar (sampul + 1 gambar isi)', artRes.status === 200 && !!artJson.articleId, `status=${artRes.status} ${artJson.error || ''}`);
+    window.location.hash = '#/press/' + artJson.articleId;
+    window.route();
+    await sleep(800);
+    const coverImg = document.querySelector('.article-cover');
+    check('halaman artikel: sampul penuh tampil', !!coverImg && (coverImg.getAttribute('src') || '').startsWith('data:image/jpeg'), coverImg ? coverImg.getAttribute('src').slice(0, 30) : 'tidak ada img');
+    const bodyImg = document.querySelector('.article-img');
+    check('halaman artikel: gambar di isi dirender sebagai <img>', !!bodyImg && (bodyImg.getAttribute('src') || '').startsWith('data:image/jpeg'), bodyImg ? bodyImg.getAttribute('src').slice(0, 30) : 'tidak ada img');
+    window.location.hash = '#/press';
+    window.route();
+    await sleep(800);
+    const listThumb = document.querySelector('.article-thumb');
+    check('daftar artikel: thumbnail sampul tampil', !!listThumb && (listThumb.getAttribute('src') || '').startsWith('data:image/jpeg'));
+    // Render isi: <script> + penanda jahat jadi teks biasa (bukan elemen).
+    const evil = window.renderArticleContent('teks <script>alert(1)</script> [gambar:javascript:alert(2)]');
+    check('render isi: <script> di-escape (tidak ada tag script)', !evil.includes('<script>') && evil.includes('&lt;script&gt;'), evil.slice(0, 80));
+    check('render isi: penanda javascript: tidak jadi <img>', !evil.includes('<img'), evil.slice(0, 80));
+    const good = window.renderArticleContent('teks [gambar:' + TINY_JPEG_SM + '] akhir');
+    check('render isi: penanda valid jadi <img> data URL', good.includes('<img src="data:image/jpeg;base64,') && good.includes('class="article-img"'), good.slice(0, 80));
+    // Editor: kontrol sampul + sisipkan gambar ada.
+    window.location.hash = '#/press/new';
+    window.route();
+    await sleep(600);
+    check('editor artikel: input sampul + tombol sisipkan gambar tampil', !!document.querySelector('#art-cover-file') && !!document.querySelector('#btn-art-inline'));
+
     dom.window.close();
     console.log(`\n[chat-dom] SELESAI: ${passed} lolos, ${failed} gagal`);
     process.exitCode = failed ? 1 : 0;

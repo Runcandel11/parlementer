@@ -1,6 +1,6 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
 import { sql, one, run, tx, forUpdate, convoyBuildings } from './db.js';
-import { authRequired, citizenRequired, loadCitizen, todayStr } from './util.js';
+import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl } from './util.js';
 import { warDamage, warDamageWithBonus, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT } from './game.js';
 
 const CHAT_ROOMS = ['global', 'indonesia', 'negara'];
@@ -571,6 +571,42 @@ export function registerCivic(app) {
   }));
 
   // ---------- PERS ----------
+  // Batas gambar artikel (laporan Orang_solo 2026-11-27 — artikel belum
+  // bisa pakai gambar/sampul). Pola sama seperti foto profil (data URL,
+  // browser me-resize dulu, server memvalidasi magic bytes):
+  // - Sampul: maks 500 KB biner (sama seperti avatar), thumbnail daftar
+  //   maks 50 KB — daftar 30 artikel tidak boleh mengunduh 30 × 500 KB.
+  // - Gambar di isi: maks 3 per artikel, masing-masing maks 300 KB biner,
+  //   disisipkan sebagai penanda [gambar:<data URL>] di dalam isi.
+  // - Isi total maks 1.300.000 karakter (≈ 20.000 teks + 3 × ~410.000
+  //   karakter base64 gambar) supaya database tidak membengkak.
+  const ARTICLE_COVER_MAX_BYTES = 500 * 1024;
+  const ARTICLE_COVER_SM_MAX_BYTES = 50 * 1024;
+  const ARTICLE_IMAGE_MAX_BYTES = 300 * 1024;
+  const ARTICLE_IMAGE_MAX_COUNT = 3;
+  const ARTICLE_CONTENT_MAX_CHARS = 1300000;
+  // Penanda gambar di isi — HANYA data URL JPEG/PNG/WebP base64 yang lolos
+  // regex ini. Penanda lain (mis. [gambar:javascript:...] atau SVG) tidak
+  // cocok pola dan ditolak mentah-mentah oleh validateArticleImages di
+  // bawah; render client juga hanya mengganti penanda yang cocok pola ini.
+  const ARTICLE_IMAGE_MARKER_RE = /\[gambar:(data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+)\]/g;
+  function validateArticleImages(content) {
+    const markers = [...content.matchAll(ARTICLE_IMAGE_MARKER_RE)];
+    if (markers.length > ARTICLE_IMAGE_MAX_COUNT) {
+      return { error: `Maksimal ${ARTICLE_IMAGE_MAX_COUNT} gambar di dalam isi artikel.` };
+    }
+    for (const m of markers) {
+      if (!parseImageDataUrl(m[1], ARTICLE_IMAGE_MAX_BYTES)) {
+        return { error: 'Gambar di dalam isi artikel harus JPEG/PNG/WebP yang valid dan maksimal 300 KB.' };
+      }
+    }
+    const textOnly = content.replace(ARTICLE_IMAGE_MARKER_RE, '');
+    if (/\[gambar:/i.test(textOnly)) {
+      return { error: 'Penanda gambar tidak valid — sisipkan gambar lewat tombol "Sisipkan Gambar".' };
+    }
+    return { ok: true, textOnly };
+  }
+
   app.get('/api/press/stats', authRequired, citizenRequired, r(async (req, res) => {
     const since7 = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const a = await one('SELECT COUNT(*) AS articles, COALESCE(SUM(views),0) AS views, COALESCE(SUM(likes),0) AS likes, COALESCE(SUM(dislikes),0) AS dislikes FROM articles WHERE created_at > ?', [since7]);
@@ -594,8 +630,13 @@ export function registerCivic(app) {
     if (sort === 'top_day') { where += ' AND a.created_at > ?'; params.push(Date.now() - 24 * 60 * 60 * 1000); }
     if (sort === 'top_week') { where += ' AND a.created_at > ?'; params.push(Date.now() - 7 * 24 * 60 * 60 * 1000); }
     if (sort === 'top_month') { where += ' AND a.created_at > ?'; params.push(Date.now() - 30 * 24 * 60 * 60 * 1000); }
+    // Daftar artikel: JANGAN kembalikan content dan cover penuh — isi bisa
+    // membawa gambar base64 (sampai ~1,3 jt karakter) dan sampul sampai
+    // 500 KB; 30 artikel × itu bisa belasan MB per request. Daftar hanya
+    // butuh ringkasan + thumbnail sampul (cover_sm, maks 50 KB).
     const rows = await sql(
-      `SELECT a.*, u.username AS author_name, n.name AS newspaper_name,
+      `SELECT a.id, a.newspaper_id, a.author_id, a.title, a.topic, a.views, a.likes, a.dislikes,
+        a.created_at, a.cover_sm, u.username AS author_name, n.name AS newspaper_name,
         (SELECT COUNT(*) FROM article_comments WHERE article_id = a.id) AS comments
        FROM articles a JOIN users u ON u.id = (SELECT user_id FROM citizens WHERE id = a.author_id)
        JOIN newspapers n ON n.id = a.newspaper_id WHERE ${where} ORDER BY ${order} LIMIT 30`,
@@ -616,7 +657,7 @@ export function registerCivic(app) {
        WHERE ac.article_id = ? ORDER BY ac.created_at ASC`, [a.id]);
     const myReaction = await one('SELECT reaction FROM article_reactions WHERE article_id = ? AND citizen_id = ?', [a.id, req.citizen.id]);
     const others = await sql(
-      `SELECT a2.id, a2.title, a2.created_at, a2.likes, a2.views FROM articles a2 WHERE a2.newspaper_id = ? AND a2.id != ? ORDER BY a2.created_at DESC LIMIT 5`,
+      `SELECT a2.id, a2.title, a2.created_at, a2.likes, a2.views, a2.cover_sm FROM articles a2 WHERE a2.newspaper_id = ? AND a2.id != ? ORDER BY a2.created_at DESC LIMIT 5`,
       [a.newspaper_id, a.id]);
     res.json({ article: { ...a, views: a.views + 1 }, comments, myReaction: myReaction?.reaction || null, others });
   }));
@@ -665,15 +706,32 @@ export function registerCivic(app) {
   }));
 
   app.post('/api/press/articles', authRequired, citizenRequired, r(async (req, res) => {
-    const { newspaper_id, title, content, topic } = req.body || {};
+    const { newspaper_id, title, content, topic, cover, cover_sm } = req.body || {};
     const np = await one('SELECT * FROM newspapers WHERE id = ? AND owner_id = ?', [newspaper_id, req.citizen.id]);
     if (!np) return res.status(403).json({ error: 'Kamu hanya bisa menulis di koranmu sendiri.' });
     if (!title || title.length < 5 || title.length > 120) return res.status(400).json({ error: 'Judul 5–120 karakter.' });
-    if (!content || content.length < 20) return res.status(400).json({ error: 'Isi artikel minimal 20 karakter.' });
+    if (typeof content !== 'string' || content.length > ARTICLE_CONTENT_MAX_CHARS) return res.status(400).json({ error: 'Isi artikel terlalu panjang.' });
+    const imgCheck = validateArticleImages(content);
+    if (imgCheck.error) return res.status(400).json({ error: imgCheck.error });
+    if (!imgCheck.textOnly || imgCheck.textOnly.trim().length < 20) return res.status(400).json({ error: 'Isi artikel minimal 20 karakter.' });
+    // Sampul opsional: bila dikirim harus gambar valid (JPEG/PNG/WebP) dan
+    // dalam batas — sampul penuh maks 500 KB, thumbnail maks 50 KB.
+    let coverUrl = null;
+    let coverSmUrl = null;
+    if (cover !== undefined && cover !== null && cover !== '') {
+      const parsed = parseImageDataUrl(cover, ARTICLE_COVER_MAX_BYTES);
+      if (!parsed) return res.status(400).json({ error: 'Sampul harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 500 KB.' });
+      coverUrl = parsed.dataUrl;
+    }
+    if (cover_sm !== undefined && cover_sm !== null && cover_sm !== '') {
+      const parsedSm = parseImageDataUrl(cover_sm, ARTICLE_COVER_SM_MAX_BYTES);
+      if (!parsedSm) return res.status(400).json({ error: 'Thumbnail sampul harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 50 KB.' });
+      coverSmUrl = parsedSm.dataUrl;
+    }
     const topics = ['Perang', 'Ekonomi', 'Politik', 'Diplomasi', 'Panduan', 'Pengumuman'];
     const a = await run(
-      'INSERT INTO articles (newspaper_id, author_id, title, content, topic, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
-      [np.id, req.citizen.id, title, content, topics.includes(topic) ? topic : 'Pengumuman', Date.now()]);
+      'INSERT INTO articles (newspaper_id, author_id, title, content, cover, cover_sm, topic, created_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id',
+      [np.id, req.citizen.id, title, content, coverUrl, coverSmUrl, topics.includes(topic) ? topic : 'Pengumuman', Date.now()]);
     await chronicleDone(req.citizen, 'article');
     res.json({ ok: true, articleId: a.id });
   }));

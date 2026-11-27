@@ -625,6 +625,8 @@ CREATE TABLE IF NOT EXISTS articles (
   author_id INTEGER NOT NULL REFERENCES citizens(id),
   title TEXT NOT NULL,
   content TEXT NOT NULL,
+  cover TEXT,
+  cover_sm TEXT,
   topic TEXT NOT NULL DEFAULT 'Pengumuman',
   views INTEGER NOT NULL DEFAULT 0,
   likes INTEGER NOT NULL DEFAULT 0,
@@ -918,6 +920,7 @@ export async function initDb() {
     await migrateTahap5Columns(t);
     await migrateOnlineColumns(t);
     await migrateTrainCooldownColumns(t);
+    await migrateArticleImageColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -988,7 +991,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1175,6 +1178,23 @@ async function migrateTrainCooldownColumns(t) {
   await addCol('citizens', 'train_str_at', 'BIGINT NOT NULL DEFAULT 0');
   await addCol('citizens', 'train_edu_at', 'BIGINT NOT NULL DEFAULT 0');
   await addCol('citizens', 'train_eco_at', 'BIGINT NOT NULL DEFAULT 0');
+}
+
+// Migrasikan kolom gambar artikel (sampul + thumbnail) untuk database
+// yang sudah ada: articles.cover / cover_sm (data URL gambar, NULL =
+// artikel lama tanpa sampul). Idempotent: kolom yang sudah ada tidak
+// disentuh. Pola sama seperti migrateTrainCooldownColumns.
+async function migrateArticleImageColumns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('articles', 'cover', 'TEXT');
+  await addCol('articles', 'cover_sm', 'TEXT');
 }
 
 // Migrasikan tabel support_tickets lama (tanpa kolom status) ke status

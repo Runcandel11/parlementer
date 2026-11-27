@@ -219,6 +219,13 @@ async function main() {
   await initDb();
   const onlineCol = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'citizens' AND column_name = 'last_seen_at'");
   check('Migrasi: kolom citizens.last_seen_at ditambah kembali', onlineCol.rowCount === 1);
+  // Migrasi kolom gambar artikel: hapus kolom, initDb menambahkannya kembali.
+  await pool.query('ALTER TABLE articles DROP COLUMN cover');
+  await pool.query('ALTER TABLE articles DROP COLUMN cover_sm');
+  await resetVersion();
+  await initDb();
+  const artImgCols = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'articles' AND column_name IN ('cover', 'cover_sm')");
+  check('Migrasi: kolom articles.cover + cover_sm ditambah kembali', Number(artImgCols.rows[0].n) === 2);
 
   console.log('\n[9] Version gate initDb (perbaikan advisory lock 27 Nov 2026)');
   // Insiden: initDb lama menahan advisory lock global selama ~100 round-trip
@@ -226,7 +233,7 @@ async function main() {
   // steady state hanya baca penanda (tanpa lock/DDL); migrasi penuh hanya
   // bila penanda dihapus / versi lama.
   const ver = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Penanda versi skema = 8', ver.rows[0]?.value === '8', `value=${ver.rows[0]?.value}`);
+  check('Penanda versi skema = 9', ver.rows[0]?.value === '9', `value=${ver.rows[0]?.value}`);
   const t9a = Date.now();
   await Promise.all([initDb(), initDb(), initDb(), initDb(), initDb()]);
   const t9b = Date.now() - t9a;

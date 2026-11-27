@@ -222,3 +222,23 @@ export function fmtDate(ts) {
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+// Validasi data URL gambar (JPEG/PNG/WebP) — dipakai foto profil
+// (api-core.js) dan gambar artikel: sampul + gambar di isi (api-civic.js).
+// Mengembalikan { bytes, dataUrl } atau null bila bukan gambar valid atau
+// melebihi batas byte. Periksa magic bytes agar benar-benar file gambar:
+// SVG sengaja DITOLAK (tidak ada di daftar tipe) karena SVG bisa membawa
+// <script> — tidak boleh masuk lewat kolom gambar mana pun.
+export function parseImageDataUrl(dataUrl, maxBytes) {
+  if (typeof dataUrl !== 'string') return null;
+  const m = dataUrl.match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) return null;
+  let buf;
+  try { buf = Buffer.from(m[2], 'base64'); } catch { return null; }
+  if (buf.length === 0 || buf.length > maxBytes) return null;
+  const isJpeg = buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
+  const isPng = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
+  const isWebp = buf.length > 11 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+  if (!isJpeg && !isPng && !isWebp) return null;
+  return { bytes: buf.length, dataUrl };
+}

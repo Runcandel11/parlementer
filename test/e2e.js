@@ -1493,6 +1493,50 @@ async function main() {
   const cssText = await cssRes.text();
   check('CSS: wadah avatar chat 48px + gaya status/pesan-baru ada', cssText.includes('.msg-avatar { flex: none; width: 48px; height: 48px;') && cssText.includes('.chat-status') && cssText.includes('.chat-new-pill'));
 
+  console.log('\n[27] Berita: gambar sampul + gambar di isi artikel');
+  // TINY_JPEG (seksi [16]) = JPEG valid kecil; TINY_JPEG_SM = thumbnail.
+  const imgContent = 'Berita bergambar: isi artikel ini cukup panjang untuk lolos aturan minimal. [gambar:' + TINY_JPEG + ']';
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Bergambar Tes', content: imgContent, cover: TINY_JPEG, cover_sm: TINY_JPEG_SM });
+  check('Artikel dengan sampul + 1 gambar di isi terbit', r.status === 200 && !!r.data.articleId, `status=${r.status} ${r.data.error || ''}`);
+  const coverArticleId = r.data.articleId;
+  r = await A.get(`/api/press/articles/${coverArticleId}`);
+  check('Detail artikel: sampul + thumbnail tersimpan utuh', r.status === 200 && r.data.article.cover === TINY_JPEG && r.data.article.cover_sm === TINY_JPEG_SM, `cover=${String(r.data.article.cover || '').slice(0, 30)}`);
+  check('Detail artikel: isi membawa penanda gambar', r.data.article.content.includes('[gambar:data:image/jpeg;base64,'));
+  r = await A.get('/api/press/articles?sort=new');
+  const coverRow = (r.data.articles || []).find((a) => a.id === coverArticleId);
+  check('Daftar artikel: sampul kecil (cover_sm) tampil', !!coverRow && coverRow.cover_sm === TINY_JPEG_SM, `cover_sm=${String(coverRow?.cover_sm || '').slice(0, 30)}`);
+  check('Daftar artikel: TIDAK membawa cover penuh & isi (hemat bandwidth)', !!coverRow && coverRow.cover === undefined && coverRow.content === undefined, `keys=${Object.keys(coverRow || {}).join(',')}`);
+  r = await A.get(`/api/press/articles/${articleId}`);
+  check('Artikel lama tanpa sampul: cover null (bukan error)', r.status === 200 && r.data.article.cover == null, `cover=${r.data.article.cover}`);
+  // Sampul kebesaran: 600 KB (batas 500 KB) → 400.
+  const bigCoverBuf = Buffer.alloc(600 * 1024);
+  bigCoverBuf[0] = 0xFF; bigCoverBuf[1] = 0xD8; bigCoverBuf[2] = 0xFF;
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Sampul Besar', content: 'Isi artikel ini cukup panjang untuk lolos aturan minimal dua puluh karakter.', cover: 'data:image/jpeg;base64,' + bigCoverBuf.toString('base64'), cover_sm: TINY_JPEG_SM });
+  check('Sampul 600 KB ditolak 400 (batas 500 KB)', r.status === 400 && /500 KB/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  // Thumbnail kebesaran: 60 KB (batas 50 KB) → 400.
+  const bigCoverSmBuf = Buffer.alloc(60 * 1024);
+  bigCoverSmBuf[0] = 0xFF; bigCoverSmBuf[1] = 0xD8; bigCoverSmBuf[2] = 0xFF;
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Thumb Besar', content: 'Isi artikel ini cukup panjang untuk lolos aturan minimal dua puluh karakter.', cover: TINY_JPEG, cover_sm: 'data:image/jpeg;base64,' + bigCoverSmBuf.toString('base64') });
+  check('Thumbnail sampul 60 KB ditolak 400 (batas 50 KB)', r.status === 400 && /50 KB/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  // Gambar di isi: 4 gambar → 400; 3 gambar → 200.
+  const threeImgs = 'Teks pembuka yang cukup panjang untuk aturan minimal. ' + ('[gambar:' + TINY_JPEG + '] ').repeat(3);
+  const fourImgs = threeImgs + '[gambar:' + TINY_JPEG + ']';
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Empat Gambar', content: fourImgs });
+  check('4 gambar di isi ditolak 400 (maksimal 3)', r.status === 400 && /Maksimal 3/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Tiga Gambar', content: threeImgs });
+  check('3 gambar di isi diterima', r.status === 200 && !!r.data.articleId, `status=${r.status} ${r.data.error || ''}`);
+  // Injeksi lewat penanda gambar: javascript: dan SVG ditolak.
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Marker Jahat', content: 'Isi artikel ini cukup panjang untuk lolos aturan minimal. [gambar:javascript:alert(1)]' });
+  check('Penanda [gambar:javascript:...] ditolak 400', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Sampul SVG', content: 'Isi artikel ini cukup panjang untuk lolos aturan minimal dua puluh karakter.', cover: 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"></svg>').toString('base64') });
+  check('Sampul SVG ditolak 400 (SVG bisa bawa script)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  // <script> di isi teks tetap disimpan sebagai teks (client meng-escape
+  // saat render — dites di chat-dom); isi total > 1,3 jt karakter ditolak.
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Script Teks', content: 'Berita penting hari ini, simak selengkapnya di bawah ini. <script>alert(1)</script> ' + 'x'.repeat(30) });
+  check('Tag <script> di isi teks tetap terbit sebagai teks biasa', r.status === 200 && !!r.data.articleId, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/press/articles', { newspaper_id: paperId, title: 'Artikel Terlalu Panjang', content: 'x'.repeat(1300001) });
+  check('Isi > 1,3 jt karakter ditolak 400', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);
   process.exit(failed ? 1 : 0);

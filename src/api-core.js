@@ -5,7 +5,7 @@ import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings } f
 import {
   signToken, cookieOptions, COOKIE_NAME, authRequired, citizenRequired,
   loadCitizen, isValidEmail, isValidUsername, todayStr, publicId,
-  getUserIdFromReq, bootstrapCodeMatches, fmtRp,
+  getUserIdFromReq, bootstrapCodeMatches, fmtRp, parseImageDataUrl,
 } from './util.js';
 import { dbRateLimit } from './rate-limit.js';
 import { getCountryRow, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive } from './api-civic.js';
@@ -749,20 +749,8 @@ export function registerCore(app) {
   // diunggah ulang) — chat memakai fallback inisial di sana.
   const AVATAR_MAX_BYTES = 500 * 1024;
   const AVATAR_SM_MAX_BYTES = 25 * 1024;
-  function parseAvatarDataUrl(dataUrl, maxBytes = AVATAR_MAX_BYTES) {
-    if (typeof dataUrl !== 'string') return null;
-    const m = dataUrl.match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
-    if (!m) return null;
-    let buf;
-    try { buf = Buffer.from(m[2], 'base64'); } catch { return null; }
-    if (buf.length === 0 || buf.length > maxBytes) return null;
-    // Periksa magic bytes agar benar-benar file gambar, bukan teks lain.
-    const isJpeg = buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
-    const isPng = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
-    const isWebp = buf.length > 11 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
-    if (!isJpeg && !isPng && !isWebp) return null;
-    return { bytes: buf.length, dataUrl };
-  }
+  // Parser gambar bersama ada di util.js (dipakai juga gambar artikel).
+  const parseAvatarDataUrl = (dataUrl, maxBytes = AVATAR_MAX_BYTES) => parseImageDataUrl(dataUrl, maxBytes);
   app.post('/api/profile/avatar', authRequired, r(async (req, res) => {
     const parsed = parseAvatarDataUrl(req.body?.avatar);
     if (!parsed) {

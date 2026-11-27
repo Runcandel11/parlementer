@@ -37,7 +37,12 @@ export function createApp() {
     next();
   });
 
-  app.use(express.json({ limit: '1mb' }));
+  // Batas body JSON 3 MB (dulu 1 MB): artikel dengan sampul (500 KB) +
+  // thumbnail (50 KB) + 3 gambar di isi (3 × 300 KB) bisa mencapai ~2 MB
+  // dalam base64 — 1 MB akan menolak artikel bergambar yang sah sebelum
+  // sampai ke validasi handler. Batas per-bidang tetap ditegakkan di
+  // handler masing-masing (avatar 500 KB, sampul 500 KB, gambar isi 300 KB).
+  app.use(express.json({ limit: '3mb' }));
 
   // Security headers (manual, tanpa dependensi baru). CSP mengizinkan
   // Google Fonts (dipakai UI) dan skrip/gaya dari origin sendiri saja.
