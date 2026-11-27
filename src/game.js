@@ -3,9 +3,10 @@
 // VERSI game (semver; aturan pemilik 27 Nov 2026): update kecil +0.0.1,
 // sedang +0.1, besar +1. Versi saat ini v2.1.3 (travel, kecil);
 // update sedang v2.2.0 = landing + profil/ADMIN + kartu wilayah abu-abu +
-// perbaikan login (bcrypt pindah ke worker). Ditampilkan di footer
-// (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '2.2.0';
+// perbaikan login (bcrypt pindah ke worker). Update kecil v2.2.1 =
+// perbaikan upload foto (terima file tanpa tipe MIME + pesan error jujur).
+// Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
+export const VERSION = '2.2.1';
 
 export const WA_TOPUP_URL = 'https://wa.me/6285220743283';
 export const MINT_RATE = 10; // 1 emas dicetak jadi 10 USD

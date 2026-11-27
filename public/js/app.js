@@ -43,12 +43,34 @@ const avatarHtml = (avatar, username, size = 40) => avatar
   ? `<img src="${esc(avatar)}" class="avatar-img" style="width:${size}px;height:${size}px" alt="">`
   : `<span class="avatar-initial" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px">${esc((username || '?')[0].toUpperCase())}</span>`;
 
+// Foto: tipe MIME dari picker tidak selalu bisa diandalkan — picker Android
+// kadang memberi file.type kosong padahal file-nya JPEG valid (kasus: foto
+// logo 120 KB ditolak "melebihi 500 KB"). Terima file bila tipenya image/*
+// ATAU ekstensi namanya .jpg/.jpeg/.png/.webp; decode lewat <img> tetap jadi
+// penjaga akhir (file rusak / format tak didukung tetap ditolak di sana).
+const IMAGE_FILE_EXTS = ['.jpg', '.jpeg', '.png', '.webp'];
+function looksLikeImageFile(file) {
+  if (!file) return false;
+  if (typeof file.type === 'string' && file.type.startsWith('image/')) return true;
+  const name = typeof file.name === 'string' ? file.name.toLowerCase() : '';
+  return IMAGE_FILE_EXTS.some((ext) => name.endsWith(ext));
+}
+
+// Pesan error upload foto — dibedakan per penyebab supaya tidak lagi menuduh
+// ukuran padahal masalahnya format.
+const IMAGE_ERROR_FORMAT = 'Format foto tidak didukung atau file rusak. Pakai JPG, PNG, atau WebP.';
+const IMAGE_ERROR_SIZE = 'Foto terlalu besar (maks 500 KB setelah diperkecil).';
+function imageErrorMessage(err) {
+  return err === 'size' ? IMAGE_ERROR_SIZE : IMAGE_ERROR_FORMAT;
+}
+
 // Baca file gambar → resize/crop persegi 256×256 lewat canvas → data URL JPEG,
 // plus thumbnail 48×48 untuk daftar chat/DM (Tahap 3, §6.3).
-// Mengembalikan { avatar, avatarSm } atau null bila file bukan gambar atau
-// hasil akhirnya tetap > 500 KB (thumbnail > 25 KB).
+// Mengembalikan { avatar, avatarSm } atau { error: 'format' | 'size' }:
+// 'format' = bukan gambar / tidak bisa dibaca browser, 'size' = hasil
+// resize tetap > 500 KB (thumbnail > 25 KB).
 async function processAvatarFile(file) {
-  if (!file || !file.type.startsWith('image/')) return null;
+  if (!looksLikeImageFile(file)) return { error: 'format' };
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => {
@@ -70,16 +92,16 @@ async function processAvatarFile(file) {
       // Data URL base64 ≈ 4/3 ukuran biner; 500 KB biner ≈ 682.667 karakter.
       if (dataUrl.length <= 682667) { avatar = dataUrl; break; }
     }
-    if (!avatar) return null;
+    if (!avatar) return { error: 'size' };
     // Thumbnail 48×48 dari canvas yang sama (25 KB biner ≈ 34.100 karakter).
     const sm = document.createElement('canvas');
     sm.width = 48; sm.height = 48;
     sm.getContext('2d').drawImage(canvas, 0, 0, 48, 48);
     const avatarSm = sm.toDataURL('image/jpeg', 0.8);
-    if (avatarSm.length > 34100) return null;
+    if (avatarSm.length > 34100) return { error: 'size' };
     return { avatar, avatarSm };
   } catch {
-    return null;
+    return { error: 'format' };
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -95,11 +117,10 @@ function toast(msg) {
 
 // Sampul artikel: baca file gambar → crop tengah 1200×630 (rasio 40:21,
 // seperti gambar pratinjau) lewat canvas → data URL JPEG, plus thumbnail
-// 400×210 untuk daftar artikel. Mengembalikan { cover, coverSm } atau null
-// bila file bukan gambar atau hasil akhirnya tetap > 500 KB (thumbnail
-// > 50 KB). Pola sama seperti processAvatarFile (tangga kualitas JPEG).
+// 400×210 untuk daftar artikel. Mengembalikan { cover, coverSm } atau
+// { error: 'format' | 'size' } (sama seperti processAvatarFile).
 async function processCoverFile(file) {
-  if (!file || !file.type.startsWith('image/')) return null;
+  if (!looksLikeImageFile(file)) return { error: 'format' };
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => {
@@ -123,7 +144,7 @@ async function processCoverFile(file) {
       // 500 KB biner ≈ 682.667 karakter base64.
       if (dataUrl.length <= 682667) { cover = dataUrl; break; }
     }
-    if (!cover) return null;
+    if (!cover) return { error: 'size' };
     // Thumbnail 400×210 dari canvas yang sama (50 KB biner ≈ 68.266 karakter).
     const sm = document.createElement('canvas');
     sm.width = 400; sm.height = 210;
@@ -133,10 +154,10 @@ async function processCoverFile(file) {
       const dataUrl = sm.toDataURL('image/jpeg', q);
       if (dataUrl.length <= 68266) { coverSm = dataUrl; break; }
     }
-    if (!coverSm) return null;
+    if (!coverSm) return { error: 'size' };
     return { cover, coverSm };
   } catch {
-    return null;
+    return { error: 'format' };
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -1364,8 +1385,8 @@ ROUTES.profile = async (username) => {
       const f = fileInput.files?.[0];
       if (!f) return;
       const processed = await processAvatarFile(f);
-      if (!processed) {
-        toast('Gambar tidak valid atau terlalu besar (maks 500 KB setelah di-resize).');
+      if (!processed || processed.error) {
+        toast(imageErrorMessage(processed?.error));
         fileInput.value = '';
         return;
       }
@@ -3024,7 +3045,7 @@ ROUTES['press/new'] = async () => {
   });
   coverInput?.addEventListener('change', async () => {
     const processed = await processCoverFile(coverInput.files[0]);
-    if (!processed) { toast('Sampul harus gambar yang valid dan ukurannya maksimal 500 KB.'); coverInput.value = ''; return; }
+    if (!processed || processed.error) { toast(imageErrorMessage(processed?.error)); coverInput.value = ''; return; }
     pendingCover = processed.cover;
     pendingCoverSm = processed.coverSm;
     $('#art-cover-preview').innerHTML = `<img src="${esc(pendingCoverSm)}" class="article-cover" alt="Pratinjau sampul">`;
