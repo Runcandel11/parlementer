@@ -23,6 +23,20 @@ export function createApp() {
   // Penting untuk rate limit auth: tanpa ini semua pengguna terlihat satu IP
   // (IP proxy) dan akan saling memblokir.
   app.set('trust proxy', 1);
+
+  // Pengalihan permanen: siapa pun yang masih membuka lewat Vercel
+  // (parlementer.vercel.app) otomatis dipindah ke domain baru
+  // https://parlementer.my.id. Hanya aktif bila host berakhiran
+  // .vercel.app — di VPS (domain/IP sendiri) tidak berpengaruh.
+  // 308 menjaga method + body (aman untuk POST API).
+  app.use((req, res, next) => {
+    const host = String(req.headers.host || '');
+    if (host.endsWith('.vercel.app')) {
+      return res.redirect(308, 'https://parlementer.my.id' + req.originalUrl);
+    }
+    next();
+  });
+
   app.use(express.json({ limit: '1mb' }));
 
   // Security headers (manual, tanpa dependensi baru). CSP mengizinkan
