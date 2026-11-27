@@ -38,7 +38,9 @@
     "test:credit-dom": "node test/credit-dom.js",
     "test:ticket-dom": "node test/ticket-dom.js",
     "test:stage6-dom": "node test/stage6-dom.js",
-    "test:stage7-dom": "node test/stage7-dom.js"
+    "test:stage7-dom": "node test/stage7-dom.js",
+    "test:load": "node scripts/loadtest.mjs",
+    "test:recovery": "node scripts/recovery-test.mjs"
   },
   "type": "module",
   "version": "1.0.0"

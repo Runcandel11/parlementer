@@ -47,8 +47,15 @@
 // tabel relasional; Pendidikan akhirnya punya efek nyata (jeda latihan
 // −5% per level); teks janji palsu dihapus (tagline Deluxe, deskripsi
 // Ekonomi/Premium); README + docs/ARSITEKTUR.md disinkronkan.
+// Update sedang v4.2.0 = Tahap 8 master overhaul — STRESS TEST + QA
+// (28 Nov 2026, tahap TERAKHIR overhaul): race ensureElections diperbaiki
+// (INSERT atomik + indeks unik parsial — pemilu ganda tidak mungkin lagi);
+// views artikel dihitung 1× per warga per artikel per hari (refresh tidak
+// lagi menggembungkan skor Liga Pers); skenario tick penuh + alur pemain
+// baru dites end-to-end; stress test lokal 50 VU (490 req/dtk, p95 7 ms,
+// 0 error) + uji pemulihan SIGKILL (snapshot identik, tick tepat 1 hari).
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '4.1.0';
+export const VERSION = '4.2.0';
 
 // --- Satuan waktu dasar (Tahap 7) ---
 // Satu sumber kebenaran untuk "sehari" dalam milidetik — semua konstanta

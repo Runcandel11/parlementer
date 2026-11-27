@@ -1,0 +1,203 @@
+{
+  "checks": [
+    {
+      "name": "Daftar pemain",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "Klaim harian",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "Lamar ADMIN",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "Shift penuh",
+      "ok": true,
+      "detail": "goods=50× Besi Mentah"
+    },
+    {
+      "name": "Jual 10× Gandum di pasar",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "Server hidup lagi setelah SIGKILL (/api/world 200)",
+      "ok": true,
+      "detail": "version=4.1.0"
+    },
+    {
+      "name": "Skema tetap v17 setelah restart",
+      "ok": true,
+      "detail": "value=17"
+    },
+    {
+      "name": "Snapshot IDENTIK setelah kill (gold/usd/inventaris/penawaran/jumlah baris)",
+      "ok": true,
+      "detail": "users 1→1, inv 5→5, offers 1→1, tx 0→0"
+    },
+    {
+      "name": "Tidak ada saldo/stok negatif setelah restart",
+      "ok": true,
+      "detail": "{\"citizens\":0,\"inventory\":0,\"offers\":0}"
+    },
+    {
+      "name": "Tick setelah restart: hari 1 → 2 (tepat 1 hari)",
+      "ok": true,
+      "detail": "day=2"
+    },
+    {
+      "name": "Energi pulih penuh setelah tick",
+      "ok": true,
+      "detail": "energi=100/100"
+    },
+    {
+      "name": "Server hidup di boot ke-3",
+      "ok": true,
+      "detail": "version=4.1.0 day=2"
+    },
+    {
+      "name": "Snapshot tetap identik setelah boot ke-3 (gold/usd/inventaris/penawaran)",
+      "ok": true,
+      "detail": "day=2"
+    }
+  ],
+  "snapshotBefore": {
+    "schemaVersion": "17",
+    "users": 1,
+    "citizens": [
+      {
+        "id": 1,
+        "gold": 55,
+        "usd": 550,
+        "energy": 0,
+        "level": 1,
+        "xp": 60
+      }
+    ],
+    "inventory": [
+      {
+        "citizen_id": 1,
+        "commodity_id": 1,
+        "tier": 1,
+        "qty": 3
+      },
+      {
+        "citizen_id": 1,
+        "commodity_id": 2,
+        "tier": 1,
+        "qty": 3
+      },
+      {
+        "citizen_id": 1,
+        "commodity_id": 3,
+        "tier": 1,
+        "qty": 3
+      },
+      {
+        "citizen_id": 1,
+        "commodity_id": 6,
+        "tier": 1,
+        "qty": 90
+      },
+      {
+        "citizen_id": 1,
+        "commodity_id": 7,
+        "tier": 1,
+        "qty": 50
+      }
+    ],
+    "offers": [
+      {
+        "id": 1,
+        "seller_id": 1,
+        "scope": "local",
+        "commodity_id": 6,
+        "qty": 10,
+        "price": 1
+      }
+    ],
+    "marketTx": 0,
+    "notifications": 1,
+    "negative": {
+      "citizens": 0,
+      "inventory": 0,
+      "offers": 0
+    },
+    "world": {
+      "day": 1,
+      "last_tick_date": "2026-11-27"
+    }
+  },
+  "snapshotAfter": {
+    "schemaVersion": "17",
+    "users": 1,
+    "citizens": [
+      {
+        "id": 1,
+        "gold": 55,
+        "usd": 550,
+        "energy": 0,
+        "level": 1,
+        "xp": 60
+      }
+    ],
+    "inventory": [
+      {
+        "citizen_id": 1,
+        "commodity_id": 1,
+        "tier": 1,
+        "qty": 3
+      },
+      {
+        "citizen_id": 1,
+        "commodity_id": 2,
+        "tier": 1,
+        "qty": 3
+      },
+      {
+        "citizen_id": 1,
+        "commodity_id": 3,
+        "tier": 1,
+        "qty": 3
+      },
+      {
+        "citizen_id": 1,
+        "commodity_id": 6,
+        "tier": 1,
+        "qty": 90
+      },
+      {
+        "citizen_id": 1,
+        "commodity_id": 7,
+        "tier": 1,
+        "qty": 50
+      }
+    ],
+    "offers": [
+      {
+        "id": 1,
+        "seller_id": 1,
+        "scope": "local",
+        "commodity_id": 6,
+        "qty": 10,
+        "price": 1
+      }
+    ],
+    "marketTx": 0,
+    "notifications": 1,
+    "negative": {
+      "citizens": 0,
+      "inventory": 0,
+      "offers": 0
+    },
+    "world": {
+      "day": 1,
+      "last_tick_date": "2026-11-27"
+    }
+  }
+}

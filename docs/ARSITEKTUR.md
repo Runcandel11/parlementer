@@ -155,14 +155,43 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   energi, slot konvoi, klaim, TTL) harus dibaca dari sumber tunggal di
   §3 — jangan hardcode angka yang sama di tempat lain.
 
-## 7. Sisa yang diketahui (untuk Tahap 8 / keputusan pemilik)
+## 7. Sisa yang diketahui (untuk keputusan pemilik)
 
 - **Verifikasi email belum diimplementasikan** — butuh keputusan layanan
   (Resend vs Gmail SMTP) + akun/API key; JANGAN membuat akun atas nama
   pemilik tanpa persetujuan.
-- **`ensureElections` race** di `src/tick.js` (diketahui dari audit).
-- **Views artikel bisa digelembungkan** dengan refresh (berpengaruh ke
-  hadiah Liga Pers).
-- **Stress test** (Tahap 8): target jujur 20–50 pemain bersamaan di free
-  tier; real-time (websocket) tidak mungkin di arsitektur polling saat ini.
-- **Recovery test** (redeploy VPS di tengah tick) belum dilakukan.
+- **Real-time (websocket) tidak mungkin** di arsitektur polling saat ini
+  (polling 5 detik adalah batasnya); pindah ke server persistent bila
+  real-time sejati wajib.
+- **Di atas ~50 pemain bersamaan** butuh paket berbayar (VPS lebih besar /
+  Postgres terkelola) — lihat hasil stress test Tahap 8 di bawah.
+
+## 8. Tahap 8 — Stress test + QA (v4.2.0, 28 Nov 2026, tahap TERAKHIR overhaul)
+
+- **`ensureElections` race — SELESAI.** INSERT atomik (`INSERT ...
+  SELECT ... WHERE NOT EXISTS`) + indeks unik parsial
+  `idx_elections_one_active` (satu pemilu aktif per negara+tipe).
+  Migrasi v17 membersihkan duplikat lama (simpan id terkecil). Probe
+  `test/race-ensure-elections.mjs` (12× paralel, SQLite + Postgres):
+  tanpa duplikat.
+- **Views artikel — SELESAI.** Dihitung 1× per warga per artikel per hari
+  (tabel `article_views`, PRIMARY KEY rangkap); refresh tidak lagi
+  menggembungkan skor Liga Pers. Hitungan lama tidak direkonstruksi.
+- **Stress test lokal** (`npm run test:load`, hasil mentah
+  `docs/loadtest-2026-11-28.json`): 20 VU → 196 req/dtk, p95 3–4 ms;
+  **50 VU → 490 req/dtk, p95 6–7 ms, 0 error** (29.411 request);
+  transaksi pasar 1/dtk 60/60 lolos (p95 10–11 ms); cold start 530 ms;
+  register 129–320 ms, login 128–209 ms. Titik jenuh TIDAK tercapai di
+  50 VU — server lokal masih longgar. Catatan: ini localhost SQLite di
+  VM 1,5 CPU; latensi live didominasi jaringan + HP pemain.
+- **Recovery test** (`npm run test:recovery`, hasil mentah
+  `docs/recovery-2026-11-28.json`): SIGKILL di tengah burst 40 request →
+  restart di DB yang sama → snapshot IDENTIK (gold/USD/inventaris/
+  penawaran/jumlah baris), tanpa saldo negatif; tick setelah restart
+  maju tepat 1 hari; boot ke-3 (migrasi idempotent) tetap konsisten.
+  13/13 lolos.
+- **Skenario tick penuh** (e2e [22q]): pemilu + perang + UU + anggaran
+  yang berakhir bersamaan ditutup konsisten dalam SATU tick (pemenang
+  benar, wilayah pindah ke pemberontak, efek UU diterapkan, kas
+  berkurang tepat). **Alur pemain baru** end-to-end (daftar → klaim →
+  lamar ADMIN → shift → jual → beli → chat) lolos tanpa hambatan.

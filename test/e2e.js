@@ -1617,6 +1617,12 @@ async function main() {
   r = await B.post('/api/country/system', { system: 'parlementer' });
   check('Presiden mengubah sistem → parlementer', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
   // Pemilu presiden di sistem parlementer: hanya MP yang boleh memilih.
+  // (Tahap 8) Pemilu aktif hanya boleh 1 per (negara, tipe) — indeks unik
+  // idx_elections_one_active menolak pemilu kedua. Dulu baris ini INSERT
+  // pemilu 'open' baru padahal pemilu 'scheduled' dari boot masih ada
+  // (duplikat diam-diam — itulah race yang diperbaiki Tahap 8). Sekarang
+  // hapus dulu jadwal aktif lama, baru sisipkan pemilu 'open' untuk uji ini.
+  db28.prepare("DELETE FROM elections WHERE country_id = ? AND type = 'president' AND status IN ('scheduled','open')").run(nusantaraId);
   db28.prepare("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','open',?,?,?,?)").run(Date.now() - 1000, Date.now() + 3600000, nusantaraId, Date.now());
   const presEl2 = db28.prepare("SELECT id FROM elections WHERE country_id = ? AND type = 'president' AND status = 'open' ORDER BY id DESC LIMIT 1").get(nusantaraId).id;
   db28.prepare('INSERT INTO election_candidates (election_id, citizen_id, party_id, votes) VALUES (?,?,?,0)').run(presEl2, 2, party1Id);
@@ -2913,6 +2919,131 @@ async function main() {
   r = await M3.get('/api/chronicle');
   const ch1 = (r.data.chapters || []).find((c) => c.chapter === 1);
   check('GET /api/chronicle: babak 1 done 8/8 + sudah diklaim', ch1?.done === 8 && ch1?.total === 8 && ch1?.claimed === true, JSON.stringify(ch1));
+  console.log('\n[22q] Tahap 8 v4.2.0 — stress test + QA: race pemilu, views artikel, skenario tick penuh, alur pemain baru');
+  // --- (a) Race ensureElections: 12× paralel harus tanpa pemilu ganda.
+  const race = await new Promise((resolve) => {
+    const p = spawn('node', ['test/race-ensure-elections.mjs'], { cwd: ROOT, env: { ...process.env, DATABASE_PATH: DB_PATH } });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { out += d; });
+    p.on('close', (code) => resolve({ code, out }));
+  });
+  check('Race ensureElections 12× paralel: tanpa pemilu ganda (maks 1/tipe, parlemen ada)', race.code === 0, race.out.trim().slice(0, 200));
+  // --- (b) Views artikel: 1× per warga per artikel per hari.
+  const myPapers = (await A.get('/api/press/newspapers/mine')).data.newspapers || [];
+  const paperQ = myPapers[0]?.id;
+  r = await A.post('/api/press/articles', { newspaper_id: paperQ, title: 'Artikel Uji Tahap 8', content: 'Isi artikel uji Tahap 8 yang panjangnya lebih dari dua puluh karakter.' });
+  check('A menerbitkan artikel uji Tahap 8', r.status === 200 && !!r.data.articleId, `status=${r.status} ${r.data.error || ''}`);
+  const articleQ = r.data.articleId;
+  for (let i = 0; i < 3; i++) { r = await A.get(`/api/press/articles/${articleQ}`); }
+  check('A membaca artikel sendiri 3× (refresh): views tetap 1', r.status === 200 && r.data.article.views === 1, `views=${r.data.article.views}`);
+  for (let i = 0; i < 2; i++) { r = await B.get(`/api/press/articles/${articleQ}`); }
+  check('B membaca artikel 2×: views naik 1 lagi (total 2, bukan 5)', r.status === 200 && r.data.article.views === 2, `views=${r.data.article.views}`);
+  const viewRows = dbS6.prepare('SELECT COUNT(*) AS n FROM article_views WHERE article_id = ?').get(articleQ);
+  check('Tabel article_views: tepat 2 baris unik (A + B, 1 hari)', Number(viewRows.n) === 2, `n=${viewRows.n}`);
+  // --- (c) Skenario "hari tick" penuh: pemilu + perang + UU + anggaran tutup bersamaan.
+  const meAQ = (await A.get('/api/me')).data.citizen;
+  const meBQ = (await B.get('/api/me')).data.citizen;
+  const nusQ = dbS6.prepare('SELECT id, treasury, tax_income FROM country ORDER BY id ASC LIMIT 1').get();
+  const regionQ = dbS6.prepare('SELECT id FROM regions WHERE country_id = ? LIMIT 1').get(nusQ.id);
+  const nowQ = Date.now();
+  // (Tahap 8) Pemilu aktif hanya boleh 1 per (negara, tipe) — hapus dulu
+  // jadwal aktif lama (bisa ada sisa dari seksi [28b]/[28c]), baru sisipkan
+  // pemilu 'open' yang akan ditutup tick ini.
+  dbS6.prepare("DELETE FROM elections WHERE country_id = ? AND type = 'president' AND status IN ('scheduled','open')").run(nusQ.id);
+  const eidQ = dbS6.prepare("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','open',?,?,?,?)").run(nowQ - 10000, nowQ - 1000, nusQ.id, nowQ).lastInsertRowid;
+  dbS6.prepare('INSERT INTO election_candidates (election_id, citizen_id, party_id, votes) VALUES (?,?,NULL,?)').run(eidQ, meAQ.id, 5);
+  dbS6.prepare('INSERT INTO election_candidates (election_id, citizen_id, party_id, votes) VALUES (?,?,NULL,?)').run(eidQ, meBQ.id, 3);
+  const widQ = dbS6.prepare("INSERT INTO wars (name, region_id, attacker_label, defender_label, score_a, score_d, status, ends_at, created_at) VALUES ('Perang Uji Tahap 8',?, 'Pemberontak','Nusantara',100,40,'active',?,?)").run(regionQ.id, nowQ - 1000, nowQ).lastInsertRowid;
+  dbS6.prepare("INSERT INTO war_attacks (war_id, citizen_id, side, damage, ammo, created_at) VALUES (?,?,'attacker',50,'Senjata',?)").run(widQ, meAQ.id, nowQ);
+  const lawQ = dbS6.prepare("INSERT INTO laws (proposer_id, title, content, kind, value, status, yes, no, ends_at, country_id, created_at) VALUES (?,'UU Uji Tahap 8','Isi undang-undang uji.','tax_income',3,'voting',5,1,?,?,?)").run(meAQ.id, nowQ - 1000, nusQ.id, nowQ).lastInsertRowid;
+  const treasuryBeforeQ = Number(nusQ.treasury);
+  const bidQ = dbS6.prepare("INSERT INTO budgets (proposer_id, kind, amount, status, yes, no, ends_at, country_id, created_at) VALUES (?,'claim',50,'voting',5,1,?,?,?)").run(meAQ.id, nowQ - 1000, nusQ.id, nowQ).lastInsertRowid;
+  const yesterdayQ = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  dbS6.prepare('UPDATE world SET last_tick_date = ? WHERE id = 1').run(yesterdayQ);
+  await A.get('/api/me'); // picu maybeTick
+  let dayQ = 0;
+  for (let i = 0; i < 40; i++) {
+    await sleep(1000);
+    r = await A.get('/api/world');
+    dayQ = r.data.day;
+    if (dayQ === 2) break;
+  }
+  check('Tick penuh: hari dunia 1 → 2 (tepat 1 hari, bukan 2×)', dayQ === 2, `day=${dayQ}`);
+  const elQ = dbS6.prepare('SELECT status, winner_id FROM elections WHERE id = ?').get(eidQ);
+  check('Pemilu presiden ditutup dalam tick: pemenang A (5 vs 3 suara)', elQ.status === 'closed' && Number(elQ.winner_id) === meAQ.id, JSON.stringify(elQ));
+  const presQ = dbS6.prepare('SELECT president_id FROM country WHERE id = ?').get(nusQ.id);
+  check('Presiden negara kini A', Number(presQ.president_id) === meAQ.id, `president_id=${presQ.president_id}`);
+  const warQ = dbS6.prepare('SELECT status, winner FROM wars WHERE id = ?').get(widQ);
+  check('Perang ditutup dalam tick: penyerang menang (100 vs 40)', warQ.status === 'ended' && warQ.winner === 'attacker', JSON.stringify(warQ));
+  const regQ = dbS6.prepare('SELECT country_id, controller, controller_id FROM regions WHERE id = ?').get(regionQ.id);
+  check('Wilayah lepas dari negara → dikuasai pemberontak (panglima perang = A)', regQ.country_id === null && regQ.controller === 'pemberontak' && Number(regQ.controller_id) === meAQ.id, JSON.stringify(regQ));
+  const lawRowQ = dbS6.prepare('SELECT status, effect_applied FROM laws WHERE id = ?').get(lawQ);
+  const taxQ = dbS6.prepare('SELECT tax_income FROM country WHERE id = ?').get(nusQ.id);
+  check('UU pajak disahkan dalam tick: efek diterapkan, pajak 4% → 3%', lawRowQ.status === 'executed' && Number(lawRowQ.effect_applied) === 1 && Number(taxQ.tax_income) === 3, `status=${lawRowQ.status} pajak=${taxQ.tax_income}`);
+  const budQ = dbS6.prepare('SELECT status FROM budgets WHERE id = ?').get(bidQ);
+  const treasuryAfterQ = Number(dbS6.prepare('SELECT treasury FROM country WHERE id = ?').get(nusQ.id).treasury);
+  const budExpected = treasuryBeforeQ >= 50 ? 'passed' : 'failed';
+  check(`Anggaran ditutup dalam tick: ${budExpected} (kas ${treasuryBeforeQ} emas)`, budQ.status === budExpected, `status=${budQ.status} kas ${treasuryBeforeQ}→${treasuryAfterQ}`);
+  if (budExpected === 'passed') check('Kas negara berkurang tepat 50 emas (anggaran)', treasuryAfterQ === treasuryBeforeQ - 50, `${treasuryBeforeQ}→${treasuryAfterQ}`);
+  await sleep(2000);
+  r = await A.get('/api/world');
+  check('Hari tetap 2 setelah tick (tidak ada tick ganda)', r.data.day === 2, `day=${r.data.day}`);
+  // --- (d) Alur pemain baru end-to-end (definisi selesai AUDIT Tahap 8):
+  // daftar → klaim → lamar ADMIN → shift → jual → beli → chat.
+  const NW = new Client();
+  // Batas registrasi 20/IP/24 jam sudah habis dipakai pendaftaran seksi
+  // sebelumnya — pakai IP berbeda via X-Forwarded-For (pola [28]/[23b]).
+  NW.extraHeaders = { 'X-Forwarded-For': '127.0.0.21' };
+  r = await NW.post('/api/auth/register', { email: 'warga8@test.local', password: 'rahasia123', username: 'warga_delapan' });
+  check('Pemain baru NW mendaftar', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  const meN = (await NW.get('/api/me')).data.citizen;
+  r = await NW.post('/api/claim', {});
+  check('NW klaim pasokan harian (+5 emas/+50 USD/+40 XP)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const jobsN = (await NW.get('/api/jobs')).data.jobs.filter((j) => j.is_admin === 1 && j.region_id === meN.region_id);
+  check('Lowongan ADMIN ada di wilayah lahir NW', jobsN.length >= 1, `n=${jobsN.length}`);
+  r = await NW.post('/api/jobs/apply', { job_id: jobsN[0].id });
+  check('NW melamar pekerjaan ADMIN', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await NW.post('/api/jobs/shift', {});
+  check('NW shift penuh (100 energi) dibayar bahan mentah', r.status === 200 && !!r.data.goods, `status=${r.status} goods=${r.data.goods}`);
+  const invN = (await NW.get('/api/inventory')).data.items;
+  const matN = invN.find((i) => i.qty >= 10 && i.tier === 1 && i.name !== 'Tiket');
+  check('NW punya bahan hasil shift ≥10 unit untuk dijual', !!matN, JSON.stringify(invN.map((i) => `${i.name}×${i.qty}`)));
+  const marketN = (await NW.get('/api/market?scope=local')).data;
+  const comN = marketN.commodities.find((c) => c.name === matN.name);
+  // Harga wajar (Tahap 4): bila ≥3 transaksi 14 hari terakhir, harga harus
+  // 0,25×–4× median — jadi pakai median transaksi itu sendiri (fallback:
+  // harga referensi bila pasar masih sepi).
+  const fairPrice = (commodityId, scope, fallback) => {
+    const txs = dbS6.prepare('SELECT price_each FROM market_tx WHERE commodity_id = ? AND scope = ? AND created_at > ? ORDER BY created_at DESC LIMIT 20').all(commodityId, scope, Date.now() - 14 * 86400000).map((x) => Number(x.price_each)).sort((a, b) => a - b);
+    return txs.length >= 3 ? txs[Math.floor(txs.length / 2)] : fallback;
+  };
+  const priceN = fairPrice(comN.id, 'local', Math.max(1, Math.round(Number(comN.ref_usd) || 1)));
+  r = await NW.post('/api/market/sell', { scope: 'local', commodity_id: comN.id, tier: 1, qty: 10, price: priceN });
+  check(`NW memasang penawaran jual 10× ${matN.name} @ ${priceN}`, r.status === 200 && !!r.data.offerId, `status=${r.status} ${r.data.error || ''}`);
+  const marketB = (await B.get('/api/market?scope=global')).data;
+  const invB = (await B.get('/api/inventory')).data.items;
+  let matB = invB.find((i) => i.qty >= 10 && i.tier === 1 && i.name !== 'Tiket');
+  if (!matB) {
+    // B kehabisan stok ≥10 (dipakai seksi sebelumnya) — isi ulang 20× Gandum
+    // Mentah lewat DB agar skenario beli tetap berjalan.
+    const gandumB = marketB.commodities.find((c) => c.name === 'Gandum Mentah');
+    dbS6.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,20) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = qty + 20').run(meBQ.id, gandumB.id);
+    matB = { name: 'Gandum Mentah' };
+  }
+  const comB = marketB.commodities.find((c) => c.name === matB.name);
+  const priceB = fairPrice(comB.id, 'global', Math.max(0.01, Number(comB.ref_gold) || 0.01));
+  r = await B.post('/api/market/sell', { scope: 'global', commodity_id: comB.id, tier: 1, qty: 10, price: priceB });
+  check(`B memasang penawaran global 10× ${matB.name}`, r.status === 200 && !!r.data.offerId, `status=${r.status} ${r.data.error || ''}`);
+  const offerB = r.data.offerId;
+  const invNBefore = (await NW.get('/api/inventory')).data.items.find((i) => i.name === matB.name)?.qty || 0;
+  r = await NW.post('/api/market/buy', { offer_id: offerB, qty: 10 });
+  check(`NW membeli 10× ${matB.name} dari penawaran B`, r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const invNAfter = (await NW.get('/api/inventory')).data.items.find((i) => i.name === matB.name)?.qty || 0;
+  check('Barang beli masuk inventaris NW (+10)', invNAfter === invNBefore + 10, `${invNBefore}→${invNAfter}`);
+  r = await NW.post('/api/chat/global', { content: 'Halo, aku warga baru! Senang bergabung.' });
+  check('NW mengirim pesan chat global', r.status === 200 && !!r.data.messageId, `status=${r.status} ${r.data.error || ''}`);
+
   setDayO(1);
 
   dbS6.close();

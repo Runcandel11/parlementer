@@ -1063,7 +1063,21 @@ export function registerCivic(app) {
        JOIN newspapers n ON n.id = a.newspaper_id WHERE a.id = ?`,
       [req.params.id]);
     if (!a) return res.status(404).json({ error: 'Artikel tidak ditemukan.' });
-    await run('UPDATE articles SET views = views + 1 WHERE id = ?', [a.id]);
+    // (Tahap 8) Views dihitung 1× per warga per artikel per hari (UTC):
+    // dulu SETIAP buka artikel menaikkan views +1, jadi refresh berulang
+    // menggembungkan views — dan skor Liga Pers memakai views, sehingga
+    // peringkat bisa dimanipulasi. Sekarang baris jejak (article_views,
+    // PRIMARY KEY rangkap) dicoba dimasukkan dulu; views hanya naik bila
+    // barisnya baru (ON CONFLICT DO NOTHING). Artikel lama tetap membawa
+    // hitungan views lamanya (tidak bisa direkonstruksi siapa membacanya).
+    const today = new Date().toISOString().slice(0, 10);
+    const seen = await run('INSERT INTO article_views (article_id, citizen_id, day) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING article_id',
+      [a.id, req.citizen.id, today]);
+    let views = a.views;
+    if (seen.changes) {
+      await run('UPDATE articles SET views = views + 1 WHERE id = ?', [a.id]);
+      views = a.views + 1;
+    }
     const comments = await sql(
       `SELECT ac.*, u.username FROM article_comments ac JOIN citizens c ON c.id = ac.citizen_id JOIN users u ON u.id = c.user_id
        WHERE ac.article_id = ? ORDER BY ac.created_at ASC`, [a.id]);
@@ -1071,7 +1085,7 @@ export function registerCivic(app) {
     const others = await sql(
       `SELECT a2.id, a2.title, a2.created_at, a2.likes, a2.views, a2.cover_sm FROM articles a2 WHERE a2.newspaper_id = ? AND a2.id != ? ORDER BY a2.created_at DESC LIMIT 5`,
       [a.newspaper_id, a.id]);
-    res.json({ article: { ...a, views: a.views + 1 }, comments, myReaction: myReaction?.reaction || null, others });
+    res.json({ article: { ...a, views }, comments, myReaction: myReaction?.reaction || null, others });
   }));
 
   app.get('/api/press/newspapers/mine', authRequired, citizenRequired, r(async (req, res) => {

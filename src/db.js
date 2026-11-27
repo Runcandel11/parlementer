@@ -805,6 +805,17 @@ CREATE TABLE IF NOT EXISTS article_reactions (
   reaction TEXT NOT NULL,
   UNIQUE(article_id, citizen_id)
 );
+-- (Tahap 8) Jejak baca artikel: 1 baris per warga per artikel per hari
+-- (UTC). Kolom articles.views hanya naik bila baris ini baru — refresh
+-- berulang tidak lagi menggembungkan views (skor Liga Pers memakai views,
+-- jadi hitungan lama bisa dimanipulasi). PRIMARY KEY rangkap = penolak
+-- duplikat di level database (ON CONFLICT DO NOTHING di route baca).
+CREATE TABLE IF NOT EXISTS article_views (
+  article_id INTEGER NOT NULL REFERENCES articles(id),
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  day TEXT NOT NULL,
+  PRIMARY KEY (article_id, citizen_id, day)
+);
 CREATE TABLE IF NOT EXISTS article_comments (
   id ${id},
   article_id INTEGER NOT NULL REFERENCES articles(id),
@@ -1181,6 +1192,7 @@ export async function initDb() {
     await migrateXpScale(t);
     await migrateStage6Columns(t);
     await migrateStage7Columns(t);
+    await migrateStage8Columns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1242,7 +1254,7 @@ async function runDataFixups() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -1259,7 +1271,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 17;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1588,6 +1600,35 @@ async function migrateStage7Columns(t) {
   await dropCol('missions');
   await dropCol('chronicle_done');
   await dropCol('chronicle_claimed');
+}
+
+// Tahap 8 (v4.2.0): perbaiki race ensureElections + siapkan dedupe views.
+// 1) Pemilu ganda: dulu ensureElections SELECT lalu INSERT — dua panggilan
+//    bersamaan (cold start serverless ganda, ensureReady + tick) bisa
+//    sama-sama melihat "belum ada" lalu sama-sama INSERT. Pengaman di level
+//    database: indeks unik parsial — hanya SATU pemilu 'scheduled'/'open'
+//    per (negara, tipe). Pemilu 'closed' tidak dihitung, jadi pemilu
+//    berikutnya tetap bisa dijadwalkan setelah yang lama ditutup.
+//    Migrasi membersihkan dulu duplikat yang sudah telanjur ada (simpan
+//    id terkecil per negara+tipe, hanya baris bernegara — pemilu arsip
+//    country_id NULL tidak saling berkonflik di indeks unik) lalu membuat
+//    indeksnya. Idempotent: DELETE memakai NOT IN + CREATE INDEX IF NOT
+//    EXISTS — migrasi yang gagal di tengah bisa diulang.
+// 2) Tabel article_views dibuat schema() di atas (CREATE TABLE IF NOT
+//    EXISTS jalan sebelum migrasi ini) — tidak perlu dibuat ulang di sini.
+async function migrateStage8Columns(t) {
+  // Dedup tanpa subquery NOT IN (parser pg-mem tidak bisa mem-parse
+  // `DELETE ... id NOT IN (SELECT MIN(id) ... GROUP BY ...)` — pg-test
+  // crash "Ambiguous SQL syntax"): ambil id terkecil per grup dulu,
+  // lalu hapus sisanya satu per satu lewat id eksplisit. Sama hasilnya,
+  // jalan di SQLite + Postgres + pg-mem.
+  const keepers = await t.sql(`SELECT MIN(id) AS id FROM elections WHERE country_id IS NOT NULL AND status IN ('scheduled','open') GROUP BY country_id, type`);
+  const keepIds = new Set(keepers.map((r) => Number(r.id)));
+  const actives = await t.sql(`SELECT id FROM elections WHERE country_id IS NOT NULL AND status IN ('scheduled','open')`);
+  for (const row of actives) {
+    if (!keepIds.has(Number(row.id))) await t.run('DELETE FROM elections WHERE id = ?', [row.id]);
+  }
+  await t.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_elections_one_active ON elections(country_id, type) WHERE status IN ('scheduled','open')`);
 }
 
 // Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di

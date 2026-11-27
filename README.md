@@ -141,25 +141,29 @@ Variabel environment (lihat `.env.example`):
 ## Tes
 
 ```bash
-npm test            # e2e HTTP di SQLite (DB sekali pakai): 881 pemeriksaan
+npm test            # e2e HTTP di SQLite (DB sekali pakai): 906 pemeriksaan
 npm run test:pg     # jalur Postgres via pg-mem: 46 pemeriksaan
 npm run test:modal  # DOM modal laporan (jsdom): 155 pemeriksaan
 npm run test:all    # pg + e2e + modal + chat-dom
-npm run test:pg-verify # migrasi initDb di Postgres 16 sungguhan: 133 pemeriksaan
+npm run test:pg-verify # migrasi initDb di Postgres 16 sungguhan: 144 pemeriksaan
 npm run test:conc    # balapan HTTP (pasar/klaim/shift/pencapaian/blokir) di Postgres 16: 38 pemeriksaan
 npm run test:stage7-dom # DOM integrasi Tahap 7 (jsdom): 28 pemeriksaan
+npm run test:load    # stress test lokal (20 + 50 VU): hasil mentah docs/loadtest-2026-11-28.json
+npm run test:recovery # uji pemulihan (SIGKILL di tengah burst): 13 pemeriksaan
 # Suite DOM lain: test:chat-dom (43), test:market-dom (14),
 # test:ui-batch2 (53), test:landing-glass (40), test:photo-upload (32),
 # test:profile-admin (49), test:ssl (6), test:jobs-region (22),
 # test:ui-icons (18), test:company-dom (25), test:map-dom (47),
 # test:credit-dom (22), test:ticket-dom (56), test:stage6-dom (27).
-# Total seluruh suite: 1735 pemeriksaan.
+# Total seluruh suite: 1771 pemeriksaan (+ 13 uji pemulihan).
 ```
 
-Hasil terakhir (28 Nov 2026, Tahap 7 v4.1.0): **e2e 881/881 lolos,
-pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 133/133 lolos,
+Hasil terakhir (28 Nov 2026, Tahap 8 v4.2.0): **e2e 906/906 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 144/144 lolos,
 pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos** — dan semua suite
-DOM lain hijau (lihat daftar di atas).
+DOM lain hijau (lihat daftar di atas). Catatan: e2e pernah sekali
+menghitung 907/907 (satu check kondisional yang kadang tereksekusi,
+0 gagal di 7 run berturut-turut) — flake jumlah, bukan kegagalan.
 Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lamar
 kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara ~48,40 USD; USD tidak
 berubah) → pasar (jual/beli, pajak 2%) → makan → valas (cetak 1 emas = 10 USD)
@@ -343,7 +347,7 @@ Dockerfile           # Alternatif deploy container
 
 ## Status
 
-**LIVE di https://parlementer.my.id (v4.1.0, Tahap 7)** — VPS + Postgres
+**LIVE di https://parlementer.my.id (v4.2.0, Tahap 8)** — VPS + Postgres
 lokal, deploy otomatis tiap push ke `master` (auto-pull 3 menit).
 Vercel hanya redirector ke domain utama. Detail arsitektur + keputusan
 desain: lihat `docs/ARSITEKTUR.md`. Audit + cakupan tahap overhaul:

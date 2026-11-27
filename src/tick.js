@@ -15,23 +15,39 @@ function todayStr(d = new Date()) { return d.toISOString().slice(0, 10); }
 //   dibuka (2 Des 2026 — dari db_meta, bukan hardcode tanggal).
 // Negara baru sudah membawa jadwal pemilu pertamanya dari pendirian
 // (POST /api/countries) — fungsi ini hanya mengisi bila belum ada.
+//
+// (Tahap 8) INSERT ATOMIK: dulu SELECT lalu INSERT — dua panggilan
+// bersamaan (cold start serverless ganda, ensureReady + tick di request
+// yang sama) bisa sama-sama melihat "belum ada" lalu sama-sama INSERT,
+// menghasilkan pemilu ganda per negara+tipe. Sekarang satu statement
+// INSERT ... SELECT ... WHERE NOT EXISTS, dan indeks unik parsial
+// idx_elections_one_active (migrateStage8Columns) menolak duplikat sebagai
+// pengaman terakhir — pelanggaran unik (23505 / UNIQUE constraint) ditelan,
+// error lain tetap dilempar.
 export async function ensureElections() {
   const now = Date.now();
   const parOpensAt = await getParliamentOpensAt();
   const countries = await sql('SELECT * FROM country');
+  const insertElection = async (country, type, opens) => {
+    try {
+      await run(`INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at)
+        SELECT ?, 'scheduled', ?, ?, ?, ? WHERE NOT EXISTS
+        (SELECT 1 FROM elections WHERE country_id = ? AND type = ? AND status IN ('scheduled','open'))`,
+        [type, opens, opens + ELECTION_VOTE_MS, country.id, now, country.id, type]);
+    } catch (e) {
+      if (/23505|UNIQUE constraint/i.test(e.message || '') || e.code === '23505') return;
+      throw e;
+    }
+  };
   for (const country of countries) {
     const pres = await one("SELECT * FROM elections WHERE country_id = ? AND type = 'president' AND status IN ('scheduled','open') ORDER BY opens_at ASC", [country.id]);
     const needsPresident = systemDef(country.system).autoPresidentElection || !country.president_id;
     if (!pres && needsPresident) {
-      const opens = now + PRESIDENT_ELECTION_DELAY_DAYS * DAY_MS;
-      await run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','scheduled',?,?,?,?) RETURNING id",
-        [opens, opens + ELECTION_VOTE_MS, country.id, now]);
+      await insertElection(country, 'president', now + PRESIDENT_ELECTION_DELAY_DAYS * DAY_MS);
     }
     const parl = await one("SELECT * FROM elections WHERE country_id = ? AND type = 'parliament' AND status IN ('scheduled','open') ORDER BY opens_at ASC", [country.id]);
     if (!parl) {
-      const opens = Math.max(parOpensAt, now + PARLIAMENT_ELECTION_CYCLE_DAYS * DAY_MS);
-      await run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('parliament','scheduled',?,?,?,?) RETURNING id",
-        [opens, opens + ELECTION_VOTE_MS, country.id, now]);
+      await insertElection(country, 'parliament', Math.max(parOpensAt, now + PARLIAMENT_ELECTION_CYCLE_DAYS * DAY_MS));
     }
   }
 }
