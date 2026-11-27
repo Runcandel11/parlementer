@@ -22,8 +22,10 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
 ## Fitur
 
 - **Auth:** daftar (email + password + nama warga) & masuk (email + password).
-  Email unik, password di-hash bcrypt, sesi 30 hari via cookie httpOnly.
-  Menu login tampil dulu sebelum masuk game. Tombol keluar di Pengaturan.
+  Email unik, password di-hash bcrypt (maks 72 karakter), sesi 7 hari via
+  cookie httpOnly. Token bisa dicabut server-side (`token_version` — naik
+  saat logout). Menu login tampil dulu sebelum masuk game. Tombol keluar di
+  Pengaturan.
 - **Dashboard:** level, XP, energi 100, emas + USD, latihan atribut
   (Kekuatan / Pendidikan / Ekonomi), kerja shift, klaim pasokan harian,
   misi harian, Kronik 5 babak, pencapaian (19 tonggak, total 1.275 emas).
@@ -51,18 +53,23 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   tautan artikel, laporkan (Pelecehan / Ujaran kebencian / Spam / Lainnya) &
   blokir. Chat mulai kosong.
 - **Pesan pribadi (DM), Organisasi, Kontrak, Konvoi, Notifikasi, Profil.**
-- **Akun Admin:** hanya `koboijuniorkhalid@gmail.com` yang bisa jadi admin
-  (otomatis saat daftar; migrasi `initDb` menandai akun yang sudah ada; tidak
-  ada endpoint promosi admin). Panel Admin: daftar pemain (cari nama/email/ID),
-  Ban/Unban (wajib alasan, login akun banned ditolak), beri Premium 1/3/6/12
-  bulan, Emas, USD, Barang (T1–T5), isi Energi — semua aksi tercatat di log
-  admin (`admin_actions`).
+- **Akun Admin:** hanya akun Khalid (`koboijuniorkhalid@gmail.com`, sudah
+  terdaftar sebagai admin sejak 27 Nov 2026). Pemberian admin berbasis email
+  DICABUT 27 Nov 2026 — registrasi baru dengan email apa pun tidak lagi jadi
+  admin. Satu-satunya jalan darurat membuat admin: daftar dengan kode
+  bootstrap `ADMIN_BOOTSTRAP_CODE` (env var, lihat di bawah). Panel Admin:
+  daftar pemain (cari nama/email/ID), Ban/Unban (wajib alasan; akun banned
+  tetap bisa login untuk mengajukan banding), beri Premium 1/3/6/12 bulan,
+  Emas, USD, Barang (T1–T5), isi Energi, hadiah massal — semua aksi tercatat
+  di log admin (`admin_actions`). Aksi admin dibatasi 120 POST/jam per admin.
 - **Referral:** setiap pemain punya kode unik 8 karakter (tanpa 0/O/1/I/l);
-  daftar dengan kode valid → pemilik kode **+100 emas + 2 hari premium**,
-  pendaftar baru **+50 emas + 1 hari premium** (premium diperpanjang dari yang
-  masih aktif; tanpa batas). Form daftar ada field Kode Referral + link share
-  `?ref=CODE`. Profil menampilkan kode, link share, jumlah pemakai, dan total
-  emas referral.
+  daftar dengan kode valid → bonus **cair saat pendaftar mencapai Level 3**:
+  pemilik kode **+100 emas + 2 hari premium**, pendaftar baru **+50 emas +
+  1 hari premium** (premium diperpanjang dari yang masih aktif). Maks **5
+  bonus terbayar per hari per pemilik kode** (anti farming multi-akun;
+  bonus ke-6+ hari itu ditunda). Form daftar ada field Kode Referral + link
+  share `?ref=CODE`. Profil menampilkan kode, link share, jumlah pemakai, dan
+  total emas referral yang sudah cair.
 - **ID pemain:** setiap pemain punya ID publik `PL-000001` dst. (dari id
   database), tampil di Profil dan panel Admin.
 - **Toko:** harga rupiah — Premium 1 bln Rp5.000, 3 bln Rp15.000, 6 bln Rp25.000,
@@ -88,35 +95,42 @@ Variabel environment (lihat `.env.example`):
 | `PORT` | `3000` | Port server |
 | `DATABASE_URL` | — | Connection string Postgres (bila disetel, Postgres dipakai) |
 | `DATABASE_PATH` | `./data/parlementer.db` | File SQLite lokal (dipakai bila `DATABASE_URL` kosong) |
-| `JWT_SECRET` | secret dev | **Wajib diganti di production** (string acak panjang) |
+| `JWT_SECRET` | secret dev | **Wajib di production** — server MENOLAK start bila tidak disetel atau masih secret dev (string acak panjang, mis. `openssl rand -hex 32`) |
+| `ADMIN_BOOTSTRAP_CODE` | — | Kode darurat membuat admin lewat registrasi (field "KODE ADMIN" di form daftar). Bila kosong, registrasi tidak bisa membuat admin. Isi di Vercel → Settings → Environment Variables. Jaga kerahasiaannya seperti password. |
 
 ## Tes
 
 ```bash
-npm test          # e2e HTTP di SQLite (DB sekali pakai): 123 pemeriksaan
-npm run test:pg   # jalur Postgres via pg-mem: 18 pemeriksaan
-npm run test:modal # DOM modal laporan (jsdom): 10 pemeriksaan
-npm run test:all  # ketiganya
+npm test            # e2e HTTP di SQLite (DB sekali pakai): 239 pemeriksaan
+npm run test:pg     # jalur Postgres via pg-mem: 28 pemeriksaan
+npm run test:modal  # DOM modal laporan (jsdom): 28 pemeriksaan
+npm run test:all    # ketiganya
+npm run test:pg-verify # migrasi initDb di Postgres 16 sungguhan: 17 pemeriksaan
+npm run test:conc    # balapan HTTP (pasar/klaim/shift/pencapaian/blokir) di Postgres 16: 18 pemeriksaan
 ```
 
-Hasil terakhir (27 Nov 2026): **e2e 123/123 lolos, pg-test 18/18 lolos,
-modal 10/10 lolos.** Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+2 XP)
-→ latih → lamar kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara
-~48,40 USD; USD tidak berubah) → pasar (jual/beli, pajak 2%) → makan →
-valas (cetak 1 emas = 10 USD) → perjalanan (1 Tiket) → chat + lapor +
-blokir → aturan dunia (partai Level 10, pasar 0) → daily tick (hari 1 → 2,
-energi pulih 100) → logout → **admin/referral/ID**: registrasi dengan kode
-referral (+100/+50 emas, premium 2/1 hari), kode tidak valid diabaikan, akun
-admin otomatis untuk email khusus, ban menolak login + unban memulihkan,
-grant premium/emas/energi/barang tercatat di log admin, route admin ditolak
-untuk non-admin (403).
+Hasil terakhir (27 Nov 2026, Tahap 2): **e2e 239/239 lolos, pg-test 28/28
+lolos, modal 28/28 lolos, pg-verify 17/17 lolos, pg-concurrency 18/18 lolos.**
+Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+2 XP) → latih → lamar
+kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara ~48,40 USD; USD tidak
+berubah) → pasar (jual/beli, pajak 2%) → makan → valas (cetak 1 emas = 10 USD)
+→ perjalanan (1 Tiket) → chat + lapor + blokir → aturan dunia (partai Level 10,
+pasar 0) → daily tick (hari 1 → 2, energi pulih 100) → logout → **referral
+(bonus cair di Level 3, maks 5/hari) + admin bootstrap (email admin tanpa kode
+TIDAK jadi admin; kode bootstrap benar jadi admin)** → ban (login akun banned
+tetap bisa, ditandai `banned:true`, untuk banding) + banding (ajukan/balas/
+terima/tolak) + avatar + hadiah/pembelian + hadiah massal + inbox admin.
 
-**Verifikasi Postgres sungguhan (27 Nov 2026):** migrasi `initDb` dari state
-lama (skema sebelum fitur admin/referral + 6 lowongan ADMIN bergaji USD)
-diuji di Postgres 16 lokal: **16/16 lolos** — kolom baru ditambah, kode
-referral ter-backfill, akun admin ditandai, 6 lowongan diubah jadi `goods`
-+ resource/qty benar, tanpa duplikat; `initDb` 2× berurutan dan 2× konkuren
-aman (skrip di `/tmp/verify-admin-migration.mjs`).
+**Verifikasi Postgres sungguhan (27 Nov 2026, Tahap 2):** `test/pg-verify.mjs`
+menguji `initDb` di Postgres 16 lokal — idempotent (2× + 3× paralel),
+perbaikan state lama (kolom timestamp INTEGER → BIGINT, tipe komposit yatim,
+kolom `token_version`), 12 CHECK saldo/qty terpasang + ditegakkan, dan
+JWT_SECRET fail-closed di production. `test/pg-concurrency.mjs` menguji
+balapan HTTP paralel di Postgres 16: dua pembeli berebut 1 penawaran (tepat 1
+berhasil), dua klaim (tepat 1), dua shift (tepat 1), dua klaim pencapaian
+(tepat 1), dua blokir (keduanya 200, 1 baris) + invarian tanpa saldo negatif.
+Kedua skrip butuh Postgres 16 lokal + role/db `parlementer_test` (lihat
+header masing-masing skrip) dan BUKAN bagian dari `test:all`.
 
 **Catatan jujur soal tes Postgres:** jalur Postgres diverifikasi lewat pg-mem
 (emulator) untuk `test:pg`, TAPI migrasi `initDb` (termasuk migrasi admin/

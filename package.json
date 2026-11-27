@@ -20,6 +20,8 @@
     "start": "node server.js",
     "test": "node test/e2e.js",
     "test:pg": "node test/pg-test.js",
+    "test:conc": "node test/pg-concurrency.mjs",
+    "test:pg-verify": "node test/pg-verify.mjs",
     "test:all": "npm run test:pg && npm test && npm run test:modal",
     "test:modal": "node test/modal-dom.js"
   },

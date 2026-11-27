@@ -123,6 +123,7 @@ function showAuth() {
       await post('/api/auth/register', {
         email: f.email.value.trim(), password: f.password.value,
         username: f.username.value.trim(), ref: f.ref.value.trim() || undefined,
+        admin_code: f.admin_code.value.trim() || undefined,
       });
       toast('Selamat datang! Kamu sekarang warga Republik Indonesia.');
       showApp();

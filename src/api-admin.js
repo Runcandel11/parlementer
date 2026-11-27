@@ -1,10 +1,12 @@
-// API Admin Parlementer — hanya untuk akun admin (email ADMIN_EMAIL).
+// API Admin Parlementer — hanya untuk akun admin.
 // Semua route di sini WAJIB lewat adminOnly: sesi login + is_admin = 1,
 // selain itu 403. Tidak ada endpoint promosi admin: satu-satunya cara jadi
-// admin adalah mendaftar dengan email ADMIN_EMAIL (lihat api-core.js) atau
-// migrasi initDb yang menandai email itu.
+// admin adalah mendaftar dengan kode bootstrap ADMIN_BOOTSTRAP_CODE yang
+// benar (lihat api-core.js), atau migrasi initDb yang menjaga akun admin
+// Khalid yang sudah ada (koboijuniorkhalid@gmail.com).
 import { sql, one, run, tx } from './db.js';
 import { authRequired, publicId } from './util.js';
+import { checkRateLimit } from './rate-limit.js';
 
 const PREMIUM_MONTHS = [1, 3, 6, 12];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -56,7 +58,23 @@ function parseTargetId(q) {
 
 export function registerAdmin(app) {
   const r = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-  const admin = (req, res, next) => Promise.resolve(adminOnly(req, res, next)).catch(next);
+  // adminOnly + rate limit aksi admin (maks 120 POST/jam per admin,
+  // DB-backed agar konsisten antar instance serverless). GET tidak dibatasi.
+  const admin = async (req, res, next) => {
+    try {
+      await adminOnly(req, res, () => {});
+      if (res.headersSent) return; // adminOnly sudah menolak (403)
+    } catch (e) { return next(e); }
+    if (req.method === 'POST') {
+      try {
+        const lim = await checkRateLimit('admin-grant:' + req.userId, 120, 60 * 60 * 1000);
+        if (!lim.allowed) return res.status(429).json({ error: 'Terlalu banyak aksi admin. Coba lagi nanti.' });
+      } catch (e) {
+        console.error('[rate-limit] admin gagal:', e.message);
+      }
+    }
+    next();
+  };
 
   // ---------- DAFTAR PEMAIN ----------
   app.get('/api/admin/players', authRequired, admin, r(async (req, res) => {
@@ -105,6 +123,11 @@ export function registerAdmin(app) {
       // Ban atomik: UPDATE hanya berhasil bila target BUKAN admin saat itu
       // juga (WHERE is_admin = 0). Ini menutup celah race antara pengecekan
       // di atas dan UPDATE — mis. flag admin baru saja ditandai migrasi.
+      // token_version TIDAK dinaikkan di sini: sesi akun banned memang
+      // sengaja dibiarkan hidup agar pemain bisa membuka layar banned +
+      // mengajukan banding; semua API game diblokir middleware penjaga
+      // banned (lihat src/app.js). Pencabutan sesi lewat token_version
+      // hanya terjadi saat logout (lihat api-core.js).
       const r = await t.run(
         'UPDATE users SET is_banned = 1, banned_reason = ?, banned_at = ? WHERE id = ? AND is_admin = 0',
         [cleanReason, Date.now(), target.id]);

@@ -113,6 +113,14 @@ export async function exec(query) {
   sqliteDb.exec(query);
 }
 
+// Tambahkan FOR UPDATE hanya di Postgres sungguhan. pg-mem dan SQLite
+// tidak mendukungnya (keduanya men-serialize tulis, jadi aman tanpa itu).
+// Dipakai untuk mengunci baris di dalam tx() agar dua request paralel
+// tidak bisa membaca saldo/stok yang sama sebelum yang satu selesai.
+export function forUpdate(query) {
+  return isPg && process.env.PG_MEM_TEST !== '1' ? query + ' FOR UPDATE' : query;
+}
+
 // Transaksi: fn menerima objek tx dengan sql/one/run yang sama.
 export async function tx(fn) {
   if (isPg) {
@@ -177,7 +185,22 @@ CREATE TABLE IF NOT EXISTS users (
   is_banned INTEGER NOT NULL DEFAULT 0,
   banned_reason TEXT NOT NULL DEFAULT '',
   banned_at BIGINT NOT NULL DEFAULT 0,
+  token_version INTEGER NOT NULL DEFAULT 0 CHECK (token_version >= 0),
   created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 0 CHECK (count >= 0),
+  window_start BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS referral_pending (
+  id ${id},
+  referrer_id INTEGER NOT NULL,
+  newcomer_id INTEGER NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'skipped')),
+  created_at BIGINT NOT NULL,
+  paid_at BIGINT,
+  paid_day TEXT
 );
 CREATE TABLE IF NOT EXISTS admin_actions (
   id ${id},
@@ -210,9 +233,9 @@ CREATE TABLE IF NOT EXISTS citizens (
   user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
   level INTEGER NOT NULL DEFAULT 1,
   xp INTEGER NOT NULL DEFAULT 0,
-  energy INTEGER NOT NULL DEFAULT 100,
-  gold REAL NOT NULL DEFAULT 50,
-  usd REAL NOT NULL DEFAULT 500,
+  energy INTEGER NOT NULL DEFAULT 100 CHECK (energy >= 0),
+  gold REAL NOT NULL DEFAULT 50 CHECK (gold >= 0),
+  usd REAL NOT NULL DEFAULT 500 CHECK (usd >= 0),
   attr_str INTEGER NOT NULL DEFAULT 0,
   attr_edu INTEGER NOT NULL DEFAULT 0,
   attr_eco INTEGER NOT NULL DEFAULT 0,
@@ -267,7 +290,7 @@ CREATE TABLE IF NOT EXISTS inventory (
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   commodity_id INTEGER NOT NULL REFERENCES commodities(id),
   tier INTEGER NOT NULL DEFAULT 1,
-  qty INTEGER NOT NULL DEFAULT 0,
+  qty INTEGER NOT NULL DEFAULT 0 CHECK (qty >= 0),
   UNIQUE(citizen_id, commodity_id, tier)
 );
 CREATE TABLE IF NOT EXISTS market_offers (
@@ -276,8 +299,8 @@ CREATE TABLE IF NOT EXISTS market_offers (
   scope TEXT NOT NULL DEFAULT 'local',
   commodity_id INTEGER NOT NULL REFERENCES commodities(id),
   tier INTEGER NOT NULL DEFAULT 1,
-  qty INTEGER NOT NULL,
-  price REAL NOT NULL,
+  qty INTEGER NOT NULL CHECK (qty > 0),
+  price REAL NOT NULL CHECK (price > 0),
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS market_tx (
@@ -297,8 +320,8 @@ CREATE TABLE IF NOT EXISTS fx_offers (
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   direction TEXT NOT NULL,
   price REAL NOT NULL,
-  qty_gold REAL NOT NULL,
-  qty_filled REAL NOT NULL DEFAULT 0,
+  qty_gold REAL NOT NULL CHECK (qty_gold >= 0),
+  qty_filled REAL NOT NULL DEFAULT 0 CHECK (qty_filled >= 0),
   expires_at BIGINT NOT NULL,
   created_at BIGINT NOT NULL
 );
@@ -321,7 +344,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   level_min INTEGER NOT NULL DEFAULT 1,
   tier INTEGER NOT NULL DEFAULT 1,
   seats INTEGER NOT NULL DEFAULT 4,
-  seats_taken INTEGER NOT NULL DEFAULT 0,
+  seats_taken INTEGER NOT NULL DEFAULT 0 CHECK (seats_taken >= 0 AND seats_taken <= seats),
   region_id INTEGER NOT NULL DEFAULT 1,
   description TEXT NOT NULL DEFAULT '',
   created_at BIGINT NOT NULL
@@ -416,8 +439,8 @@ CREATE TABLE IF NOT EXISTS wars (
   region_id INTEGER NOT NULL REFERENCES regions(id),
   attacker_label TEXT NOT NULL,
   defender_label TEXT NOT NULL DEFAULT 'Republik Indonesia',
-  score_a INTEGER NOT NULL DEFAULT 0,
-  score_d INTEGER NOT NULL DEFAULT 0,
+  score_a INTEGER NOT NULL DEFAULT 0 CHECK (score_a >= 0),
+  score_d INTEGER NOT NULL DEFAULT 0 CHECK (score_d >= 0),
   status TEXT NOT NULL DEFAULT 'active',
   winner TEXT NOT NULL DEFAULT '',
   ends_at BIGINT NOT NULL,
@@ -554,6 +577,24 @@ CREATE INDEX IF NOT EXISTS idx_market_offers ON market_offers(scope, commodity_i
 CREATE INDEX IF NOT EXISTS idx_chat_room ON chat_messages(room, created_at);
 CREATE INDEX IF NOT EXISTS idx_articles_created ON articles(created_at);
 CREATE INDEX IF NOT EXISTS idx_notif_citizen ON notifications(citizen_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_market_offers_seller ON market_offers(seller_id);
+CREATE INDEX IF NOT EXISTS idx_chat_citizen ON chat_messages(citizen_id);
+CREATE INDEX IF NOT EXISTS idx_notif_unread ON notifications(citizen_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_dms_pair ON dms(from_id, to_id);
+CREATE INDEX IF NOT EXISTS idx_dms_pair_rev ON dms(to_id, from_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_citizen ON inventory(citizen_id);
+CREATE INDEX IF NOT EXISTS idx_fx_offers_citizen ON fx_offers(citizen_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_fx_offers_expires ON fx_offers(expires_at);
+CREATE INDEX IF NOT EXISTS idx_war_attacks_war ON war_attacks(war_id);
+CREATE INDEX IF NOT EXISTS idx_articles_author ON articles(author_id);
+CREATE INDEX IF NOT EXISTS idx_articles_newspaper ON articles(newspaper_id);
+CREATE INDEX IF NOT EXISTS idx_market_tx_buyer ON market_tx(buyer_id);
+CREATE INDEX IF NOT EXISTS idx_market_tx_seller ON market_tx(seller_id);
+CREATE INDEX IF NOT EXISTS idx_elections_status ON elections(status);
+CREATE INDEX IF NOT EXISTS idx_laws_status ON laws(status, ends_at);
+CREATE INDEX IF NOT EXISTS idx_appeals_user ON appeals(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_referral_pending_newcomer ON referral_pending(newcomer_id, status);
+CREATE INDEX IF NOT EXISTS idx_referral_pending_referrer ON referral_pending(referrer_id, status, paid_day);
 `;
 }
 
@@ -641,6 +682,10 @@ export async function initDb() {
     await migrateSupportTickets(t);
     await seed(t);
   });
+  // CHECK saldo/qty untuk database Postgres yang sudah ada: di luar transaksi
+  // utama (satu constraint yang gagal — mis. ada data lama yang melanggar —
+  // tidak boleh menggagalkan seluruh initDb).
+  await migrateChecks();
 }
 
 // Kolom yang menyimpan timestamp milidetik (Date.now()) — di Postgres harus
@@ -651,7 +696,7 @@ export async function initDb() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'parties', 'party_members', 'laws', 'law_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'newspapers', 'articles', 'article_reactions', 'article_comments', 'chat_messages', 'chat_reports', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'support_tickets', 'world', 'rate_limits', 'referral_pending'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -694,11 +739,16 @@ async function migrateTimestampsToBigint(t) {
 }
 
 // Migrasikan kolom users yang ditambahkan setelah deploy pertama
-// (referral_code, is_banned, banned_reason, banned_at, avatar) untuk database
-// yang sudah terlanjur dibuat dengan skema lama (Neon live + SQLite lama).
-// Idempotent: kolom yang sudah ada tidak disentuh. Setelah itu:
+// (referral_code, is_banned, banned_reason, banned_at, avatar, token_version)
+// untuk database yang sudah terlanjur dibuat dengan skema lama (Neon live +
+// SQLite lama). Idempotent: kolom yang sudah ada tidak disentuh. Setelah itu:
 //  - semua user yang belum punya kode referral dibuatkan kode unik;
 //  - akun ADMIN_EMAIL selalu ditandai is_admin = 1 (bila sudah terdaftar);
+//    PENTING: ini HANYA pengaman untuk akun admin Khalid yang sudah ada
+//    (email itu sudah terdaftar atas namanya sejak 27 Nov 2026, jadi tidak
+//    ada akun baru yang bisa mengambil email tersebut). Registrasi BARU
+//    tidak lagi memberi admin dari email — lihat api-core.js (bootstrap
+//    code). Jangan hapus baris ini tanpa memastikan admin Khalid aman.
 //  - akun admin tidak boleh berstatus banned — bila ada yang is_banned=1
 //    (mis. ke-ban sebelum flag admin ada), ban-nya dicabut di sini.
 async function migrateUserColumns(t) {
@@ -708,6 +758,7 @@ async function migrateUserColumns(t) {
     await t.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_reason TEXT NOT NULL DEFAULT ''");
     await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at BIGINT NOT NULL DEFAULT 0');
     await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT');
+    await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0');
   } else {
     const cols = await t.sql('PRAGMA table_info(users)');
     const names = new Set(cols.map((c) => c.name));
@@ -716,6 +767,7 @@ async function migrateUserColumns(t) {
     if (!names.has('banned_reason')) await t.exec("ALTER TABLE users ADD COLUMN banned_reason TEXT NOT NULL DEFAULT ''");
     if (!names.has('banned_at')) await t.exec('ALTER TABLE users ADD COLUMN banned_at BIGINT NOT NULL DEFAULT 0');
     if (!names.has('avatar')) await t.exec('ALTER TABLE users ADD COLUMN avatar TEXT');
+    if (!names.has('token_version')) await t.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
   }
   const missing = await t.sql('SELECT id FROM users WHERE referral_code IS NULL');
   for (const u of missing) {
@@ -757,6 +809,37 @@ async function migrateSupportTickets(t) {
     const cols = await t.sql('PRAGMA table_info(support_tickets)');
     if (!cols.some((c) => c.name === 'status')) {
       await t.exec("ALTER TABLE support_tickets ADD COLUMN status TEXT NOT NULL DEFAULT 'baru'");
+    }
+  }
+}
+
+// Tambahkan CHECK saldo/qty ke database Postgres yang sudah ada (Neon live).
+// Hanya jalan di Postgres sungguhan (bukan pg-mem/SQLite — skema baru sudah
+// membawa CHECK inline). Idempotent: constraint yang sudah ada dilewati.
+// Satu constraint yang gagal (mis. ada data lama yang melanggar) hanya
+// diperingatkan, tidak menggagalkan initDb.
+const CHECK_CONSTRAINTS = [
+  ['citizens', 'ck_citizens_gold_nonneg', 'gold >= 0'],
+  ['citizens', 'ck_citizens_usd_nonneg', 'usd >= 0'],
+  ['citizens', 'ck_citizens_energy_nonneg', 'energy >= 0'],
+  ['inventory', 'ck_inventory_qty_nonneg', 'qty >= 0'],
+  ['market_offers', 'ck_market_offers_qty_pos', 'qty > 0'],
+  ['market_offers', 'ck_market_offers_price_pos', 'price > 0'],
+  ['fx_offers', 'ck_fx_offers_qty_gold_nonneg', 'qty_gold >= 0'],
+  ['fx_offers', 'ck_fx_offers_qty_filled_nonneg', 'qty_filled >= 0'],
+  ['jobs', 'ck_jobs_seats_nonneg', 'seats_taken >= 0'],
+  ['jobs', 'ck_jobs_seats_lte', 'seats_taken <= seats'],
+  ['wars', 'ck_wars_score_a_nonneg', 'score_a >= 0'],
+  ['wars', 'ck_wars_score_d_nonneg', 'score_d >= 0'],
+];
+async function migrateChecks() {
+  if (!isPg || process.env.PG_MEM_TEST === '1') return;
+  for (const [table, name, expr] of CHECK_CONSTRAINTS) {
+    try {
+      const exists = await one('SELECT 1 FROM pg_constraint WHERE conname = ? AND conrelid = ?::regclass', [name, table]);
+      if (!exists) await exec(`ALTER TABLE "${table}" ADD CONSTRAINT "${name}" CHECK (${expr})`);
+    } catch (e) {
+      console.warn(`[db] CHECK ${name} dilewati: ${e.message}`);
     }
   }
 }

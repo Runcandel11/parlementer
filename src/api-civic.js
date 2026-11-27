@@ -1,5 +1,5 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
-import { sql, one, run, tx } from './db.js';
+import { sql, one, run, tx, forUpdate } from './db.js';
 import { authRequired, citizenRequired, loadCitizen, todayStr } from './util.js';
 import { warDamage, CHRONICLE } from './game.js';
 
@@ -79,18 +79,23 @@ export function registerCivic(app) {
     const { name, tag, ideology, type } = req.body || {};
     const c = req.citizen;
     if (c.level < 10) return res.status(400).json({ error: 'Mendirikan partai butuh Level 10.' });
-    if (c.gold < 50) return res.status(400).json({ error: 'Mendirikan partai butuh 50 emas.' });
     if (!name || name.length < 3 || name.length > 40) return res.status(400).json({ error: 'Nama partai 3–40 karakter.' });
     if (!tag || !/^[A-Z0-9]{2,6}$/.test(tag)) return res.status(400).json({ error: 'Singkatan partai 2–6 huruf kapital/angka.' });
     const taken = await one('SELECT id FROM parties WHERE name = ? OR tag = ?', [name, tag]);
     if (taken) return res.status(400).json({ error: 'Nama atau singkatan partai sudah dipakai.' });
-    const p = await run(
-      'INSERT INTO parties (name, tag, ideology, leader_id, type, seats, created_at) VALUES (?,?,?,?,?,0,?) RETURNING id',
-      [name, tag, ['Progresif', 'Konservatif', 'Sosialis'].includes(ideology) ? ideology : 'Konservatif', c.id, ['open', 'application', 'closed'].includes(type) ? type : 'open', Date.now()]);
-    await run('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?) RETURNING party_id', [p.id, c.id, 'leader', Date.now()]);
-    await run('UPDATE citizens SET gold = gold - 50, party_id = ? WHERE id = ?', [p.id, c.id]);
+    // Atomik: kunci baris warga + potong 50 emas bersyarat di dalam tx.
+    const partyId = await tx(async (t) => {
+      await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
+      const p = await t.run(
+        'INSERT INTO parties (name, tag, ideology, leader_id, type, seats, created_at) VALUES (?,?,?,?,?,0,?) RETURNING id',
+        [name, tag, ['Progresif', 'Konservatif', 'Sosialis'].includes(ideology) ? ideology : 'Konservatif', c.id, ['open', 'application', 'closed'].includes(type) ? type : 'open', Date.now()]);
+      await t.run('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?) RETURNING party_id', [p.id, c.id, 'leader', Date.now()]);
+      const upd = await t.run('UPDATE citizens SET gold = gold - 50, party_id = ? WHERE id = ? AND gold >= 50', [p.id, c.id]);
+      if (!upd.changes) throw Object.assign(new Error('Mendirikan partai butuh 50 emas.'), { status: 400 });
+      return p.id;
+    });
     await chronicleDone(c, 'party');
-    res.json({ ok: true, partyId: p.id });
+    res.json({ ok: true, partyId });
   }));
 
   app.post('/api/parties/:id/join', authRequired, citizenRequired, r(async (req, res) => {
@@ -100,9 +105,18 @@ export function registerCivic(app) {
     if (c.party_id) return res.status(400).json({ error: 'Kamu sudah berpartai. Keluar dulu dari partaimu.' });
     if (p.type === 'closed') return res.status(400).json({ error: 'Partai ini tertutup, tidak menerima anggota.' });
     const role = p.type === 'application' ? 'pending' : 'member';
-    await run('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?) RETURNING party_id', [p.id, c.id, role, Date.now()]);
-    if (role === 'member') await run('UPDATE citizens SET party_id = ? WHERE id = ?', [p.id, c.id]);
-    await chronicleDone(c, 'party');
+    // Atomik: kunci baris warga + cek ulang party_id di dalam tx, lalu
+    // INSERT ... ON CONFLICT DO NOTHING — dua join paralel (ke partai yang
+    // sama atau berbeda) hanya satu yang berhasil.
+    const joined = await tx(async (t) => {
+      const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
+      if (locked.party_id) throw Object.assign(new Error('Kamu sudah berpartai. Keluar dulu dari partaimu.'), { status: 400 });
+      const ins = await t.run('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING RETURNING party_id', [p.id, c.id, role, Date.now()]);
+      if (!ins.changes) throw Object.assign(new Error('Kamu sudah menjadi anggota partai ini.'), { status: 400 });
+      if (role === 'member') await t.run('UPDATE citizens SET party_id = ? WHERE id = ?', [p.id, c.id]);
+      return true;
+    });
+    if (joined) await chronicleDone(c, 'party');
     res.json({ ok: true, role });
   }));
 
@@ -149,13 +163,18 @@ export function registerCivic(app) {
     if (c.level < 5) return res.status(400).json({ error: 'Mengusulkan UU butuh Level 5.' });
     if (!title || title.length < 5 || title.length > 120) return res.status(400).json({ error: 'Judul UU 5–120 karakter.' });
     if (!content || content.length < 10) return res.status(400).json({ error: 'Isi UU minimal 10 karakter.' });
-    if (c.gold < 5) return res.status(400).json({ error: 'Biaya notaris pengusulan UU: 5 emas.' });
-    const law = await run(
-      'INSERT INTO laws (proposer_id, title, content, status, ends_at, created_at) VALUES (?,?,?,\'voting\',?,?) RETURNING id',
-      [c.id, title, content, Date.now() + 7 * 24 * 60 * 60 * 1000, Date.now()]);
-    await run('UPDATE citizens SET gold = gold - 5, laws_proposed = laws_proposed + 1 WHERE id = ?', [c.id]);
+    // Atomik: kunci baris warga + potong 5 emas bersyarat di dalam tx.
+    const lawId = await tx(async (t) => {
+      await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
+      const law = await t.run(
+        'INSERT INTO laws (proposer_id, title, content, status, ends_at, created_at) VALUES (?,?,?,\'voting\',?,?) RETURNING id',
+        [c.id, title, content, Date.now() + 7 * 24 * 60 * 60 * 1000, Date.now()]);
+      const upd = await t.run('UPDATE citizens SET gold = gold - 5, laws_proposed = laws_proposed + 1 WHERE id = ? AND gold >= 5', [c.id]);
+      if (!upd.changes) throw Object.assign(new Error('Biaya notaris pengusulan UU: 5 emas.'), { status: 400 });
+      return law.id;
+    });
     await chronicleDone(c, 'law');
-    res.json({ ok: true, lawId: law.id });
+    res.json({ ok: true, lawId });
   }));
 
   app.post('/api/parliament/vote', authRequired, citizenRequired, r(async (req, res) => {
@@ -166,11 +185,14 @@ export function registerCivic(app) {
     if (!myParty || myParty.seats <= 0) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa memilih. Partaimu belum punya kursi.' });
     const law = await one("SELECT * FROM laws WHERE id = ? AND status = 'voting' AND ends_at > ?", [law_id, Date.now()]);
     if (!law) return res.status(404).json({ error: 'UU tidak ditemukan / voting sudah ditutup.' });
-    const existing = await one('SELECT * FROM law_votes WHERE law_id = ? AND citizen_id = ?', [law.id, c.id]);
-    if (existing) return res.status(400).json({ error: 'Kamu sudah memilih untuk UU ini.' });
-    await run('INSERT INTO law_votes (law_id, citizen_id, vote) VALUES (?,?,?) RETURNING law_id', [law.id, c.id, vote]);
+    // Atomik: INSERT ... ON CONFLICT DO NOTHING + hitung suara di dalam tx —
+    // dua vote paralel hanya satu yang terhitung.
     const col = vote === 'yes' ? 'yes' : vote === 'abstain' ? 'abstain' : 'no';
-    await run(`UPDATE laws SET ${col} = ${col} + 1 WHERE id = ?`, [law.id]);
+    await tx(async (t) => {
+      const ins = await t.run('INSERT INTO law_votes (law_id, citizen_id, vote) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING law_id', [law.id, c.id, vote]);
+      if (!ins.changes) throw Object.assign(new Error('Kamu sudah memilih untuk UU ini.'), { status: 400 });
+      await t.run(`UPDATE laws SET ${col} = ${col} + 1 WHERE id = ?`, [law.id]);
+    });
     await chronicleDone(c, 'vote');
     res.json({ ok: true });
   }));
@@ -215,10 +237,12 @@ export function registerCivic(app) {
     if (Date.now() - c.created_at < 3 * 24 * 60 * 60 * 1000) return res.status(400).json({ error: 'Warga baru bisa memilih setelah 3 hari menjadi warga.' });
     const cand = await one('SELECT * FROM election_candidates WHERE election_id = ? AND citizen_id = ?', [e.id, candidate_id]);
     if (!cand) return res.status(404).json({ error: 'Kandidat tidak ditemukan.' });
-    const voted = await one('SELECT * FROM election_votes WHERE election_id = ? AND citizen_id = ?', [e.id, c.id]);
-    if (voted) return res.status(400).json({ error: 'Kamu sudah memilih di pemilu ini.' });
-    await run('INSERT INTO election_votes (election_id, citizen_id, candidate_id) VALUES (?,?,?) RETURNING election_id', [e.id, c.id, candidate_id]);
-    await run('UPDATE election_candidates SET votes = votes + 1 WHERE election_id = ? AND citizen_id = ?', [e.id, candidate_id]);
+    // Atomik: INSERT ... ON CONFLICT DO NOTHING + hitung suara di dalam tx.
+    await tx(async (t) => {
+      const ins = await t.run('INSERT INTO election_votes (election_id, citizen_id, candidate_id) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING election_id', [e.id, c.id, candidate_id]);
+      if (!ins.changes) throw Object.assign(new Error('Kamu sudah memilih di pemilu ini.'), { status: 400 });
+      await t.run('UPDATE election_candidates SET votes = votes + 1 WHERE election_id = ? AND citizen_id = ?', [e.id, candidate_id]);
+    });
     await chronicleDone(c, 'vote');
     res.json({ ok: true });
   }));
@@ -256,25 +280,30 @@ export function registerCivic(app) {
     if (!['attacker', 'defender'].includes(side)) return res.status(400).json({ error: 'Pilih pihak: penyerang atau pembela.' });
     const c = await loadCitizen(req.userId);
     if (c.region_id !== war.region_id) return res.status(400).json({ error: 'Kamu harus berada di wilayah perang untuk menyerang dari garis depan.' });
-    if (c.energy < 10) return res.status(400).json({ error: 'Butuh 10 energi untuk menyerang.' });
     const useAmmo = ammo === 'Drone' ? 'Drone' : 'Senjata';
     const com = await one('SELECT id FROM commodities WHERE name = ?', [useAmmo]);
-    const hasAmmo = await one('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND qty > 0 ORDER BY tier ASC', [c.id, com.id]);
-    if (!hasAmmo) return res.status(400).json({ error: `Tidak ada ${useAmmo} di inventaris.` });
     const damage = warDamage(c.attr_str, useAmmo);
+    // Atomik: kunci baris warga, baca amunisi segar di dalam tx, potong
+    // energi + amunisi + catat serangan + update skor + progres misi — semua
+    // dari nilai yang dikunci (dulu misi dihitung dari objek basi di luar tx).
     await tx(async (t) => {
-      await t.run('UPDATE citizens SET energy = energy - 10, energy_spent_today = energy_spent_today + 10, total_damage = total_damage + ?, attacks = attacks + 1, frontline_attacks = frontline_attacks + 1 WHERE id = ?',
-        [damage, c.id]);
+      const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
+      if (locked.energy < 10) throw Object.assign(new Error('Butuh 10 energi untuk menyerang.'), { status: 400 });
+      const hasAmmo = await t.one(forUpdate('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND qty > 0 ORDER BY tier ASC'), [locked.id, com.id]);
+      if (!hasAmmo) throw Object.assign(new Error(`Tidak ada ${useAmmo} di inventaris.`), { status: 400 });
+      const upd = await t.run('UPDATE citizens SET energy = energy - 10, energy_spent_today = energy_spent_today + 10, total_damage = total_damage + ?, attacks = attacks + 1, frontline_attacks = frontline_attacks + 1 WHERE id = ? AND energy >= 10',
+        [damage, locked.id]);
+      if (!upd.changes) throw Object.assign(new Error('Butuh 10 energi untuk menyerang.'), { status: 400 });
       if (hasAmmo.qty === 1) await t.run('DELETE FROM inventory WHERE id = ?', [hasAmmo.id]);
       else await t.run('UPDATE inventory SET qty = qty - 1 WHERE id = ?', [hasAmmo.id]);
       await t.run('INSERT INTO war_attacks (war_id, citizen_id, side, damage, ammo, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
-        [war.id, c.id, side, damage, useAmmo, Date.now()]);
+        [war.id, locked.id, side, damage, useAmmo, Date.now()]);
       const col = side === 'attacker' ? 'score_a' : 'score_d';
       await t.run(`UPDATE wars SET ${col} = ${col} + ? WHERE id = ?`, [damage, war.id]);
+      const m = JSON.parse(locked.missions || '{}');
+      m.energy = Math.min(500, (locked.energy_spent_today || 0) + 10);
+      await t.run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), locked.id]);
     });
-    await run('UPDATE citizens SET missions = missions WHERE id = ?', [c.id]); // no-op, jaga konsistensi
-    const m = JSON.parse(c.missions || '{}');
-    await run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify({ ...m, energy: Math.min(500, (c.energy_spent_today || 0) + 10) }), c.id]);
     await chronicleDone(c, 'attack');
     res.json({ ok: true, damage });
   }));
@@ -338,10 +367,15 @@ export function registerCivic(app) {
   app.post('/api/press/newspaper', authRequired, citizenRequired, r(async (req, res) => {
     const { name } = req.body || {};
     if (!name || name.length < 3 || name.length > 50) return res.status(400).json({ error: 'Nama koran 3–50 karakter.' });
-    if (req.citizen.gold < 5) return res.status(400).json({ error: 'Mendirikan koran butuh 5 emas.' });
-    const n = await run('INSERT INTO newspapers (owner_id, name, created_at) VALUES (?,?,?) RETURNING id', [req.citizen.id, name, Date.now()]);
-    await run('UPDATE citizens SET gold = gold - 5 WHERE id = ?', [req.citizen.id]);
-    res.json({ ok: true, newspaperId: n.id });
+    // Atomik: kunci baris warga + potong 5 emas bersyarat di dalam tx.
+    const newspaperId = await tx(async (t) => {
+      await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      const n = await t.run('INSERT INTO newspapers (owner_id, name, created_at) VALUES (?,?,?) RETURNING id', [req.citizen.id, name, Date.now()]);
+      const upd = await t.run('UPDATE citizens SET gold = gold - 5 WHERE id = ? AND gold >= 5', [req.citizen.id]);
+      if (!upd.changes) throw Object.assign(new Error('Mendirikan koran butuh 5 emas.'), { status: 400 });
+      return n.id;
+    });
+    res.json({ ok: true, newspaperId });
   }));
 
   app.post('/api/press/articles', authRequired, citizenRequired, r(async (req, res) => {
@@ -361,23 +395,30 @@ export function registerCivic(app) {
   app.post('/api/press/articles/:id/react', authRequired, citizenRequired, r(async (req, res) => {
     const { reaction } = req.body || {};
     if (!['like', 'dislike'].includes(reaction)) return res.status(400).json({ error: 'Reaksi tidak dikenal.' });
-    const a = await one('SELECT * FROM articles WHERE id = ?', [req.params.id]);
-    if (!a) return res.status(404).json({ error: 'Artikel tidak ditemukan.' });
-    const existing = await one('SELECT * FROM article_reactions WHERE article_id = ? AND citizen_id = ?', [a.id, req.citizen.id]);
-    if (existing?.reaction === reaction) {
-      await run('DELETE FROM article_reactions WHERE article_id = ? AND citizen_id = ?', [a.id, req.citizen.id]);
-      await run(`UPDATE articles SET ${reaction === 'like' ? 'likes' : 'dislikes'} = ${reaction === 'like' ? 'likes' : 'dislikes'} - 1 WHERE id = ?`, [a.id]);
-      return res.json({ ok: true, reaction: null });
-    }
-    if (existing) {
-      await run('UPDATE article_reactions SET reaction = ? WHERE article_id = ? AND citizen_id = ?', [reaction, a.id, req.citizen.id]);
-      await run(`UPDATE articles SET likes = likes + ?, dislikes = dislikes + ? WHERE id = ?`,
-        [reaction === 'like' ? 1 : -1, reaction === 'dislike' ? 1 : -1, a.id]);
-    } else {
-      await run('INSERT INTO article_reactions (article_id, citizen_id, reaction) VALUES (?,?,?) RETURNING article_id', [a.id, req.citizen.id, reaction]);
-      await run(`UPDATE articles SET ${reaction === 'like' ? 'likes' : 'dislikes'} = ${reaction === 'like' ? 'likes' : 'dislikes'} + 1 WHERE id = ?`, [a.id]);
-    }
-    res.json({ ok: true, reaction });
+    // Atomik: kunci baris artikel, baca reaksi yang ada di dalam tx, lalu
+    // ubah reaksi + penghitung sekaligus — dua klik paralel tidak bisa
+    // menggandakan hitungan.
+    let result = reaction;
+    await tx(async (t) => {
+      const a = await t.one(forUpdate('SELECT * FROM articles WHERE id = ?'), [req.params.id]);
+      if (!a) throw Object.assign(new Error('Artikel tidak ditemukan.'), { status: 404 });
+      const existing = await t.one('SELECT * FROM article_reactions WHERE article_id = ? AND citizen_id = ?', [a.id, req.citizen.id]);
+      if (existing?.reaction === reaction) {
+        await t.run('DELETE FROM article_reactions WHERE article_id = ? AND citizen_id = ?', [a.id, req.citizen.id]);
+        await t.run(`UPDATE articles SET ${reaction === 'like' ? 'likes' : 'dislikes'} = ${reaction === 'like' ? 'likes' : 'dislikes'} - 1 WHERE id = ?`, [a.id]);
+        result = null;
+        return;
+      }
+      if (existing) {
+        await t.run('UPDATE article_reactions SET reaction = ? WHERE article_id = ? AND citizen_id = ?', [reaction, a.id, req.citizen.id]);
+        await t.run(`UPDATE articles SET likes = likes + ?, dislikes = dislikes + ? WHERE id = ?`,
+          [reaction === 'like' ? 1 : -1, reaction === 'dislike' ? 1 : -1, a.id]);
+      } else {
+        await t.run('INSERT INTO article_reactions (article_id, citizen_id, reaction) VALUES (?,?,?) RETURNING article_id', [a.id, req.citizen.id, reaction]);
+        await t.run(`UPDATE articles SET ${reaction === 'like' ? 'likes' : 'dislikes'} = ${reaction === 'like' ? 'likes' : 'dislikes'} + 1 WHERE id = ?`, [a.id]);
+      }
+    });
+    res.json({ ok: true, reaction: result });
   }));
 
   app.post('/api/press/articles/:id/comment', authRequired, citizenRequired, r(async (req, res) => {
@@ -448,7 +489,9 @@ export function registerCivic(app) {
     if (citizen_id === req.citizen.id) return res.status(400).json({ error: 'Tidak bisa memblokir diri sendiri.' });
     const target = await one('SELECT id FROM citizens WHERE id = ?', [citizen_id]);
     if (!target) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
-    await run('INSERT INTO blocked (blocker_id, blocked_id) VALUES (?,?) RETURNING blocker_id', [req.citizen.id, citizen_id]);
+    // ON CONFLICT DO NOTHING (BUG-6): memblokir dua kali / dua request
+    // paralel tidak lagi error 500 — idempotent, selalu 200.
+    await run('INSERT INTO blocked (blocker_id, blocked_id) VALUES (?,?) ON CONFLICT DO NOTHING RETURNING blocker_id', [req.citizen.id, citizen_id]);
     res.json({ ok: true });
   }));
 
@@ -479,27 +522,34 @@ export function registerCivic(app) {
     if (room.startsWith('party_')) {
       if (c.party_id !== Number(room.slice(6))) return res.status(403).json({ error: 'Kamu bukan anggota partai ini.' });
     }
-    // Anti-spam: jeda 5 detik antar pesan.
-    if (Date.now() - (c.last_chat_at || 0) < 5000) return res.status(400).json({ error: 'Tunggu sebentar sebelum mengirim pesan lagi.' });
-    let articleId = null;
-    if (article_id) {
-      const a = await one('SELECT id FROM articles WHERE id = ?', [article_id]);
-      if (a) articleId = a.id;
-    }
-    const msg = await run('INSERT INTO chat_messages (room, citizen_id, content, article_id, created_at) VALUES (?,?,?,?,?) RETURNING id',
-      [room, c.id, text, articleId, Date.now()]);
-    await run('UPDATE citizens SET last_chat_at = ?, chat_today = chat_today + 1 WHERE id = ?', [Date.now(), c.id]);
-    // Misi harian: minimal 3 kata, jeda 30 detik sejak pesan terakhir yang dihitung.
-    const words = text.split(/\s+/).filter(Boolean).length;
-    const m = JSON.parse(c.missions || '{}');
-    const lastCounted = m.last_chat_counted || 0;
-    if (words >= 3 && Date.now() - lastCounted >= 30000) {
-      m.chat = Math.min(5, (m.chat || 0) + 1);
-      m.last_chat_counted = Date.now();
-      await run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), c.id]);
-      await chronicleDone(c, 'chat5');
-    }
-    res.json({ ok: true, messageId: msg.id });
+    // Anti-spam atomik: kunci baris warga, cek jeda 5 detik dari nilai segar,
+    // lalu simpan pesan + update last_chat_at di dalam tx yang sama.
+    const { msgId, counted } = await tx(async (t) => {
+      const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
+      if (Date.now() - (locked.last_chat_at || 0) < 5000) throw Object.assign(new Error('Tunggu sebentar sebelum mengirim pesan lagi.'), { status: 400 });
+      let articleId = null;
+      if (article_id) {
+        const a = await t.one('SELECT id FROM articles WHERE id = ?', [article_id]);
+        if (a) articleId = a.id;
+      }
+      const msg = await t.run('INSERT INTO chat_messages (room, citizen_id, content, article_id, created_at) VALUES (?,?,?,?,?) RETURNING id',
+        [room, c.id, text, articleId, Date.now()]);
+      await t.run('UPDATE citizens SET last_chat_at = ?, chat_today = chat_today + 1 WHERE id = ?', [Date.now(), c.id]);
+      // Misi harian: minimal 3 kata, jeda 30 detik sejak pesan terakhir yang dihitung.
+      const words = text.split(/\s+/).filter(Boolean).length;
+      const m = JSON.parse(locked.missions || '{}');
+      const lastCounted = m.last_chat_counted || 0;
+      let counted = false;
+      if (words >= 3 && Date.now() - lastCounted >= 30000) {
+        m.chat = Math.min(5, (m.chat || 0) + 1);
+        m.last_chat_counted = Date.now();
+        await t.run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), c.id]);
+        counted = true;
+      }
+      return { msgId: msg.id, counted };
+    });
+    if (counted) await chronicleDone(c, 'chat5');
+    res.json({ ok: true, messageId: msgId });
   }));
 
 
@@ -560,20 +610,30 @@ export function registerCivic(app) {
     const { name, tag, type } = req.body || {};
     if (!name || name.length < 3 || name.length > 50) return res.status(400).json({ error: 'Nama organisasi 3–50 karakter.' });
     if (!tag || !/^[A-Z0-9]{2,6}$/.test(tag)) return res.status(400).json({ error: 'Singkatan 2–6 huruf kapital/angka.' });
-    if (req.citizen.gold < 100) return res.status(400).json({ error: 'Mendirikan organisasi butuh 100 emas.' });
-    const o = await run('INSERT INTO organizations (name, tag, type, leader_id, created_at) VALUES (?,?,?,?,?) RETURNING id',
-      [name, tag, type === 'Keamanan' ? 'Keamanan' : 'Kerja Sama', req.citizen.id, Date.now()]);
-    await run('INSERT INTO org_members (org_id, citizen_id, joined_at) VALUES (?,?,?) RETURNING org_id', [o.id, req.citizen.id, Date.now()]);
-    await run('UPDATE citizens SET gold = gold - 100 WHERE id = ?', [req.citizen.id]);
-    res.json({ ok: true, orgId: o.id });
+    // Atomik: kunci baris warga + potong 100 emas bersyarat di dalam tx.
+    const orgId = await tx(async (t) => {
+      await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      const o = await t.run('INSERT INTO organizations (name, tag, type, leader_id, created_at) VALUES (?,?,?,?,?) RETURNING id',
+        [name, tag, type === 'Keamanan' ? 'Keamanan' : 'Kerja Sama', req.citizen.id, Date.now()]);
+      await t.run('INSERT INTO org_members (org_id, citizen_id, joined_at) VALUES (?,?,?) RETURNING org_id', [o.id, req.citizen.id, Date.now()]);
+      const upd = await t.run('UPDATE citizens SET gold = gold - 100 WHERE id = ? AND gold >= 100', [req.citizen.id]);
+      if (!upd.changes) throw Object.assign(new Error('Mendirikan organisasi butuh 100 emas.'), { status: 400 });
+      return o.id;
+    });
+    res.json({ ok: true, orgId });
   }));
 
   app.post('/api/orgs/:id/join', authRequired, citizenRequired, r(async (req, res) => {
     const o = await one('SELECT id FROM organizations WHERE id = ?', [req.params.id]);
     if (!o) return res.status(404).json({ error: 'Organisasi tidak ditemukan.' });
-    const mine = await one('SELECT org_id FROM org_members WHERE citizen_id = ?', [req.citizen.id]);
-    if (mine) return res.status(400).json({ error: 'Kamu sudah bergabung dengan satu organisasi.' });
-    await run('INSERT INTO org_members (org_id, citizen_id, joined_at) VALUES (?,?,?) RETURNING org_id', [o.id, req.citizen.id, Date.now()]);
+    // Atomik: kunci baris warga + INSERT ... ON CONFLICT DO NOTHING.
+    await tx(async (t) => {
+      const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      const mine = await t.one('SELECT org_id FROM org_members WHERE citizen_id = ?', [locked.id]);
+      if (mine) throw Object.assign(new Error('Kamu sudah bergabung dengan satu organisasi.'), { status: 400 });
+      const ins = await t.run('INSERT INTO org_members (org_id, citizen_id, joined_at) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING org_id', [o.id, locked.id, Date.now()]);
+      if (!ins.changes) throw Object.assign(new Error('Kamu sudah bergabung dengan satu organisasi.'), { status: 400 });
+    });
     res.json({ ok: true });
   }));
 

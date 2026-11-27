@@ -1,0 +1,195 @@
+// Parlementer — tes konkurensi di Postgres 16 sungguhan (Tahap 2).
+// pg-mem/SQLite men-serialize tulis sehingga tidak bisa menangkap race
+// ekonomi; tes ini memakai Postgres 16 lokal + HTTP paralel sungguhan:
+//   (1) dua pembeli berebut 1 penawaran pasar — tepat 1 berhasil,
+//   (2) dua klaim harian paralel — tepat 1 berhasil,
+//   (3) dua shift paralel — tepat 1 berhasil,
+//   (4) dua klaim pencapaian paralel — tepat 1 berhasil (ON CONFLICT),
+//   (5) dua blokir paralel — keduanya 200 (idempotent, tanpa 500).
+// Di akhir: tidak ada saldo/energi/stok negatif di mana pun.
+// Perlu Postgres 16 lokal + role/db tes (lihat test/pg-verify.mjs).
+// Jalankan: npm run test:conc   (atau: node test/pg-concurrency.mjs)
+// BUKAN bagian dari test:all — butuh server Postgres lokal.
+import { spawn } from 'node:child_process';
+import pg from 'pg';
+
+const DATABASE_URL = process.env.DATABASE_URL
+  || 'postgres://parlementer_test:parlementer_test@127.0.0.1:5432/parlementer_test';
+const PORT = 3458;
+const BASE = `http://127.0.0.1:${PORT}`;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let passed = 0;
+let failed = 0;
+function check(name, cond, detail = '') {
+  if (cond) { passed++; console.log(`  ✓ ${name}${detail ? ' — ' + detail : ''}`); }
+  else { failed++; console.log(`  ✗ ${name}${detail ? ' — ' + detail : ''}`); }
+}
+function eq(a, b, eps = 0.001) { return Math.abs(a - b) < eps; }
+
+class Client {
+  constructor() { this.cookie = ''; }
+  async req(method, p, body) {
+    const res = await fetch(BASE + p, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(this.cookie ? { Cookie: this.cookie } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const setCookie = res.headers.get('set-cookie');
+    if (setCookie) this.cookie = setCookie.split(';')[0];
+    let data = null;
+    try { data = await res.json(); } catch { data = {}; }
+    return { status: res.status, data };
+  }
+  get(p) { return this.req('GET', p); }
+  post(p, b) { return this.req('POST', p, b || {}); }
+}
+
+async function main() {
+  const pool = new pg.Pool({ connectionString: DATABASE_URL, max: 3 });
+  // Reset bersih: hapus semua tabel + tipe, server akan initDb sendiri.
+  const tables = await pool.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public'");
+  for (const t of tables.rows) await pool.query(`DROP TABLE IF EXISTS "${t.tablename}" CASCADE`);
+  const types = await pool.query("SELECT typname FROM pg_type WHERE typtype = 'c' AND typnamespace = 'public'::regnamespace");
+  for (const t of types.rows) await pool.query(`DROP TYPE IF EXISTS "${t.typname}" CASCADE`);
+
+  console.log('[pg-concurrency] Menyalakan server di port ' + PORT + ' (Postgres 16) ...');
+  const server = spawn('node', ['server.js'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { ...process.env, PORT: String(PORT), DATABASE_URL, JWT_SECRET: 'conc-test-secret', ADMIN_BOOTSTRAP_CODE: 'conc-bootstrap' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let serverLog = '';
+  server.stdout.on('data', (d) => { serverLog += d; });
+  server.stderr.on('data', (d) => { serverLog += d; });
+  const stop = () => { try { server.kill('SIGTERM'); } catch {} };
+  process.on('exit', stop);
+
+  try {
+    let up = false;
+    for (let i = 0; i < 40 && !up; i++) {
+      await sleep(500);
+      try { const r = await fetch(BASE + '/api/world'); up = r.ok; } catch {}
+    }
+    check('Server menyala & /api/world merespons', up);
+    if (!up) { console.log(serverLog); process.exitCode = 1; return; }
+
+    async function register(email, username) {
+      const c = new Client();
+      const r = await c.post('/api/auth/register', { email, password: 'rahasia123', username });
+      if (r.status !== 200) throw new Error('register gagal: ' + email + ' ' + JSON.stringify(r.data));
+      return c;
+    }
+    async function citizenIdOf(client) {
+      const me = await client.get('/api/auth/me');
+      return me.data.citizen.id;
+    }
+    async function goldUsdOf(client) {
+      const me = await client.get('/api/me');
+      return { gold: me.data.citizen.gold, usd: me.data.citizen.usd, energy: me.data.citizen.energy };
+    }
+
+    console.log('\n[1] Race: dua pembeli berebut 1 penawaran pasar');
+    const S = await register('seller@conc.local', 'penjual_race');
+    const B1 = await register('buyer1@conc.local', 'pembeli_satu');
+    const B2 = await register('buyer2@conc.local', 'pembeli_dua');
+    const sId = await citizenIdOf(S);
+    const com = await pool.query("SELECT id FROM commodities WHERE name = 'Makanan'");
+    await pool.query(
+      'INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES ($1, $2, 1, 20) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = 20',
+      [sId, com.rows[0].id]);
+    let r = await S.post('/api/market/sell', { scope: 'local', commodity_id: com.rows[0].id, tier: 1, qty: 10, price: 9 });
+    check('Penjual memasang 10× Makanan @ 9 USD', r.status === 200 && !!r.data.offerId, `offerId=${r.data.offerId}`);
+    const offerId = r.data.offerId;
+    const beforeS = await goldUsdOf(S);
+    const beforeB1 = await goldUsdOf(B1);
+    const beforeB2 = await goldUsdOf(B2);
+    const [buy1, buy2] = await Promise.all([
+      B1.post('/api/market/buy', { offer_id: offerId, qty: 10 }),
+      B2.post('/api/market/buy', { offer_id: offerId, qty: 10 }),
+    ]);
+    const wins = [buy1, buy2].filter((x) => x.status === 200).length;
+    // Yang kalah: 400 (stok tidak cukup) atau 404 (penawaran sudah dihapus
+    // pemenang) — keduanya benar, yang penting tepat 1 berhasil.
+    const losses = [buy1, buy2].filter((x) => x.status === 400 || x.status === 404).length;
+    check('Tepat 1 pembeli berhasil, 1 ditolak (400/404)', wins === 1 && losses === 1, `status=${buy1.status}/${buy2.status}`);
+    const afterS = await goldUsdOf(S);
+    const afterB1 = await goldUsdOf(B1);
+    const afterB2 = await goldUsdOf(B2);
+    const paidTotal = (beforeB1.usd - afterB1.usd) + (beforeB2.usd - afterB2.usd);
+    check('Pembeli membayar tepat 90 USD sekali saja', eq(paidTotal, 90), `dibayar=${paidTotal}`);
+    check('Penjual menerima tepat 88,20 USD sekali saja', eq(afterS.usd - beforeS.usd, 88.2), `diterima=${afterS.usd - beforeS.usd}`);
+    r = await S.get('/api/market?scope=local');
+    check('Penawaran habis (0 penawaran)', r.data.stats.offers === 0, `offers=${r.data.stats.offers}`);
+
+    console.log('\n[2] Race: dua klaim harian paralel');
+    const K = await register('klaim@conc.local', 'pengklaim_race');
+    const [cl1, cl2] = await Promise.all([K.post('/api/claim'), K.post('/api/claim')]);
+    const clWins = [cl1, cl2].filter((x) => x.status === 200).length;
+    const clLosses = [cl1, cl2].filter((x) => x.status === 400).length;
+    check('Tepat 1 klaim berhasil, 1 ditolak (400)', clWins === 1 && clLosses === 1, `status=${cl1.status}/${cl2.status}`);
+    const kAfter = await goldUsdOf(K);
+    check('Emas naik tepat +5 (50 → 55)', kAfter.gold === 55, `emas=${kAfter.gold}`);
+
+    console.log('\n[3] Race: dua shift paralel');
+    const W = await register('shift@conc.local', 'pekerja_race');
+    r = await W.get('/api/jobs');
+    const job = r.data.jobs.find((j) => j.title === 'Pekerja Gudang Pelabuhan');
+    check('Lowongan ADMIN ditemukan', !!job);
+    r = await W.post('/api/jobs/apply', { job_id: job.id });
+    check('Lamar pekerjaan berhasil', r.status === 200 && r.data.ok);
+    const [sh1, sh2] = await Promise.all([W.post('/api/jobs/shift'), W.post('/api/jobs/shift')]);
+    const shWins = [sh1, sh2].filter((x) => x.status === 200).length;
+    const shLosses = [sh1, sh2].filter((x) => x.status === 400).length;
+    check('Tepat 1 shift berhasil, 1 ditolak (400)', shWins === 1 && shLosses === 1, `status=${sh1.status}/${sh2.status}`);
+    const wAfter = await goldUsdOf(W);
+    check('Energi tepat 0 setelah 1 shift (tidak negatif)', wAfter.energy === 0, `energi=${wAfter.energy}`);
+    r = await W.get('/api/inventory');
+    const besi = r.data.items.find((i) => i.name === 'Besi Mentah');
+    check('Upah tepat 44× Besi Mentah (tidak 88)', besi && besi.qty === 44, `besi=${besi?.qty}`);
+
+    console.log('\n[4] Race: dua klaim pencapaian paralel (ON CONFLICT)');
+    const P = await register('ach@conc.local', 'pencapaian_race');
+    const pId = await citizenIdOf(P);
+    await pool.query('UPDATE citizens SET level = 5 WHERE id = $1', [pId]);
+    const [ac1, ac2] = await Promise.all([
+      P.post('/api/achievements/claim', { key: 'level_5' }),
+      P.post('/api/achievements/claim', { key: 'level_5' }),
+    ]);
+    const acWins = [ac1, ac2].filter((x) => x.status === 200).length;
+    const acLosses = [ac1, ac2].filter((x) => x.status === 400).length;
+    check('Tepat 1 klaim pencapaian berhasil, 1 ditolak (400)', acWins === 1 && acLosses === 1, `status=${ac1.status}/${ac2.status}`);
+    const pAfter = await goldUsdOf(P);
+    check('Hadiah tepat +10 emas sekali (50 → 60)', pAfter.gold === 60, `emas=${pAfter.gold}`);
+
+    console.log('\n[5] Race: dua blokir paralel (idempotent)');
+    const A = await register('blokir-a@conc.local', 'pemblokir_race');
+    const B = await register('blokir-b@conc.local', 'diblokir_race');
+    const bId = await citizenIdOf(B);
+    const [bl1, bl2] = await Promise.all([
+      A.post('/api/chat/block', { citizen_id: bId }),
+      A.post('/api/chat/block', { citizen_id: bId }),
+    ]);
+    check('Dua blokir paralel keduanya 200 (tanpa 500)', bl1.status === 200 && bl2.status === 200, `status=${bl1.status}/${bl2.status}`);
+    const blocked = await pool.query('SELECT COUNT(*) AS n FROM blocked WHERE blocker_id = (SELECT id FROM citizens WHERE user_id = (SELECT id FROM users WHERE username = $1))', ['pemblokir_race']);
+    check('Hanya 1 baris blokir tercatat', Number(blocked.rows[0].n) === 1, `n=${blocked.rows[0].n}`);
+
+    console.log('\n[6] Invarian akhir: tidak ada saldo/stok negatif');
+    const neg = await pool.query(
+      `SELECT (SELECT COUNT(*) FROM citizens WHERE gold < 0 OR usd < 0 OR energy < 0) AS c1,
+              (SELECT COUNT(*) FROM inventory WHERE qty < 0) AS c2,
+              (SELECT COUNT(*) FROM market_offers WHERE qty <= 0) AS c3,
+              (SELECT COUNT(*) FROM jobs WHERE seats_taken < 0 OR seats_taken > seats) AS c4,
+              (SELECT COUNT(*) FROM fx_offers WHERE qty_gold < 0 OR qty_filled < 0) AS c5`);
+    const n = neg.rows[0];
+    check('0 baris melanggar (citizens/inventory/offers/jobs/fx)', ['c1', 'c2', 'c3', 'c4', 'c5'].every((k) => Number(n[k]) === 0), JSON.stringify(n));
+  } finally {
+    stop();
+    await pool.end();
+  }
+
+  console.log(`\n[pg-concurrency] SELESAI: ${passed} lolos, ${failed} gagal`);
+  process.exit(failed ? 1 : 0);
+}
+
+main().catch((e) => { console.error('[pg-concurrency] ERROR:', e); process.exit(1); });

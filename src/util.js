@@ -1,16 +1,42 @@
 // Utilitas bersama: JWT (cookie httpOnly + fallback header), validasi, format.
 import jwt from 'jsonwebtoken';
+import crypto from 'node:crypto';
 import { one } from './db.js';
 
 export const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+// Fail-closed: di production server MENOLAK start bila JWT_SECRET tidak
+// disetel atau masih secret dev yang diketahui publik (audit §4.2).
+if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev-secret-change-me')) {
+  throw new Error('JWT_SECRET wajib disetel di production — server menolak start. Isi JWT_SECRET di Vercel (nilai acak 32 byte, mis. openssl rand -hex 32).');
+}
 if (!process.env.JWT_SECRET) {
   console.warn('[auth] PERINGATAN: JWT_SECRET tidak disetel — memakai secret dev. Setel JWT_SECRET di hosting!');
 }
 
+// Kode bootstrap admin darurat (env var ADMIN_BOOTSTRAP_CODE). Satu-satunya
+// jalan membuat akun admin baru lewat registrasi sejak pemberian admin
+// berbasis email dicabut (27 Nov 2026 — Khalid sudah menjadi admin).
+// Bila env var kosong, registrasi TIDAK BISA membuat admin sama sekali.
+export const ADMIN_BOOTSTRAP_CODE = process.env.ADMIN_BOOTSTRAP_CODE || '';
+if (ADMIN_BOOTSTRAP_CODE) {
+  console.log('[security] ADMIN_BOOTSTRAP_CODE aktif — registrasi dengan kode bootstrap yang benar akan menjadi admin.');
+} else {
+  console.warn('[security] PERINGATAN: ADMIN_BOOTSTRAP_CODE tidak diset — tidak ada jalan darurat membuat admin lewat registrasi.');
+}
+export function bootstrapCodeMatches(code) {
+  if (!ADMIN_BOOTSTRAP_CODE || typeof code !== 'string' || !code) return false;
+  const a = Buffer.from(code);
+  const b = Buffer.from(ADMIN_BOOTSTRAP_CODE);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export const COOKIE_NAME = 'parlementer_token';
 
-export function signToken(userId) {
-  return jwt.sign({ uid: userId }, JWT_SECRET, { expiresIn: '30d' });
+// Token berlaku 7 hari (dulu 30). Payload membawa tv (token_version user):
+// naikkan token_version di DB untuk mencabut semua sesi user itu (logout,
+// ban). Token lama tanpa tv dianggap tv=0.
+export function signToken(userId, tokenVersion = 0) {
+  return jwt.sign({ uid: userId, tv: tokenVersion }, JWT_SECRET, { expiresIn: '7d' });
 }
 
 export function cookieOptions() {
@@ -19,7 +45,7 @@ export function cookieOptions() {
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
-    maxAge: 30 * 24 * 60 * 60 * 1000,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
   };
 }
 
@@ -62,16 +88,25 @@ export function publicId(userId) {
   return 'PL-' + String(userId).padStart(6, '0');
 }
 
-export function authRequired(req, res, next) {
+export async function authRequired(req, res, next) {
   const token = readToken(req);
   if (!token) return res.status(401).json({ error: 'Harus login dulu.' });
+  let payload;
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.userId = payload.uid;
-    next();
+    payload = jwt.verify(token, JWT_SECRET);
   } catch {
     return res.status(401).json({ error: 'Sesi habis, silakan login lagi.' });
   }
+  req.userId = payload.uid;
+  // Cabut sesi: token_version di DB harus cocok dengan payload (tv).
+  // Token lama tanpa tv dianggap tv=0 (tetap valid sampai kedaluwarsa).
+  try {
+    const u = await one('SELECT token_version FROM users WHERE id = ?', [payload.uid]);
+    if (u && (u.token_version || 0) !== (payload.tv || 0)) {
+      return res.status(401).json({ error: 'Sesi dicabut, silakan login lagi.' });
+    }
+  } catch { /* DB belum siap — biarkan route yang menangani. */ }
+  next();
 }
 
 export async function citizenRequired(req, res, next) {

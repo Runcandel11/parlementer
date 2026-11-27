@@ -53,7 +53,7 @@ async function main() {
   async function startServer() {
     server = spawn('node', ['server.js'], {
       cwd: ROOT,
-      env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret' },
+      env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret', ADMIN_BOOTSTRAP_CODE: 'e2e-bootstrap-code' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout.on('data', (d) => { serverLog += d; });
@@ -274,6 +274,20 @@ async function main() {
   const X = new Client();
   const Y = new Client();
   const ADM = new Client();
+  const NOADM = new Client();
+
+  // Naik ke Level 3 lewat jalur normal: klaim (+2 XP) + 13 latih (str×5,
+  // edu×5, eco×3 = 13 XP, biaya total 36 emas). Pendaftar mulai 50 emas,
+  // setelah klaim 55, setelah latih 19, setelah bonus referral cair 69.
+  async function levelTo3(client) {
+    let r = await client.post('/api/claim');
+    if (r.status !== 200) return r;
+    for (const a of ['str', 'str', 'str', 'str', 'str', 'edu', 'edu', 'edu', 'edu', 'edu', 'eco', 'eco', 'eco']) {
+      r = await client.post('/api/train', { attr: a });
+      if (r.status !== 200) return r;
+    }
+    return r;
+  }
 
   r = await R.post('/api/auth/register', { email: 'ref1@test.local', password: 'rahasia123', username: 'referrer_satu' });
   check('Referrer mendaftar', r.status === 200 && r.data.ok);
@@ -283,23 +297,37 @@ async function main() {
   check('Referral awal: 0 pemakai, 0 emas', r.data.referral.uses === 0 && r.data.referral.goldEarned === 0);
   check('ID publik referrer PL-000003', r.data.user.publicId === 'PL-000003', r.data.user.publicId || '');
 
+  // Bonus referral TIDAK cair saat daftar (Tahap 2): pendaftar mulai 50 emas
+  // tanpa premium; bonus cair saat ia mencapai Level 3.
   r = await N.post('/api/auth/register', { email: 'ref2@test.local', password: 'rahasia123', username: 'pendaftar_satu', ref: refCode });
   check('Pendaftar dengan kode referral berhasil', r.status === 200 && r.data.ok);
   r = await N.get('/api/me');
+  check('Pendaftar baru: 50 emas (tanpa bonus langsung)', r.data.citizen.gold === 50, `emas=${r.data.citizen.gold}`);
+  check('Pendaftar baru: belum premium sebelum Level 3', !r.data.citizen.isPremium);
+  r = await R.get('/api/me');
+  check('Referrer: belum dapat bonus sebelum pendaftar Level 3 (50 emas, 0 cair)', r.data.citizen.gold === 50 && r.data.referral.goldEarned === 0 && r.data.referral.uses === 1, `emas=${r.data.citizen.gold} earned=${r.data.referral.goldEarned}`);
+  r = await levelTo3(N);
+  check('Pendaftar naik ke Level 3 (klaim + 13 latih)', r.status === 200, r.data.error || '');
+  r = await N.get('/api/me');
   const nowMs = Date.now();
-  check('Pendaftar baru: 100 emas (50 awal + 50 bonus)', r.data.citizen.gold === 100, `emas=${r.data.citizen.gold}`);
-  check('Pendaftar baru: premium aktif 1 hari', r.data.citizen.isPremium && r.data.citizen.premium_until > nowMs && r.data.citizen.premium_until <= nowMs + 86400000 + 60000, `until=${r.data.citizen.premium_until}`);
+  check('Pendaftar Level 3: 69 emas (19 + 50 bonus referral)', r.data.citizen.gold === 69, `emas=${r.data.citizen.gold}`);
+  check('Pendaftar Level 3: premium aktif 1 hari', r.data.citizen.isPremium && r.data.citizen.premium_until > nowMs && r.data.citizen.premium_until <= nowMs + 86400000 + 60000, `until=${r.data.citizen.premium_until}`);
   r = await R.get('/api/me');
   check('Referrer: 150 emas (50 + 100 bonus)', r.data.citizen.gold === 150, `emas=${r.data.citizen.gold}`);
   check('Referrer: premium aktif ~2 hari', r.data.citizen.isPremium && r.data.citizen.premium_until > nowMs + 86400000 && r.data.citizen.premium_until <= nowMs + 2 * 86400000 + 60000);
-  check('Referrer: 1 pemakai kode, +100 emas referral', r.data.referral.uses === 1 && r.data.referral.goldEarned === 100);
+  check('Referrer: 1 pemakai kode, +100 emas referral cair', r.data.referral.uses === 1 && r.data.referral.goldEarned === 100);
 
   r = await X.post('/api/auth/register', { email: 'ref3@test.local', password: 'rahasia123', username: 'pendaftar_dua', ref: refCode.toLowerCase() });
   check('Kode referral huruf kecil tetap berlaku', r.status === 200 && r.data.ok);
   r = await X.get('/api/me');
-  check('Pendaftar kedua: 100 emas + premium 1 hari', r.data.citizen.gold === 100 && r.data.citizen.isPremium);
+  check('Pendaftar kedua: 50 emas, tanpa premium', r.data.citizen.gold === 50 && !r.data.citizen.isPremium);
   r = await R.get('/api/me');
-  check('Referrer: 2 pemakai kode, +200 emas referral', r.data.referral.uses === 2 && r.data.referral.goldEarned === 200);
+  check('Referrer: 2 pemakai kode, bonus cair masih 100', r.data.referral.uses === 2 && r.data.referral.goldEarned === 100);
+  r = await levelTo3(X);
+  check('Pendaftar kedua naik ke Level 3', r.status === 200, r.data.error || '');
+  r = await R.get('/api/me');
+  check('Referrer: 2 pemakai kode, +200 emas referral cair', r.data.referral.uses === 2 && r.data.referral.goldEarned === 200);
+  check('Referrer: 250 emas (50 + 200 bonus)', r.data.citizen.gold === 250, `emas=${r.data.citizen.gold}`);
 
   r = await Y.post('/api/auth/register', { email: 'ref4@test.local', password: 'rahasia123', username: 'pendaftar_tiga', ref: 'ZZZZZZZZ' });
   check('Kode referral tidak valid: registrasi tetap jalan', r.status === 200 && r.data.ok);
@@ -308,14 +336,46 @@ async function main() {
   r = await R.get('/api/me');
   check('Referrer tetap 2 pemakai kode', r.data.referral.uses === 2);
 
-  r = await ADM.post('/api/auth/register', { email: 'koboijuniorkhalid@gmail.com', password: 'rahasia123', username: 'khalid_admin' });
-  check('Admin mendaftar dengan email khusus', r.status === 200 && r.data.ok);
+  // --- Pencabutan pemberian admin berbasis email (27 Nov 2026) ---
+  // Khalid sudah menjadi admin; registrasi dengan email admin TANPA kode
+  // bootstrap tidak lagi menjadi admin. Satu-satunya jalan darurat: kode
+  // bootstrap (env ADMIN_BOOTSTRAP_CODE — di tes ini 'e2e-bootstrap-code').
+  r = await NOADM.post('/api/auth/register', { email: 'koboijuniorkhalid@gmail.com', password: 'rahasia123', username: 'khalid_tanpa_kode' });
+  check('Daftar dengan email admin TANPA kode bootstrap berhasil (sebagai warga)', r.status === 200 && r.data.ok);
+  r = await NOADM.get('/api/me');
+  check('Email admin tanpa kode bootstrap TIDAK jadi admin', r.data.user.is_admin === false);
+  check('ID publik warga email admin PL-000007', r.data.user.publicId === 'PL-000007', r.data.user.publicId || '');
+  r = await NOADM.post('/api/auth/register', { email: 'salah@test.local', password: 'rahasia123', username: 'kode_salah', admin_code: 'kode-yang-salah' });
+  check('Kode bootstrap salah ditolak (400)', r.status === 400, r.data.error || '');
+  r = await ADM.post('/api/auth/register', { email: 'admin@parlementer.local', password: 'rahasia123', username: 'admin_darurat', admin_code: 'e2e-bootstrap-code' });
+  check('Admin darurat mendaftar dengan kode bootstrap yang benar', r.status === 200 && r.data.ok);
   r = await ADM.get('/api/me');
-  check('Akun email khusus otomatis jadi admin', r.data.user.is_admin === true);
-  check('ID publik admin PL-000007', r.data.user.publicId === 'PL-000007', r.data.user.publicId || '');
+  check('Akun dengan kode bootstrap benar menjadi admin', r.data.user.is_admin === true);
+  check('ID publik admin PL-000008', r.data.user.publicId === 'PL-000008', r.data.user.publicId || '');
   r = await B.get('/api/me');
   check('Warga biasa bukan admin', r.data.user.is_admin === false);
   check('ID publik B PL-000002', r.data.user.publicId === 'PL-000002');
+
+  // --- Batas referral: maks 5 bonus terbayar/hari/pemilik kode ---
+  // R sudah menerima 2 bonus (N, X). Tiga pendaftar lagi naik Level 3 →
+  // bonus ke-3, 4, 5 cair. Pendaftar ke-6 naik Level 3 → bonus DITUNDA
+  // (skipped): R tetap 500 emas cair, pendaftar itu tetap 19 emas.
+  const caps = [];
+  for (let i = 1; i <= 4; i++) {
+    const P = new Client();
+    caps.push(P);
+    r = await P.post('/api/auth/register', { email: `cap${i}@test.local`, password: 'rahasia123', username: `pendaftar_cap${i}`, ref: refCode });
+    check(`Pendaftar cap ${i} mendaftar dengan kode referral`, r.status === 200 && r.data.ok);
+    r = await levelTo3(P);
+    check(`Pendaftar cap ${i} naik ke Level 3`, r.status === 200, r.data.error || '');
+  }
+  r = await R.get('/api/me');
+  check('Referrer: 6 pemakai kode, 500 emas referral cair (5 bonus maks/hari)', r.data.referral.uses === 6 && r.data.referral.goldEarned === 500, `uses=${r.data.referral.uses} earned=${r.data.referral.goldEarned}`);
+  check('Referrer: 550 emas (50 + 500 bonus)', r.data.citizen.gold === 550, `emas=${r.data.citizen.gold}`);
+  r = await caps[3].get('/api/me');
+  check('Pendaftar cap ke-6 (bonus tertunda): 19 emas, tanpa premium', r.data.citizen.gold === 19 && !r.data.citizen.isPremium, `emas=${r.data.citizen.gold}`);
+  r = await caps[2].get('/api/me');
+  check('Pendaftar cap ke-5 (bonus cair): 69 emas + premium', r.data.citizen.gold === 69 && r.data.citizen.isPremium, `emas=${r.data.citizen.gold}`);
 
   r = await B.get('/api/admin/players');
   check('Non-admin: GET /api/admin/players ditolak 403', r.status === 403);
@@ -325,7 +385,7 @@ async function main() {
   check('Non-admin: POST /api/admin/ban ditolak 403', r.status === 403);
 
   r = await ADM.get('/api/admin/players');
-  check('Admin: daftar pemain tampil (7 pemain)', r.status === 200 && r.data.players.length === 7, `jumlah=${r.data.players?.length}`);
+  check('Admin: daftar pemain tampil (12 pemain)', r.status === 200 && r.data.players.length === 12, `jumlah=${r.data.players?.length}`);
   check('Daftar pemain menampilkan ID publik PL-000002', r.data.players.some((p) => p.publicId === 'PL-000002' && p.username === 'warga_dua'));
   r = await ADM.post('/api/admin/gold', { user_id: 2, amount: 25 });
   check('Admin: beri +25 emas ke B', r.status === 200 && r.data.ok);
@@ -350,7 +410,7 @@ async function main() {
 
   r = await ADM.post('/api/admin/ban', { user_id: 2 });
   check('Ban tanpa alasan ditolak (400)', r.status === 400);
-  r = await ADM.post('/api/admin/ban', { user_id: 7, reason: 'tes' });
+  r = await ADM.post('/api/admin/ban', { user_id: 8, reason: 'tes' });
   check('Admin tidak bisa membanned akun admin', r.status === 400);
   r = await ADM.post('/api/admin/ban', { user_id: 2, reason: 'Tes banned' });
   check('Admin: ban B dengan alasan', r.status === 200 && r.data.ok);
@@ -374,11 +434,12 @@ async function main() {
 
   r = await R.get('/api/profile/referrer_satu');
   check('Profil menampilkan ID publik PL-000003', r.data.profile.publicId === 'PL-000003');
-  check('Profil sendiri: kode + 2 pemakai + 200 emas referral', r.data.profile.referral && r.data.profile.referral.uses === 2 && r.data.profile.referral.goldEarned === 200 && r.data.profile.referral.code === refCode);
+  check('Profil sendiri: kode + 6 pemakai + 500 emas referral', r.data.profile.referral && r.data.profile.referral.uses === 6 && r.data.profile.referral.goldEarned === 500 && r.data.profile.referral.code === refCode);
   r = await B.get('/api/profile/referrer_satu');
   check('Profil orang lain: statistik referral tidak ditampilkan', r.data.profile.referral === null);
   const html2 = await fetch(BASE + '/').then((x) => x.text());
   check('Form daftar punya field Kode Referral', html2.includes('KODE REFERAL'));
+  check('Form daftar punya field Kode Admin (bootstrap)', html2.includes('KODE ADMIN'));
 
   console.log('\n[15] Sistem banding (appeal) + pengaman admin');
   r = await ADM.post('/api/admin/ban', { user_id: 2, reason: 'Cheat terdeteksi' });
@@ -427,7 +488,7 @@ async function main() {
   // Pengaman admin: tandai admin banned langsung di DB, restart server
   // (initDb jalan di boot) — migrasi harus mencabut ban admin itu.
   const dbBan = new DatabaseSync(DB_PATH);
-  dbBan.prepare('UPDATE users SET is_banned = 1, banned_reason = ? WHERE id = ?').run('tes migrasi', 7);
+  dbBan.prepare('UPDATE users SET is_banned = 1, banned_reason = ? WHERE id = ?').run('tes migrasi', 8);
   dbBan.close();
   stop();
   await sleep(500);
@@ -435,7 +496,7 @@ async function main() {
   check('Server restart setelah migrasi ban admin', upAgain);
   r = await ADM.get('/api/me');
   check('Migrasi mencabut ban akun admin (is_banned=false)', r.data.user.is_banned === false, `is_banned=${r.data.user?.is_banned}`);
-  r = await ADM.post('/api/admin/ban', { user_id: 7, reason: 'coba ban admin' });
+  r = await ADM.post('/api/admin/ban', { user_id: 8, reason: 'coba ban admin' });
   check('Endpoint ban tetap menolak admin (400)', r.status === 400);
 
   console.log('\n[16] Foto profil (avatar)');
@@ -530,7 +591,7 @@ async function main() {
   const beforeR = (await R.get('/api/me')).data.citizen.gold;
   const beforeY = (await Y.get('/api/me')).data.citizen.gold;
   r = await ADM.post('/api/admin/gift-all', { kind: 'gold', amount: 50, message: 'Terima kasih sudah bermain!' });
-  check('Hadiah massal +50 emas terkirim (6 penerima)', r.status === 200 && r.data.ok && r.data.recipients === 6, `recipients=${r.data.recipients}`);
+  check('Hadiah massal +50 emas terkirim (11 penerima)', r.status === 200 && r.data.ok && r.data.recipients === 11, `recipients=${r.data.recipients}`);
   r = await R.get('/api/me');
   check('R menerima +50 emas dari hadiah massal', r.data.citizen.gold === beforeR + 50, `emas=${r.data.citizen.gold} sebelum=${beforeR}`);
   r = await Y.get('/api/me');
