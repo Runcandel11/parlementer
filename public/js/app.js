@@ -1609,7 +1609,24 @@ const comIcon = (name) => COMMODITY_ICONS[name] || '📦';
 
 function marketPage(scope) {
   return async () => {
-    const data = await api('/api/market?scope=' + scope);
+    // Stok milik pemain (LIO, PL-000026): /api/inventory dimuat PARALEL
+    // dengan pasar (Promise.all) supaya tidak menambah loading berurutan.
+    // Bila inventaris gagal dimuat, pasar tetap tampil (stok dianggap 0).
+    const [data, inv] = await Promise.all([
+      api('/api/market?scope=' + scope),
+      api('/api/inventory').catch(() => ({ items: [] })),
+    ]);
+    // Peta stok milik pemain: per komoditas+tier + total per komoditas
+    // (semua tier). Angka 0 tetap ditampilkan — pemain harus tahu bila
+    // ia tidak punya barang itu.
+    const owned = new Map();
+    const ownedTotal = new Map();
+    for (const it of inv.items || []) {
+      owned.set(it.commodity_id + ':' + it.tier, it.qty);
+      ownedTotal.set(it.commodity_id, (ownedTotal.get(it.commodity_id) || 0) + it.qty);
+    }
+    const own = (cid, tier) => owned.get(cid + ':' + tier) || 0;
+    const ownTotal = (cid) => ownedTotal.get(cid) || 0;
     // Mata uang pasar: global = emas, lokal = Rupiah (nilai API tetap USD).
     // money() memformat satu nilai dalam mata uang pasar ini; harga yang
     // diketik pemain (Rp di pasar lokal) dikonversi ke USD sebelum dikirim.
@@ -1633,7 +1650,7 @@ function marketPage(scope) {
       <div class="board">
         <div class="board-head"><span>Komoditas</span><span>Harga Terbaik</span><span>Penawaran</span><span></span></div>
         ${data.commodities.map((c) => `<button type="button" class="board-row" data-com="${c.id}">
-          <span class="board-com"><span class="com-icon">${comIcon(c.name)}</span><span class="board-name">${esc(c.name)}</span></span>
+          <span class="board-com"><span class="com-icon">${comIcon(c.name)}</span><span class="board-name-wrap"><span class="board-name">${esc(c.name)}</span><span class="board-own">Milikmu: ${fmt(ownTotal(c.id))}</span></span></span>
           <span class="board-price">${c.best != null ? fmt(c.best, 2) : '—'}</span>
           <span class="board-count">${c.offers}</span>
           <span class="board-chev">›</span></button>`).join('')}
@@ -1647,7 +1664,7 @@ function marketPage(scope) {
     </div>
     <div class="panel"><h3>🛒 ORDER BELI</h3>
       <p class="muted small">Pembeli memasang harga yang mereka mau. Punya barangnya? Jual langsung ke order mereka — dana pembeli sudah dikunci, jadi kamu pasti dibayar (dikurangi pajak penghasilan sesuai UU yang berlaku ke kas negara).</p>
-      ${data.buyOrders.length ? data.buyOrders.map((o) => `<div class="kv"><span class="k">🧑 ${esc(o.buyer)} · ${esc(o.commodity_name)} T${o.tier} · butuh ${o.qty - o.qty_filled}/${o.qty}<br><small class="muted">${money(o.price)}/unit</small></span>
+      ${data.buyOrders.length ? data.buyOrders.map((o) => `<div class="kv"><span class="k">🧑 ${esc(o.buyer)} · ${esc(o.commodity_name)} T${o.tier} · butuh ${o.qty - o.qty_filled}/${o.qty}<br><small class="muted">${money(o.price)}/unit · Milikmu: ${fmt(own(o.commodity_id, o.tier))}</small></span>
         <span class="v"><input type="number" value="${Math.min(o.qty - o.qty_filled, 10)}" min="1" max="${o.qty - o.qty_filled}" style="width:70px" id="qo-${o.id}">
         <button class="btn-gold btn-sm" data-sell-order="${o.id}">JUAL</button></span></div>`).join('')
         : '<p class="muted">Belum ada order beli. Jadilah pembeli pertama!</p>'}
@@ -1668,12 +1685,13 @@ function marketPage(scope) {
         : '<p class="muted">Belum ada order beli aktif.</p>'}
     </div>
     <div class="panel"><h3>💰 JUAL BARANG</h3>
-      <label>KOMODITAS<select id="sell-com">${data.commodities.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
+      <label>KOMODITAS<select id="sell-com">${data.commodities.map((c) => `<option value="${c.id}">${esc(c.name)} — Milikmu: ${fmt(ownTotal(c.id))}</option>`).join('')}</select></label>
       <div class="row">
         <label>TINGKAT<select id="sell-tier"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
         <label>JUMLAH (min 10)<input id="sell-qty" type="number" value="10" min="10"></label>
         <label>HARGA / UNIT (${curLabel})<input id="sell-price" type="number" step="0.01" placeholder="cth: ${scope === 'global' ? '10.80' : '197.640'}"></label>
       </div>
+      <p class="muted small" id="sell-own"></p>
       <p class="muted small">Pajak penghasilan ${data.taxRate ?? 2}% dipotong saat barang terjual dan masuk kas negara (lihat halaman Negara). Contoh: jual ${money(10)} → diterima ${money(10 * (1 - (data.taxRate ?? 2) / 100))}.</p>
       <button class="btn-gold" id="btn-sell">PAJANG PENAWARAN</button>
     </div>
@@ -1710,6 +1728,7 @@ function marketPage(scope) {
             <span class="com-icon">${comIcon(com.name)}</span>
             <div class="offer-mid">
               <div class="offer-title">${esc(com.name)} <span class="tier">T${o.tier}</span> × ${fmt(o.qty)}</div>
+              <div class="offer-own">Milikmu: ${fmt(own(com.id, o.tier))}</div>
               ${isBest ? '<span class="badge-best">TERBAIK</span>' : ''}
               <div class="offer-seller"><span class="avatar-initial" style="width:20px;height:20px;font-size:11px">${esc((o.seller[0] || '?').toUpperCase())}</span> ${sellerTag}${esc(o.seller)}</div>
             </div>
@@ -1791,6 +1810,15 @@ function marketPage(scope) {
         route();
       } catch (e) { toast(e.message); }
     });
+    // Stok milik pemain untuk komoditas+tier yang dipilih di form jual —
+    // diperbarui tiap dropdown berubah (stok per tier bisa berbeda).
+    const updateSellOwn = () => {
+      const el = $('#sell-own');
+      if (el) el.textContent = `Milikmu: ${fmt(own(Number($('#sell-com').value), Number($('#sell-tier').value)))} (T${$('#sell-tier').value}) — bisa dijual bila ≥ 10.`;
+    };
+    $('#sell-com').onchange = updateSellOwn;
+    $('#sell-tier').onchange = updateSellOwn;
+    updateSellOwn();
     $('#btn-sell').onclick = async () => {
       try {
         await post('/api/market/sell', { scope, commodity_id: Number($('#sell-com').value), tier: Number($('#sell-tier').value), qty: Number($('#sell-qty').value), price: priceInputUsd($('#sell-price')) });

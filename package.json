@@ -25,6 +25,7 @@
     "test:all": "npm run test:pg && npm test && npm run test:modal && npm run test:chat-dom",
     "test:modal": "node test/modal-dom.js",
     "test:chat-dom": "node test/chat-dom.js",
+    "test:market-dom": "node test/market-dom.js",
     "test:ssl": "node test/ssl-warning.mjs"
   },
   "type": "module",
