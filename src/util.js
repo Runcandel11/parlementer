@@ -2,7 +2,7 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import { one, run, convoyBuildings } from './db.js';
-import { energyCapFor, ENERGY_REGEN_PER_MIN, ENERGY_REGEN_MS, CREDIT_START_SCORE, CREDIT_MAX_SCORE, CREDIT_RECOVERY_PER_DAY, CREDIT_DAY_MS } from './game.js';
+import { energyCapFor, ENERGY_REGEN_PER_MIN, ENERGY_REGEN_MS, CREDIT_START_SCORE, CREDIT_MAX_SCORE, CREDIT_RECOVERY_PER_DAY, CREDIT_DAY_MS, DAY_MS } from './game.js';
 
 export const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 // Fail-closed: di production server MENOLAK start bila JWT_SECRET tidak
@@ -63,7 +63,7 @@ export function cookieOptions() {
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
+    maxAge: 7 * DAY_MS,
   };
 }
 
@@ -206,7 +206,11 @@ export async function applyEnergyRegen(c) {
   if (gain <= 0) return c;
   // Batas absolut (level + Premium + RS Lapangan): bila energi sudah di
   // atasnya, tidak ada regen yang mungkin — lewati query konvoi.
-  const maxCap = 100 + 5 * (Math.max(1, c.level) - 1) + 30;
+  // (Tahap 7) Dulu rumus ini ditulis ulang di sini sebagai
+  // `100 + 5*(level−1) + 30` — angka 30 itu gabungan +20 Premium +10 RS
+  // yang tidak bernama. Sekarang memakai energyCapFor (satu-satunya sumber
+  // rumus batas energi) dengan kedua bonus dinyalakan = batas maksimum.
+  const maxCap = energyCapFor(c.level, true, true);
   if (c.energy >= maxCap) {
     await run('UPDATE citizens SET energy_updated_at = ? WHERE id = ?', [now, c.id]);
     return { ...c, energy_updated_at: now };

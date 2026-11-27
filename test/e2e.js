@@ -1988,7 +1988,7 @@ async function main() {
   r = await A.get('/api/press/newspapers/mine');
   check('Koran hasil double-submit tetap ada 1 (bukan 0/2)', (r.data.newspapers || []).some((n) => n.id === paper3), `n=${(r.data.newspapers || []).length}`);
 
-  console.log('\n[25] Jeda latihan (cooldown 2 menit × level atribut baru)');
+  console.log('\n[25] Jeda latihan (cooldown 2 menit × level atribut baru; Tahap 7: Pendidikan −5%/level)');
   // Pakai A (tanpa daftar baru — pendaftaran di akhir suite kena
   // rate-limit 429): A belum pernah melatih Pendidikan/Ekonomi, jadi
   // keduanya tanpa jeda. Seksi ini terakhir, jadi perubahan emas/XP A
@@ -1997,7 +1997,7 @@ async function main() {
   const cdA0 = r.data.citizen.trainCooldowns || {};
   check('/api/me: trainCooldowns Pendidikan & Ekonomi 0 sebelum dilatih', cdA0.strategy?.remainingMs === 0 && cdA0.charisma?.remainingMs === 0, JSON.stringify(cdA0));
   r = await A.post('/api/train', { attr: 'edu' });
-  check('A latih Pendidikan → LV 1 (biaya 1 emas, jeda 2 mnt)', r.status === 200 && r.data.cost === 1 && r.data.level === 1 && r.data.cooldownMs === 120000, `status=${r.status} cooldownMs=${r.data.cooldownMs} ${r.data.error || ''}`);
+  check('A latih Pendidikan → LV 1 (biaya 1 emas, jeda 2 mnt −5% Pendidikan = 114000 ms)', r.status === 200 && r.data.cost === 1 && r.data.level === 1 && r.data.cooldownMs === 114000, `status=${r.status} cooldownMs=${r.data.cooldownMs} ${r.data.error || ''}`);
   r = await A.post('/api/train', { attr: 'edu' });
   check('Latih Pendidikan 2× beruntun ditolak 400 (masih jeda)', r.status === 400 && /jeda/i.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
   check('Pesan 400 menyebut sisa waktu (mnt/dtk)', /mnt|dtk/.test(r.data.error || ''), r.data.error || '');
@@ -2006,7 +2006,7 @@ async function main() {
   check('/api/me: trainCooldowns.strategy sisa > 0 dan ≤ 2 mnt', cdA.strategy?.remainingMs > 0 && cdA.strategy.remainingMs <= 120000, JSON.stringify(cdA.strategy));
   check('/api/me: trainCooldowns.charisma masih 0 (belum dilatih)', cdA.charisma?.remainingMs === 0, JSON.stringify(cdA));
   r = await A.post('/api/train', { attr: 'eco' });
-  check('Atribut lain (Ekonomi) tetap bisa dilatih saat Pendidikan jeda', r.status === 200 && r.data.level === 1 && r.data.cooldownMs === 120000, `status=${r.status} ${r.data.error || ''}`);
+  check('Atribut lain (Ekonomi) tetap bisa dilatih saat Pendidikan jeda (jeda ikut −5% Pendidikan = 114000 ms)', r.status === 200 && r.data.level === 1 && r.data.cooldownMs === 114000, `status=${r.status} ${r.data.error || ''}`);
   r = await A.post('/api/train', { attr: 'eco' });
   check('Latih Ekonomi 2× beruntun juga ditolak 400', r.status === 400 && /jeda/i.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
   r = await A.get('/api/me');
@@ -2172,9 +2172,9 @@ async function main() {
   check(`Shift sebagian: XP proporsional total ${expectXp} XP`, meL2.xp === expectXp, `xp=${meL2.xp} dbl50=${dbl50} dbl1=${dbl1}`);
   check('Shift sebagian: counter shift tetap naik (2 giliran)', meL2.shifts === 2, `shifts=${meL2.shifts}`);
   const dbL4 = new DatabaseSync(DB_PATH);
-  const chronL = dbL4.prepare('SELECT chronicle_done FROM citizens WHERE id = ?').get(meL.citizen.id).chronicle_done;
+  const chronL = dbL4.prepare('SELECT ckey FROM chronicle_done WHERE citizen_id = ?').all(meL.citizen.id).map((x) => x.ckey);
   dbL4.close();
-  check('Shift sebagian TIDAK menyelesaikan tugas Kronik shift (anti-exploit)', !JSON.parse(chronL).includes('shift'), `chronicle_done=${chronL}`);
+  check('Shift sebagian TIDAK menyelesaikan tugas Kronik shift (anti-exploit)', !chronL.includes('shift'), `chronicle_done=${JSON.stringify(chronL)}`);
 
   // --- Profil publik: M baru; J melihat profilnya.
   const meM = (await M.get('/api/me')).data;
@@ -2843,6 +2843,78 @@ async function main() {
   check('GET /api/companies: input_text Dapur (1× Gandum Mentah per unit)', dapurO?.input_text?.includes('Gandum Mentah'), `input_text=${dapurO?.input_text}`);
   const typesO = r.data.types || [];
   check('GET /api/companies: types membawa input_text tiap jenis', typesO.length === 4 && typesO.every((t) => typeof t.input_text === 'string' && t.input_text.length > 0), JSON.stringify(typesO.map((t) => t.input_text)));
+  console.log('\n[22p] Tahap 7 v4.1.0 — integrasi: pajak impor negara, pajak shift ikut event, jeda latih Pendidikan, misi/kronik relasional');
+  setDayO(1); // minggu Panen Raya — tarif normal, bukan booming
+  // --- (a) Pajak impor = tarif NEGARA PEMBELI (dulu selalu konstanta 2%).
+  dbS6.prepare('UPDATE country SET tax_import = 5 WHERE id = ?').run(nusOId);
+  const m6GoldBefore = dbS6.prepare('SELECT gold FROM citizens WHERE id = ?').get(m6Id).gold;
+  const m5GoldBefore = dbS6.prepare('SELECT gold FROM citizens WHERE id = ?').get(m5Id).gold;
+  const treasGoldBefore = dbS6.prepare('SELECT treasury FROM country WHERE id = ?').get(nusOId).treasury;
+  setInvO(m5Id, besiO, 10);
+  r = await M5.post('/api/market/sell', { scope: 'global', commodity_id: besiO, tier: 1, qty: 10, price: 10 });
+  check('M5 pasang penawaran global 10× Besi @10 emas', r.status === 200 && !!r.data.offerId, `status=${r.status} ${r.data.error || ''}`);
+  const offer7a = r.data.offerId;
+  r = await M6.post('/api/market/buy', { offer_id: offer7a, qty: 10 });
+  check('M6 beli global: total 105 emas (100 + pajak impor negara 5%)', r.status === 200 && r.data.total === 105, `status=${r.status} total=${r.data.total} ${r.data.error || ''}`);
+  check('M6 beli global: penjual terima 98 emas (100 − pajak penghasilan 2%)', r.data.sellerReceives === 98, `sellerReceives=${r.data.sellerReceives}`);
+  check('M6 beli global: saldo M6 −105, M5 +98', dbS6.prepare('SELECT gold FROM citizens WHERE id = ?').get(m6Id).gold === m6GoldBefore - 105 && dbS6.prepare('SELECT gold FROM citizens WHERE id = ?').get(m5Id).gold === m5GoldBefore + 98, `m6=${dbS6.prepare('SELECT gold FROM citizens WHERE id = ?').get(m6Id).gold} m5=${dbS6.prepare('SELECT gold FROM citizens WHERE id = ?').get(m5Id).gold}`);
+  check('M6 beli global: kas negara +5 emas pajak impor', dbS6.prepare('SELECT treasury FROM country WHERE id = ?').get(nusOId).treasury === treasGoldBefore + 5, `treasury=${dbS6.prepare('SELECT treasury FROM country WHERE id = ?').get(nusOId).treasury}`);
+  dbS6.prepare('UPDATE country SET tax_import = 2 WHERE id = ?').run(nusOId);
+  // --- (b) Pajak shift ikut event Pasar Bergairah (−1 poin), seperti pajak pasar.
+  const job7 = dbS6.prepare("INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, resource, pay_qty, level_min, tier, seats, seats_taken, region_id, description, created_at) VALUES (NULL,0,'Pekerja Uji Shift',48,'fixed','',0,1,1,10,0,?, 'uji Tahap 7', ?)").run(safeRegionO, Date.now());
+  const job7Id = Number(job7.lastInsertRowid);
+  dbS6.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(safeRegionO, freeRegionO, m2Id);
+  r = await M2.post('/api/jobs/apply', { job_id: job7Id });
+  check('M2 melamar Pekerja Uji Shift (gaji 48 USD)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  setEnergyO(m2Id, 100); setDayO(29); // booming
+  r = await M2.post('/api/jobs/shift');
+  check('Shift saat booming: pajak 0,48 (1% dari gaji 48)', r.status === 200 && r.data.tax === 0.48 && r.data.gross === 48, `status=${r.status} tax=${r.data.tax} gross=${r.data.gross} ${r.data.error || ''}`);
+  setEnergyO(m2Id, 100); setDayO(1);
+  r = await M2.post('/api/jobs/shift');
+  check('Shift di luar booming: pajak kembali 0,96 (2% dari gaji 48)', r.status === 200 && r.data.tax === 0.96 && r.data.gross === 48, `status=${r.status} tax=${r.data.tax} gross=${r.data.gross} ${r.data.error || ''}`);
+  // --- (c) Pembeli tanpa negara: pajak impor fallback 2% (konstanta), kas tidak bertambah.
+  dbS6.prepare('UPDATE citizens SET home_region_id = ?, gold = 500 WHERE id = ?').run(safeRegionO, m2Id);
+  setInvO(m5Id, besiO, 10);
+  r = await M5.post('/api/market/sell', { scope: 'global', commodity_id: besiO, tier: 1, qty: 10, price: 10 });
+  check('M5 pasang penawaran global kedua 10× Besi @10 emas', r.status === 200 && !!r.data.offerId, `status=${r.status}`);
+  r = await M2.post('/api/market/buy', { offer_id: r.data.offerId, qty: 10 });
+  check('M2 tanpa negara beli global: total 102 emas (fallback 2%)', r.status === 200 && r.data.total === 102 && dbS6.prepare('SELECT gold FROM citizens WHERE id = ?').get(m2Id).gold === 398, `status=${r.status} total=${r.data.total} ${r.data.error || ''}`);
+  check('M2 tanpa negara: kas negara TIDAK bertambah (pajak impor tanpa negara)', dbS6.prepare('SELECT treasury FROM country WHERE id = ?').get(nusOId).treasury === treasGoldBefore + 5, `treasury=${dbS6.prepare('SELECT treasury FROM country WHERE id = ?').get(nusOId).treasury}`);
+  // --- (d) Pendidikan mempercepat latihan: jeda −5% per level (maks −50%).
+  r = await M8.post('/api/train', { attr: 'edu' });
+  check('M8 latih Pendidikan → LV 1, jeda 114000 ms (2 mnt −5%)', r.status === 200 && r.data.level === 1 && r.data.cooldownMs === 114000, `status=${r.status} cooldownMs=${r.data.cooldownMs} ${r.data.error || ''}`);
+  r = await M8.post('/api/train', { attr: 'eco' });
+  check('M8 latih Ekonomi (Pendidikan LV 1): jeda ikut 114000 ms', r.status === 200 && r.data.level === 1 && r.data.cooldownMs === 114000, `status=${r.status} cooldownMs=${r.data.cooldownMs} ${r.data.error || ''}`);
+  r = await M8.get('/api/me');
+  check('/api/me M8: trainCooldowns.strategy sisa ≤ 114000 ms (bukan 120000)', (r.data.citizen.trainCooldowns?.strategy?.remainingMs || 0) > 0 && r.data.citizen.trainCooldowns.strategy.remainingMs <= 114000, JSON.stringify(r.data.citizen.trainCooldowns?.strategy));
+  // --- (e) Misi/kronik relasional: progres chat, klaim ganda ditolak.
+  for (let i = 0; i < 5; i++) {
+    dbS6.prepare('UPDATE citizens SET last_chat_at = 0 WHERE id = ?').run(m3Id);
+    r = await M3.post('/api/chat/global', { content: 'halo semua apa kabar hari ini' });
+    check(`M3 kirim pesan chat ${i + 1}/5`, r.status === 200 && !!r.data.messageId, `status=${r.status} ${r.data.error || ''}`);
+  }
+  r = await M3.get('/api/missions');
+  const chatM = (r.data.missions || []).find((m) => m.key === 'chat');
+  check('Misi chat: 5 pesan cepat hanya terhitung 1 (jeda 30 dtk, tabel relasional)', chatM?.progress === 1 && chatM?.claimed === false, JSON.stringify(chatM));
+  dbS6.prepare('UPDATE citizens SET energy_spent_today = 500 WHERE id = ?').run(m3Id);
+  r = await M3.post('/api/missions/claim', { key: 'energy' });
+  check('M3 klaim misi energi (500/500) → +10 emas', r.status === 200 && r.data.reward === 10, `status=${r.status} ${r.data.error || ''}`);
+  r = await M3.post('/api/missions/claim', { key: 'energy' });
+  check('Klaim misi yang sama 2× ditolak 400 (tabel mission_claims)', r.status === 400, `status=${r.status}`);
+  r = await M3.get('/api/missions');
+  check('GET /api/missions: misi energi tercentang sudah diklaim', (r.data.missions || []).find((m) => m.key === 'energy')?.claimed === true, JSON.stringify(r.data.missions));
+  for (const k of ['claim', 'job', 'shift', 'train', 'eat', 'map', 'market', 'country']) {
+    dbS6.prepare('INSERT OR IGNORE INTO chronicle_done (citizen_id, ckey, done_at) VALUES (?,?,?)').run(m3Id, k, Date.now());
+  }
+  r = await M3.post('/api/chronicle/claim', { chapter: 1 });
+  check('M3 klaim Kronik babak 1 (8/8 tugas) → +10 emas', r.status === 200 && r.data.reward === 10, `status=${r.status} ${r.data.error || ''}`);
+  r = await M3.post('/api/chronicle/claim', { chapter: 1 });
+  check('Klaim Kronik babak yang sama 2× ditolak 400 (tabel chronicle_claims)', r.status === 400, `status=${r.status}`);
+  r = await M3.get('/api/chronicle');
+  const ch1 = (r.data.chapters || []).find((c) => c.chapter === 1);
+  check('GET /api/chronicle: babak 1 done 8/8 + sudah diklaim', ch1?.done === 8 && ch1?.total === 8 && ch1?.claimed === true, JSON.stringify(ch1));
+  setDayO(1);
+
   dbS6.close();
 
   dbN.close();

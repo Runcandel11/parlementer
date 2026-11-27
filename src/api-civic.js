@@ -1,7 +1,7 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
-import { sql, one, run, tx, forUpdate, convoyBuildings, getParliamentOpensAt } from './db.js';
+import { sql, one, run, tx, forUpdate, convoyBuildings, getParliamentOpensAt, getWorldDay, missionValue, setMissionValue, markChronicleDone } from './db.js';
 import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl, requireCredit } from './util.js';
-import { warDamage, warDamageWithBonus, unitDamageMult, worldEventFor, MILITARY_UNITS, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR } from './game.js';
+import { warDamage, warDamageWithBonus, unitDamageMult, worldEventFor, MILITARY_UNITS, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR, IMPORT_TAX, DAY_MS, ELECTION_VOTE_MS, ELECTION_VOTE_MIN_AGE_MS, CHAT_COOLDOWN_MS, CHAT_COUNT_WINDOW_MS, CHAT_COUNT_MIN_WORDS } from './game.js';
 
 // Ruang chat publik yang selalu ada. Ruang wilayah (region_<id>) bersifat
 // dinamis — divalidasi terpisah di validateRoom (hanya wilayah sendiri).
@@ -75,6 +75,18 @@ export function getIncomeTaxRate(t, country, day = null) {
   // day = null (pemanggil lama / tes tanpa hari) = tanpa efek event.
   if (day && worldEventFor(day).key === 'booming') rate = Math.max(0, rate - 0.01);
   return rate;
+}
+// Tarif pajak impor yang berlaku untuk pembeli ini (pecahan). Warga
+// bernegara memakai tarif impor NEGARANYA (country.tax_import — bisa diubah
+// parlemen lewat UU jenis 'tax_import', 1–5%, seperti pajak penghasilan);
+// tanpa negara = IMPORT_TAX (2%, tarif default). Sebelum Tahap 7 kolom
+// tax_import tidak pernah dibaca: pasar global selalu memakai konstanta
+// IMPORT_TAX meski negara pembeli menetapkan tarif lain (data mati yang
+// juga ditampilkan di halaman Negara — angka di UI tidak berlaku di pasar).
+export function getImportTaxRate(t, country) {
+  if (!country) return IMPORT_TAX;
+  const v = Number(country.tax_import);
+  return Number.isFinite(v) ? v / 100 : IMPORT_TAX;
 }
 // Pengali upah lowongan ADMIN untuk warga negara ini. Sosialisme: ×1.1
 // (dikalikan di atas admin_pay_mult hasil UU — keduanya berlaku).
@@ -154,8 +166,8 @@ export async function warDamageBonus(t, citizenId, country) {
   if (await hasDefensePact(t, citizenId)) { mult *= DEFENSE_PACT_DAMAGE_MULT; labels.push('Pakta Pertahanan +10%'); }
   if (country && ideologyDef(country.ideology).warDamageMult > 1) { mult *= ideologyDef(country.ideology).warDamageMult; labels.push('Nasionalisme +10%'); }
   // Event dunia (Tahap 6): minggu Darurat Militer -> kerusakan +10%.
-  const w = await t.one('SELECT day FROM world WHERE id = 1');
-  if (worldEventFor(w?.day || 1).key === 'darurat') { mult *= 1.1; labels.push('Darurat Militer +10%'); }
+  const wday = await getWorldDay(t);
+  if (worldEventFor(wday).key === 'darurat') { mult *= 1.1; labels.push('Darurat Militer +10%'); }
   return { mult, labels };
 }
 
@@ -163,11 +175,7 @@ export function registerCivic(app) {
   const r = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
   async function chronicleDone(citizen, key) {
-    const done = JSON.parse(citizen.chronicle_done || '[]');
-    if (!done.includes(key)) {
-      done.push(key);
-      await run('UPDATE citizens SET chronicle_done = ? WHERE id = ?', [JSON.stringify(done), citizen.id]);
-    }
+    await markChronicleDone(citizen.id, key);
   }
   function partyTag(citizen) { return citizen.party_tag || null; }
 
@@ -292,16 +300,16 @@ export function registerCivic(app) {
       if (!upd.changes) throw Object.assign(new Error(`Mendirikan negara butuh ${COUNTRY_FORM_COST_GOLD} emas.`), { status: 400 });
       await t.run("UPDATE regions SET country_id = ?, controller = 'negara', controller_id = ? WHERE id = ?", [ins.id, ins.id, reg.id]);
       // Jadwalkan pemilu pertama negara ini.
-      const presOpens = now + PRESIDENT_ELECTION_DELAY_DAYS * 24 * 60 * 60 * 1000;
+      const presOpens = now + PRESIDENT_ELECTION_DELAY_DAYS * DAY_MS;
       await t.run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','scheduled',?,?,?,?) RETURNING id",
-        [presOpens, presOpens + 3 * 24 * 60 * 60 * 1000, ins.id, now]);
-      const parOpens = Math.max(await getParliamentOpensAt(), now + PARLIAMENT_ELECTION_DELAY_DAYS * 24 * 60 * 60 * 1000);
+        [presOpens, presOpens + ELECTION_VOTE_MS, ins.id, now]);
+      const parOpens = Math.max(await getParliamentOpensAt(), now + PARLIAMENT_ELECTION_DELAY_DAYS * DAY_MS);
       await t.run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('parliament','scheduled',?,?,?,?) RETURNING id",
-        [parOpens, parOpens + 3 * 24 * 60 * 60 * 1000, ins.id, now]);
+        [parOpens, parOpens + ELECTION_VOTE_MS, ins.id, now]);
       return ins.id;
     });
     await chronicleDone(c, 'country');
-    await notify(c.id, 'POLITIK', 'Negara baru berdiri!', `Kamu mendirikan ${cleanName} (${ide.label}, ${sys.label}) dengan ibu kota ${myRegion.name}. Pemilu presiden pertama dibuka ${new Date(now + PRESIDENT_ELECTION_DELAY_DAYS * 24 * 60 * 60 * 1000).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}.`);
+    await notify(c.id, 'POLITIK', 'Negara baru berdiri!', `Kamu mendirikan ${cleanName} (${ide.label}, ${sys.label}) dengan ibu kota ${myRegion.name}. Pemilu presiden pertama dibuka ${new Date(now + PRESIDENT_ELECTION_DELAY_DAYS * DAY_MS).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}.`);
     res.json({ ok: true, countryId });
   }));
 
@@ -331,7 +339,7 @@ export function registerCivic(app) {
       if (dup) throw Object.assign(new Error('Sudah ada usulan unifikasi yang sedang divoting untuk wilayah asalmu.'), { status: 400 });
       const j = await t.run(
         "INSERT INTO country_joins (country_id, region_id, proposer_id, yes, no, status, ends_at, created_at) VALUES (?,?,?,1,0,'voting',?,?) RETURNING id",
-        [target.id, reg.id, c.id, now + COUNTRY_JOIN_VOTE_DAYS * 24 * 60 * 60 * 1000, now]);
+        [target.id, reg.id, c.id, now + COUNTRY_JOIN_VOTE_DAYS * DAY_MS, now]);
       await t.run('INSERT INTO country_join_votes (join_id, citizen_id, vote) VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING join_id', [j.id, c.id, 'yes']);
       return j.id;
     });
@@ -444,7 +452,7 @@ export function registerCivic(app) {
     const active = await one("SELECT id FROM budgets WHERE country_id = ? AND status = 'voting' AND ends_at > ?", [country.id, Date.now()]);
     if (active) return res.status(400).json({ error: 'Sudah ada anggaran yang sedang divoting.' });
     const b = await run('INSERT INTO budgets (proposer_id, kind, amount, status, ends_at, country_id, created_at) VALUES (?,?,?,\'voting\',?,?,?) RETURNING id',
-      [req.citizen.id, kind, amt, Date.now() + BUDGET_VOTE_DAYS * 24 * 60 * 60 * 1000, country.id, Date.now()]);
+      [req.citizen.id, kind, amt, Date.now() + BUDGET_VOTE_DAYS * DAY_MS, country.id, Date.now()]);
     res.json({ ok: true, budgetId: b.id });
   }));
 
@@ -708,7 +716,7 @@ export function registerCivic(app) {
       await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
       const law = await t.run(
         'INSERT INTO laws (proposer_id, title, content, kind, value, status, ends_at, country_id, created_at) VALUES (?,?,?,?,?,\'voting\',?,?,?) RETURNING id',
-        [c.id, title, content, lawKind, lawValue, Date.now() + 7 * 24 * 60 * 60 * 1000, country.id, Date.now()]);
+        [c.id, title, content, lawKind, lawValue, Date.now() + 7 * DAY_MS, country.id, Date.now()]);
       if (free) {
         await t.run('UPDATE citizens SET laws_proposed = laws_proposed + 1 WHERE id = ?', [c.id]);
       } else {
@@ -760,7 +768,7 @@ export function registerCivic(app) {
     const active = await one("SELECT id FROM impeachments WHERE country_id = ? AND status = 'voting' AND ends_at > ?", [country.id, Date.now()]);
     if (active) return res.status(400).json({ error: 'Sudah ada pemakzulan yang sedang divoting.' });
     const imp = await run('INSERT INTO impeachments (president_id, proposer_id, status, ends_at, country_id, created_at) VALUES (?,?,\'voting\',?,?,?) RETURNING id',
-      [country.president_id, req.citizen.id, Date.now() + BUDGET_VOTE_DAYS * 24 * 60 * 60 * 1000, country.id, Date.now()]);
+      [country.president_id, req.citizen.id, Date.now() + BUDGET_VOTE_DAYS * DAY_MS, country.id, Date.now()]);
     res.json({ ok: true, impeachmentId: imp.id });
   }));
 
@@ -804,7 +812,7 @@ export function registerCivic(app) {
       const winner = e.winner_id ? await one('SELECT u.username FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.id = ?', [e.winner_id]) : null;
       out.push({ ...e, candidates: cands, myVote: myVote || null, winner: winner?.username || null });
     }
-    const canVote = req.citizen.level >= 5 && (Date.now() - req.citizen.created_at) >= 3 * 24 * 60 * 60 * 1000;
+    const canVote = req.citizen.level >= 5 && (Date.now() - req.citizen.created_at) >= ELECTION_VOTE_MIN_AGE_MS;
     res.json({ elections: out, canVote, country: countrySummary(myCountry) });
   }));
 
@@ -864,7 +872,7 @@ export function registerCivic(app) {
     if (!e) return res.status(404).json({ error: 'Pemilu yang sedang dibuka tidak ditemukan.' });
     const c = req.citizen;
     if (c.level < 5) return res.status(400).json({ error: 'Hak pilih mulai Level 5.' });
-    if (Date.now() - c.created_at < 3 * 24 * 60 * 60 * 1000) return res.status(400).json({ error: 'Warga baru bisa memilih setelah 3 hari menjadi warga.' });
+    if (Date.now() - c.created_at < ELECTION_VOTE_MIN_AGE_MS) return res.status(400).json({ error: 'Warga baru bisa memilih setelah 3 hari menjadi warga.' });
     const myCountry = await getMyCountry({ one }, c);
     if (!myCountry || e.country_id !== myCountry.id) return res.status(403).json({ error: 'Pemilu ini bukan dari negaramu.' });
     // Sistem Parlementer: pemilu presiden hanya dipilih anggota parlemen.
@@ -966,9 +974,9 @@ export function registerCivic(app) {
         [war.id, locked.id, side, damage, useAmmo, Date.now()]);
       const col = side === 'attacker' ? 'score_a' : 'score_d';
       await t.run(`UPDATE wars SET ${col} = ${col} + ? WHERE id = ?`, [damage, war.id]);
-      const m = JSON.parse(locked.missions || '{}');
-      m.energy = Math.min(500, (locked.energy_spent_today || 0) + 10);
-      await t.run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), locked.id]);
+      // (Tahap 7) Progres misi 'energy' TIDAK lagi ditulis ke JSON missions —
+      // tulis itu mati: GET/klaim misi membaca energy_spent_today, yang
+      // sudah ditambah 10 di UPDATE di atas. Kolom JSON-nya sudah dihapus.
     });
     await chronicleDone(c, 'attack');
     res.json({ ok: true, damage, bonuses: appliedBonuses });
@@ -1012,7 +1020,7 @@ export function registerCivic(app) {
   }
 
   app.get('/api/press/stats', authRequired, citizenRequired, r(async (req, res) => {
-    const since7 = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const since7 = Date.now() - 7 * DAY_MS;
     const a = await one('SELECT COUNT(*) AS articles, COALESCE(SUM(views),0) AS views, COALESCE(SUM(likes),0) AS likes, COALESCE(SUM(dislikes),0) AS dislikes FROM articles WHERE created_at > ?', [since7]);
     const j = await one('SELECT COUNT(DISTINCT author_id) AS n FROM articles WHERE created_at > ?', [since7]);
     const n = await one('SELECT COUNT(*) AS n FROM newspapers');
@@ -1031,9 +1039,9 @@ export function registerCivic(app) {
     let where = '1=1';
     const params = [];
     if (topic) { where += ' AND a.topic = ?'; params.push(topic); }
-    if (sort === 'top_day') { where += ' AND a.created_at > ?'; params.push(Date.now() - 24 * 60 * 60 * 1000); }
-    if (sort === 'top_week') { where += ' AND a.created_at > ?'; params.push(Date.now() - 7 * 24 * 60 * 60 * 1000); }
-    if (sort === 'top_month') { where += ' AND a.created_at > ?'; params.push(Date.now() - 30 * 24 * 60 * 60 * 1000); }
+    if (sort === 'top_day') { where += ' AND a.created_at > ?'; params.push(Date.now() - DAY_MS); }
+    if (sort === 'top_week') { where += ' AND a.created_at > ?'; params.push(Date.now() - 7 * DAY_MS); }
+    if (sort === 'top_month') { where += ' AND a.created_at > ?'; params.push(Date.now() - 30 * DAY_MS); }
     // Daftar artikel: JANGAN kembalikan content dan cover penuh — isi bisa
     // membawa gambar base64 (sampai ~1,3 jt karakter) dan sampul sampai
     // 500 KB; 30 artikel × itu bisa belasan MB per request. Daftar hanya
@@ -1180,7 +1188,7 @@ export function registerCivic(app) {
   }));
 
   app.get('/api/press/league', authRequired, citizenRequired, r(async (req, res) => {
-    const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const since = Date.now() - 7 * DAY_MS;
     const papers = await sql(
       `SELECT n.id, n.name, COALESCE(SUM(a.likes - a.dislikes),0) * 3 + COALESCE(SUM(a.views),0) AS score,
         COALESCE(SUM(a.likes),0) AS likes, COALESCE(SUM(a.views),0) AS views
@@ -1344,7 +1352,7 @@ export function registerCivic(app) {
     // lalu simpan pesan + update last_chat_at di dalam tx yang sama.
     const { msgId, counted } = await tx(async (t) => {
       const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
-      if (Date.now() - (locked.last_chat_at || 0) < 5000) throw Object.assign(new Error('Tunggu sebentar sebelum mengirim pesan lagi.'), { status: 400 });
+      if (Date.now() - (locked.last_chat_at || 0) < CHAT_COOLDOWN_MS) throw Object.assign(new Error('Tunggu sebentar sebelum mengirim pesan lagi.'), { status: 400 });
       let articleId = null;
       if (article_id) {
         const a = await t.one('SELECT id FROM articles WHERE id = ?', [article_id]);
@@ -1354,14 +1362,16 @@ export function registerCivic(app) {
         [room, c.id, text, articleId, Date.now()]);
       await t.run('UPDATE citizens SET last_chat_at = ?, chat_today = chat_today + 1 WHERE id = ?', [Date.now(), c.id]);
       // Misi harian: minimal 3 kata, jeda 30 detik sejak pesan terakhir yang dihitung.
+      // (Tahap 7) Progres + penanda waktu terakhir dihitung kini baris di
+      // mission_progress ('chat' / 'last_chat_counted') — bukan lagi kunci
+      // di JSON missions; dua pesan paralel tidak bisa saling menimpa.
       const words = text.split(/\s+/).filter(Boolean).length;
-      const m = JSON.parse(locked.missions || '{}');
-      const lastCounted = m.last_chat_counted || 0;
+      const lastCounted = await missionValue(t, c.id, 'last_chat_counted');
       let counted = false;
-      if (words >= 3 && Date.now() - lastCounted >= 30000) {
-        m.chat = Math.min(5, (m.chat || 0) + 1);
-        m.last_chat_counted = Date.now();
-        await t.run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), c.id]);
+      if (words >= CHAT_COUNT_MIN_WORDS && Date.now() - lastCounted >= CHAT_COUNT_WINDOW_MS) {
+        const chat = await missionValue(t, c.id, 'chat');
+        await setMissionValue(t, c.id, 'chat', Math.min(5, chat + 1));
+        await setMissionValue(t, c.id, 'last_chat_counted', Date.now());
         counted = true;
       }
       return { msgId: msg.id, counted };

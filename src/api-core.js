@@ -1,7 +1,7 @@
 // API inti Parlementer: auth (email+password), dashboard, pekerjaan, perusahaan,
 // pasar, valas, peta, inventaris, konvoi, misi, kronik, pencapaian, notifikasi, profil, toko.
 import { hashPassword, verifyPassword } from './bcrypt-pool.js';
-import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings, getParliamentOpensAt } from './db.js';
+import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings, getParliamentOpensAt, getWorldDay, missionValue, missionClaimedKeys, insertMissionClaim, chronicleDoneKeys, chronicleClaimedChapters, insertChronicleClaim, markChronicleDone } from './db.js';
 import {
   signToken, cookieOptions, COOKIE_NAME, authRequired, citizenRequired,
   loadCitizen, isValidEmail, isValidUsername, todayStr, publicId,
@@ -9,16 +9,17 @@ import {
   requireCredit, creditScoreSettled,
 } from './util.js';
 import { dbRateLimit } from './rate-limit.js';
-import { getMyCountry, getIncomeTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary, militaryPowerOf, militaryUnitsOf } from './api-civic.js';
+import { getMyCountry, getIncomeTaxRate, getImportTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary, militaryPowerOf, militaryUnitsOf } from './api-civic.js';
 import {
-  VERSION, WA_TOPUP_URL, MINT_RATE, IMPORT_TAX, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
+  VERSION, WA_TOPUP_URL, MINT_RATE, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
   xpForLevel, isDoubleXpHour, xpGainForShiftEnergy, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
-  energyCapFor, DAILY_MISSIONS, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS, REGION_COORDS,
+  energyCapFor, DAILY_MISSIONS, DAILY_CLAIM, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS, REGION_COORDS,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
-  DAILY_PRODUCTION, PRODUCTION_INPUT, productionInputText, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS,
+  DAILY_PRODUCTION, PRODUCTION_INPUT, productionInputText, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS, convoySlotsFor,
   ENERGY_DRINK_NAME, ENERGY_DRINK_PRICE_GOLD, ENERGY_DRINK_ENERGY,
   PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
   MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, tradeReputation, worldEventFor,
+  DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
 } from './game.js';
 
 export function registerCore(app) {
@@ -137,20 +138,13 @@ export function registerCore(app) {
     else await db.run('UPDATE inventory SET qty = qty - ? WHERE id = ?', [qty, row.id]);
     return true;
   }
-  async function missionProgress(citizen) {
-    return JSON.parse(citizen.missions || '{}');
-  }
-  async function setMission(citizen, key, value) {
-    const m = await missionProgress(citizen);
-    m[key] = value;
-    await run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), citizen.id]);
-  }
+  // ---------- MISI HARIAN + KRONIK (Tahap 7: tabel relasional) ----------
+  // Progres misi dibaca dari mission_progress (hanya 'chat' yang disimpan —
+  // 'energy'/'bread' dibaca dari kolom citizens energy_spent_today/
+  // bread_today). chronicleDone mendelegasikan ke markChronicleDone
+  // (db.js) yang mengunci baris warga di tx sendiri.
   async function chronicleDone(citizen, key) {
-    const done = JSON.parse(citizen.chronicle_done || '[]');
-    if (!done.includes(key)) {
-      done.push(key);
-      await run('UPDATE citizens SET chronicle_done = ? WHERE id = ?', [JSON.stringify(done), citizen.id]);
-    }
+    await markChronicleDone(citizen.id, key);
   }
 
   // ---------- EKONOMI TAHAP 4: kas negara, batas harga, tanda pasar ----------
@@ -234,9 +228,9 @@ export function registerCore(app) {
   // Premium diperpanjang dari premium_until yang masih aktif, atau dari
   // sekarang bila tidak aktif. Bonus dicatat di referral_pending.
   const REFERRER_GOLD = 200;
-  const REFERRER_PREMIUM_MS = 2 * 24 * 60 * 60 * 1000;
+  const REFERRER_PREMIUM_MS = 2 * DAY_MS;
   const NEWCOMER_GOLD = 100;
-  const NEWCOMER_PREMIUM_MS = 1 * 24 * 60 * 60 * 1000;
+  const NEWCOMER_PREMIUM_MS = 1 * DAY_MS;
   const MAX_PASSWORD_BYTES = 72; // bcrypt memotong password di atas 72 byte
 
   // Registrasi dibatasi 20/IP/24 jam (anti multi-akun massal, DB-backed).
@@ -245,7 +239,7 @@ export function registerCore(app) {
   const registerRateLimit = dbRateLimit({
     keyFn: (req) => 'register:' + (req.ip || 'unknown'),
     max: 20,
-    windowMs: 24 * 60 * 60 * 1000,
+    windowMs: DAY_MS,
     message: 'Terlalu banyak pendaftaran dari alamat ini. Coba lagi besok.',
   });
 
@@ -444,13 +438,14 @@ export function registerCore(app) {
       if (worldEvent.key === 'wabah') cost += 2;
       trainCosts[key] = cost;
     }
-    // Jeda latihan per atribut (2 menit × level): tombol LATIH di
-    // dashboard memakai ini supaya tidak perlu request tambahan. Level
-    // yang dipakai = level saat ini — sama dengan level baru setelah
-    // latih terakhir, karena atribut hanya naik lewat latihan.
+    // Jeda latihan per atribut (2 menit × level, dikurangi 5% per level
+    // Pendidikan, maks −50% — Tahap 7): tombol LATIH di dashboard memakai
+    // ini supaya tidak perlu request tambahan. Level yang dipakai = level
+    // saat ini — sama dengan level baru setelah latih terakhir, karena
+    // atribut hanya naik lewat latihan.
     const trainCooldowns = {};
     for (const [key, col, trainCol] of [['strength', 'attr_str', 'train_str_at'], ['strategy', 'attr_edu', 'train_edu_at'], ['charisma', 'attr_eco', 'train_eco_at']]) {
-      const cdMs = trainCooldownMs(c[col]);
+      const cdMs = trainCooldownMs(c[col], c.attr_edu);
       const remainingMs = Math.max(0, (c[trainCol] || 0) + cdMs - Date.now());
       trainCooldowns[key] = { remainingMs, cooldownMs: cdMs, availableAt: remainingMs > 0 ? (c[trainCol] || 0) + cdMs : null };
     }
@@ -515,13 +510,13 @@ export function registerCore(app) {
       const budgetBonus = budgetActive(country) === 'claim' ? 2 : 0;
       const ideologyBonus = ideologyDef(country?.ideology).claimBonus;
       const bonus = Math.max(budgetBonus, ideologyBonus);
-      const upd = await t.run('UPDATE citizens SET gold = gold + ?, usd = usd + 50, last_claim_date = ? WHERE id = ? AND last_claim_date <> ?', [5 + bonus, today, req.citizen.id, today]);
+      const upd = await t.run('UPDATE citizens SET gold = gold + ?, usd = usd + ?, last_claim_date = ? WHERE id = ? AND last_claim_date <> ?', [DAILY_CLAIM.gold + bonus, DAILY_CLAIM.usd, today, req.citizen.id, today]);
       if (!upd.changes) throw Object.assign(new Error('Pasokan hari ini sudah diambil. Kembali besok.'), { status: 400 });
       return { row, bonus };
     });
-    await addXp(locked.row, 40);
+    await addXp(locked.row, DAILY_CLAIM.xp);
     await chronicleDone(locked.row, 'claim');
-    res.json({ ok: true, reward: { gold: 5 + locked.bonus, usd: 50, xp: 40 }, budgetBonus: locked.bonus > 0 });
+    res.json({ ok: true, reward: { gold: DAILY_CLAIM.gold + locked.bonus, usd: DAILY_CLAIM.usd, xp: DAILY_CLAIM.xp }, budgetBonus: locked.bonus > 0 });
   }));
 
   app.post('/api/train', authRequired, citizenRequired, r(async (req, res) => {
@@ -541,7 +536,7 @@ export function registerCore(app) {
       // baris (FOR UPDATE) membuat dua request paralel berurutan — yang
       // kedua membaca train_*_at yang baru ditulis yang pertama, lalu
       // ditolak 400.
-      const cdMs = trainCooldownMs(row[col]);
+      const cdMs = trainCooldownMs(row[col], row.attr_edu);
       const remainingMs = (row[trainCol] || 0) + cdMs - now;
       if (remainingMs > 0) throw Object.assign(new Error(`Latihan ${attrLabel} masih jeda. Coba lagi dalam ${formatCooldownMs(remainingMs)}.`), { status: 400 });
       // Bonus konvoi (Tahap 3, BUG-7): Sekolah Keliling aktif -> latihan
@@ -555,8 +550,8 @@ export function registerCore(app) {
       const country = await getMyCountry(t, row);
       if (budgetActive(country) === 'train') cost = Math.max(1, Math.round(cost * 0.9));
       // Event dunia (Tahap 6): Wabah Melanda -> biaya latihan +2 emas.
-      const w = await t.one('SELECT day FROM world WHERE id = 1');
-      if (worldEventFor(w?.day || 1).key === 'wabah') cost += 2;
+      const wday = await getWorldDay(t);
+      if (worldEventFor(wday).key === 'wabah') cost += 2;
       const upd = await t.run(`UPDATE citizens SET gold = gold - ?, ${col} = ${col} + 1, ${trainCol} = ? WHERE id = ? AND gold >= ?`, [cost, now, req.citizen.id, cost]);
       if (!upd.changes) throw Object.assign(new Error(`Butuh ${cost} emas untuk latihan ini.`), { status: 400 });
       return { row, cost };
@@ -564,7 +559,10 @@ export function registerCore(app) {
     await addXp(done.row, 20);
     await chronicleDone(done.row, 'train');
     const newLevel = done.row[col] + 1;
-    const cooldownMs = trainCooldownMs(newLevel);
+    // Jeda setelah latihan memakai Pendidikan SETELAH latihan ini (bila
+    // yang dilatih adalah Pendidikan, level barunya yang berlaku).
+    const eduAfter = attr === 'edu' ? done.row.attr_edu + 1 : done.row.attr_edu;
+    const cooldownMs = trainCooldownMs(newLevel, eduAfter);
     res.json({ ok: true, cost: done.cost, level: newLevel, cooldownMs, availableAt: now + cooldownMs });
   }));
 
@@ -587,8 +585,9 @@ export function registerCore(app) {
       if (!upd.changes) throw Object.assign(new Error('Jatah roti harian (10) sudah habis.'), { status: 400 });
       return { energy, gained: gain, locked };
     });
-    const m = await missionProgress(result.locked);
-    await setMission(result.locked, 'bread', Math.min(10, (m.bread || 0) + 1));
+    // (Tahap 7) Tulis misi 'bread' ke JSON dihapus — tulis itu mati: progres
+    // roti dibaca dari bread_today (sudah +1 di UPDATE di atas). Kolom
+    // JSON-nya sudah dihapus.
     await chronicleDone(result.locked, 'eat');
     res.json({ ok: true, energy: result.energy, gained: result.gained });
   }));
@@ -642,12 +641,14 @@ export function registerCore(app) {
   // ---------- MISI HARIAN ----------
   app.get('/api/missions', authRequired, citizenRequired, r(async (req, res) => {
     const c = req.citizen;
-    const m = await missionProgress(c);
-    const claimed = m.claimed || [];
+    // (Tahap 7) Progres 'chat' + daftar klaim dibaca dari tabel relasional;
+    // 'energy'/'bread' dibaca dari kolom citizens (sumber kebenarannya).
+    const chat = await missionValue(null, c.id, 'chat');
+    const claimed = await missionClaimedKeys(null, c.id);
     res.json({
       missions: DAILY_MISSIONS.map((d) => ({
         ...d,
-        progress: d.key === 'energy' ? (c.energy_spent_today || 0) : d.key === 'bread' ? (c.bread_today || 0) : (m.chat || 0),
+        progress: d.key === 'energy' ? (c.energy_spent_today || 0) : d.key === 'bread' ? (c.bread_today || 0) : chat,
         claimed: claimed.includes(d.key),
       })),
     });
@@ -660,14 +661,13 @@ export function registerCore(app) {
     // Atomik: kunci baris warga, baca progres segar, klaim sekali saja.
     await tx(async (t) => {
       const c = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
-      const m = JSON.parse(c.missions || '{}');
-      const progress = key === 'energy' ? (c.energy_spent_today || 0) : key === 'bread' ? (c.bread_today || 0) : (m.chat || 0);
+      const chat = await missionValue(t, c.id, 'chat');
+      const progress = key === 'energy' ? (c.energy_spent_today || 0) : key === 'bread' ? (c.bread_today || 0) : chat;
       if (progress < d.target) throw Object.assign(new Error('Misi belum selesai.'), { status: 400 });
-      const claimed = m.claimed || [];
+      const claimed = await missionClaimedKeys(t, c.id);
       if (claimed.includes(key)) throw Object.assign(new Error('Hadiah misi ini sudah diklaim.'), { status: 400 });
-      claimed.push(key);
-      m.claimed = claimed;
-      await t.run('UPDATE citizens SET gold = gold + ?, missions = ? WHERE id = ?', [d.reward, JSON.stringify(m), c.id]);
+      await insertMissionClaim(t, c.id, key);
+      await t.run('UPDATE citizens SET gold = gold + ? WHERE id = ?', [d.reward, c.id]);
     });
     res.json({ ok: true, reward: d.reward });
   }));
@@ -675,8 +675,8 @@ export function registerCore(app) {
   // ---------- KRONIK ----------
   app.get('/api/chronicle', authRequired, citizenRequired, r(async (req, res) => {
     const c = req.citizen;
-    const done = JSON.parse(c.chronicle_done || '[]');
-    const claimed = JSON.parse(c.chronicle_claimed || '[]');
+    const done = await chronicleDoneKeys(null, c.id);
+    const claimed = await chronicleClaimedChapters(null, c.id);
     res.json({
       chapters: CHRONICLE.map((ch) => ({
         ...ch,
@@ -695,12 +695,12 @@ export function registerCore(app) {
     // Atomik: kunci baris warga, baca done/claimed segar, klaim sekali saja.
     await tx(async (t) => {
       const c = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
-      const done = JSON.parse(c.chronicle_done || '[]');
-      const claimed = JSON.parse(c.chronicle_claimed || '[]');
+      const done = await chronicleDoneKeys(t, c.id);
+      const claimed = await chronicleClaimedChapters(t, c.id);
       if (!ch.tasks.every((t2) => done.includes(t2.key))) throw Object.assign(new Error('Masih ada tugas yang belum selesai di babak ini.'), { status: 400 });
       if (claimed.includes(ch.chapter)) throw Object.assign(new Error('Hadiah babak ini sudah diklaim.'), { status: 400 });
-      claimed.push(ch.chapter);
-      await t.run('UPDATE citizens SET gold = gold + ?, chronicle_claimed = ? WHERE id = ?', [ch.reward, JSON.stringify(claimed), c.id]);
+      await insertChronicleClaim(t, c.id, ch.chapter);
+      await t.run('UPDATE citizens SET gold = gold + ? WHERE id = ?', [ch.reward, c.id]);
     });
     res.json({ ok: true, reward: ch.reward });
   }));
@@ -975,7 +975,7 @@ export function registerCore(app) {
     // shift (POST /api/jobs/shift) memakai angka yang sama.
     const myCountry = await getMyCountry({ one }, req.citizen);
     const adminPayMult = getAdminPayMult({ one }, myCountry);
-    const wday = (await one('SELECT day FROM world WHERE id = 1'))?.day || 1;
+    const wday = await getWorldDay();
     const worldEvent = worldEventFor(wday);
     const eventMult = worldEvent.key === 'panen' ? 1.2 : 1;
     const jobs = rows.map((j) => j.salary_type === 'goods'
@@ -1028,12 +1028,15 @@ export function registerCore(app) {
     // ADMIN dibayar bahan mentah × pengali UU (tanpa pajak). Tarif/pengali
     // mengikuti NEGARA pekerja (tanpa negara = pajak 0%, pengali ×1).
     const myCountry = await getMyCountry({ one }, c);
-    const taxRate = getIncomeTaxRate({ one }, myCountry);
-    const adminPayMult = getAdminPayMult({ one }, myCountry);
     // Event dunia minggu ini (Tahap 6): Panen Raya -> upah bahan ADMIN
     // +20%; Festival Rakyat -> XP shift +50%. Dibaca sekali di awal
     // handler supaya ketiga cabang gaji memakai event yang sama.
-    const wday = (await one('SELECT day FROM world WHERE id = 1'))?.day || 1;
+    // (Tahap 7) Hari dunia dibaca SEBELUM tarif pajak — Pasar Bergairah
+    // (−1 poin) berlaku untuk pajak gaji juga, bukan hanya pajak pasar.
+    // Sebelumnya taxRate dihitung tanpa `day`, jadi gaji tidak ikut diskon.
+    const wday = (await getWorldDay());
+    const taxRate = getIncomeTaxRate({ one }, myCountry, wday);
+    const adminPayMult = getAdminPayMult({ one }, myCountry);
     const worldEvent = worldEventFor(wday);
     // SHIFT FLEKSIBEL (permintaan pemain LIO, 27 Nov 2026): giliran memakai
     // energi yang ADA sampai 100 — 50 energi pun bisa kerja. Hadiah
@@ -1049,9 +1052,9 @@ export function registerCore(app) {
       const used = Math.min(energy, 100);
       const upd = await t.run('UPDATE citizens SET energy = energy - ?, energy_spent_today = energy_spent_today + ?, fatigue = fatigue + ?, shifts = shifts + 1 WHERE id = ? AND energy >= ?', [used, used, used, c.id, used]);
       if (!upd.changes) throw Object.assign(new Error(`Energi tidak cukup (${energy}). Makan roti dulu.`), { status: 400 });
-      const m = JSON.parse(locked.missions || '{}');
-      m.energy = Math.min(500, (locked.energy_spent_today || 0) + used);
-      await t.run('UPDATE citizens SET missions = ? WHERE id = ?', [JSON.stringify(m), c.id]);
+      // (Tahap 7) Tulis misi 'energy' ke JSON dihapus — tulis itu mati:
+      // progres energi dibaca dari energy_spent_today (sudah +used di
+      // UPDATE di atas). Kolom JSON-nya sudah dihapus.
       return { used, fraction: used / 100, full: used === 100, fatigue: locked.fatigue, eco: locked.attr_eco };
     }
     // XP PROPORSIONAL (tiket #22 LIO, v3.1.0): tiap shift memberi XP
@@ -1124,7 +1127,7 @@ export function registerCore(app) {
         if (affordable <= 0) {
           units = 0; credit = total; shortage = true;
           const now = Date.now();
-          if (!co.bonus_warned_at || now - co.bonus_warned_at > 24 * 60 * 60 * 1000) {
+          if (!co.bonus_warned_at || now - co.bonus_warned_at > DAY_MS) {
             await t.run('UPDATE companies SET bonus_warned_at = ? WHERE id = ?', [now, co.id]);
             await notify(co.owner_id, 'EKONOMI', 'Bonus shift tertunda',
               `${co.name} tidak mendapat bonus shift: butuh ${shortageNeed} per unit ${product} (punya ${stocks.map((s) => `${s.have}× ${s.input.commodity}`).join(', ')}).`, t);
@@ -1314,7 +1317,7 @@ export function registerCore(app) {
   app.get('/api/market', authRequired, citizenRequired, r(async (req, res) => {
     const scope = req.query.scope === 'global' ? 'global' : 'local';
     const coms = await sql('SELECT * FROM commodities ORDER BY name');
-    const since = Date.now() - 24 * 60 * 60 * 1000;
+    const since = Date.now() - DAY_MS;
     const stats = await one(
       `SELECT COUNT(*) AS offers FROM market_offers WHERE scope = ?`,
       [scope]);
@@ -1355,7 +1358,7 @@ export function registerCore(app) {
       `SELECT o.*, c.name AS commodity_name FROM market_buy_orders o JOIN commodities c ON c.id = o.commodity_id
        WHERE o.buyer_id = ? AND o.scope = ? ORDER BY o.created_at DESC`,
       [req.citizen.id, scope]);
-    const wday = (await one('SELECT day FROM world WHERE id = 1'))?.day || 1;
+    const wday = await getWorldDay();
     res.json({
       scope, commodities: coms.map((c) => ({ ...c, best: bestMap[c.id]?.best ?? null, offers: bestMap[c.id]?.n ?? 0 })),
       stats: { offers: Number(stats.offers), tx: Number(txStats.tx), units: Number(txStats.units), turnover: Number(txStats.turnover) },
@@ -1417,16 +1420,20 @@ export function registerCore(app) {
       const buyer = buyerId === firstId ? firstRow : secondRow;
       const seller = sellerId === firstId ? firstRow : secondRow;
       const currency = offer.scope === 'global' ? 'gold' : 'usd';
-      const unitPrice = offer.price * (offer.scope === 'global' ? (1 + IMPORT_TAX) : 1);
+      const sellerCountry = await getMyCountry(t, seller);
+      const buyerCountry = await getMyCountry(t, buyer);
+      // (Tahap 7) Pajak impor = tarif NEGARA PEMBELI (getImportTaxRate) —
+      // sebelumnya selalu konstanta IMPORT_TAX 2% meski negaranya menetapkan
+      // tarif lain di kolom tax_import (data mati). Tanpa negara = 2%.
+      const importRate = offer.scope === 'global' ? getImportTaxRate(t, buyerCountry) : 0;
+      const unitPrice = offer.price * (1 + importRate);
       const total = unitPrice * q;
       // Tarif pajak penghasilan yang berlaku (Tahap 5 — dari UU yang
       // disahkan). Tarif PENJUAL yang berlaku (pajak dipotong dari hasil
       // jualnya). Perjanjian dagang aktif antara organisasi pembeli &
       // penjual memotong pajak setengah.
-      const sellerCountry = await getMyCountry(t, seller);
-      const buyerCountry = await getMyCountry(t, buyer);
       // Event dunia (Tahap 6): Pasar Bergairah -> pajak −1 poin.
-      const wday = (await t.one('SELECT day FROM world WHERE id = 1'))?.day || 1;
+      const wday = await getWorldDay(t);
       let taxRate = getIncomeTaxRate(t, sellerCountry, wday);
       const pactDiscount = await hasTradePact(t, buyerId, sellerId);
       if (pactDiscount) taxRate *= TRADE_PACT_TAX_MULT;
@@ -1436,16 +1443,16 @@ export function registerCore(app) {
       await t.run(`UPDATE citizens SET ${currency} = ${currency} + ? WHERE id = ?`, [sellerReceives, seller.id]);
       // Tahap 4 (BUG-8): pajak masuk kas negara, bukan menguap.
       // Lokal (USD): pajak dari harga jual -> kas negara PENJUAL.
-      // Global (emas): pajak penjual -> kas negara penjual; 2% pajak impor
-      // yang dibayar pembeli -> kas negara PEMBELI. Tanpa negara di salah
-      // satu sisi, bagian itu tidak masuk kas mana pun.
+      // Global (emas): pajak penjual -> kas negara penjual; pajak impor
+      // (tarif negara pembeli) yang dibayar pembeli -> kas negara PEMBELI.
+      // Tanpa negara di salah satu sisi, bagian itu tidak masuk kas mana pun.
       // Tahap 6: wilayah penjual yang dikuasai pemberontak -> pajak penjual
       // mengalir ke panglima perang (paySellerTax), bukan ke kas negara.
       const gross = offer.price * q;
       if (offer.scope === 'global') {
         await paySellerTax(t, 'gold', gross * taxRate,
           `Pajak penjualan ${q} unit (global)`, seller, sellerCountry);
-        await recordTreasury(t, 'gold', gross * IMPORT_TAX,
+        await recordTreasury(t, 'gold', gross * importRate,
           `Pajak impor ${q} unit (global)`, buyerCountry?.id || null);
       } else {
         await paySellerTax(t, 'usd', gross * taxRate,
@@ -1598,7 +1605,7 @@ export function registerCore(app) {
       // PENJUAL yang berlaku; pajak masuk kas negara penjual.
       const sellerCountry = await getMyCountry(t, seller);
       // Event dunia (Tahap 6): Pasar Bergairah -> pajak −1 poin.
-      const wday = (await t.one('SELECT day FROM world WHERE id = 1'))?.day || 1;
+      const wday = await getWorldDay(t);
       let taxRate = getIncomeTaxRate(t, sellerCountry, wday);
       if (await hasTradePact(t, buyerId, sellerId)) taxRate *= TRADE_PACT_TAX_MULT;
       const sellerReceives = gross * (1 - taxRate);
@@ -1691,7 +1698,7 @@ export function registerCore(app) {
        WHERE o.direction = 'buy' AND o.expires_at > ? ORDER BY o.price DESC LIMIT 30`, [Date.now()]);
     const mine = await sql('SELECT * FROM fx_offers WHERE citizen_id = ? ORDER BY created_at DESC', [req.citizen.id]);
     const history = await sql('SELECT price, volume, created_at FROM fx_history ORDER BY created_at DESC LIMIT 60');
-    const since = Date.now() - 24 * 60 * 60 * 1000;
+    const since = Date.now() - DAY_MS;
     const stats = await one('SELECT COUNT(*) AS tx, COALESCE(SUM(volume),0) AS volume FROM fx_history WHERE created_at > ?', [since]);
     res.json({
       mint: MINT_RATE,
@@ -1737,7 +1744,7 @@ export function registerCore(app) {
         if (!upd.changes) throw Object.assign(new Error('Rupiah tidak cukup untuk penawaran beli ini.'), { status: 400 });
       }
       const o = await t.run('INSERT INTO fx_offers (citizen_id, direction, price, qty_gold, expires_at, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
-        [req.citizen.id, direction, p, q, Date.now() + 72 * 60 * 60 * 1000, Date.now()]);
+        [req.citizen.id, direction, p, q, Date.now() + FX_OFFER_TTL_MS, Date.now()]);
       return o.id;
     });
     await chronicleDone(req.citizen, 'fx');
@@ -1813,7 +1820,7 @@ export function registerCore(app) {
     // Event dunia (Tahap 6): Badai Besar -> semua perjalanan +5 menit.
     const myRegion = await one('SELECT name FROM regions WHERE id = ?', [req.citizen.region_id]);
     const myCountry = await getMyCountry({ one }, req.citizen);
-    const wday = (await one('SELECT day FROM world WHERE id = 1'))?.day || 1;
+    const wday = await getWorldDay();
     const worldEvent = worldEventFor(wday);
     const extra = worldEvent.key === 'badai' ? 5 : 0;
     const regions = rows.map((r) => ({ ...r, coords: REGION_COORDS[r.name] || null, travelMinutes: r.id === req.citizen.region_id ? 0 : travelMinutesFor(myRegion?.name, r.name) + extra }));
@@ -1851,7 +1858,7 @@ export function registerCore(app) {
     const regionPower = militaryPowerFor(milRows.map((x) => ({ type: x.unit_type, qty: x.qty })));
     // Event dunia (Tahap 6): Badai Besar -> perjalanan +5 menit;
     // Pasar Bergairah -> pajak −1 poin (lewat getIncomeTaxRate).
-    const wday = (await one('SELECT day FROM world WHERE id = 1'))?.day || 1;
+    const wday = await getWorldDay();
     const worldEvent = worldEventFor(wday);
     const travelExtra = worldEvent.key === 'badai' ? 5 : 0;
     res.json({ region: reg, war, mySupport: !!mySupport, mine: req.citizen.region_id === reg.id, home: req.citizen.home_region_id === reg.id, travelTickets: getTravelTickets({ one }, myCountry), travelMinutes: reg.id === req.citizen.region_id ? 0 : travelMinutesFor(myRegion?.name, reg.name) + travelExtra, taxIncome: Math.round(getIncomeTaxRate({ one }, regionCountry, wday) * 100 * 100) / 100, country: countrySummary(regionCountry), demographics: { total: Number(demo.total), pemula: Number(demo.pemula), aktif: Number(demo.aktif), veteran: Number(demo.veteran), avgLevel: Number(demo.avgLevel) }, regionPower, worldEvent });
@@ -1872,7 +1879,7 @@ export function registerCore(app) {
     const ticketsNeeded = getTravelTickets({ one }, await getMyCountry({ one }, c));
     const from = await one('SELECT name FROM regions WHERE id = ?', [c.region_id]);
     // Event dunia (Tahap 6): Badai Besar -> perjalanan +5 menit.
-    const wday = (await one('SELECT day FROM world WHERE id = 1'))?.day || 1;
+    const wday = await getWorldDay();
     const minutes = travelMinutesFor(from?.name, target.name) + (worldEventFor(wday).key === 'badai' ? 5 : 0);
     const arrivesAt = Date.now() + minutes * 60 * 1000;
     // Atomik: kunci baris warga, pakai tiket + catat perjalanan di dalam tx.
@@ -1916,7 +1923,7 @@ export function registerCore(app) {
     if (c.region_id !== target.id) return res.status(400).json({ error: `Kamu harus berada di ${target.name} dulu untuk pindah kewarganegaraan ke sana. Bepergian ke sana dulu.` });
     if (c.home_region_id === target.id) return res.status(400).json({ error: `${target.name} sudah menjadi wilayah kewarganegaraanmu.` });
     if (c.home_changed_at && Date.now() - c.home_changed_at < MOVE_COOLDOWN_MS) {
-      const days = Math.ceil((c.home_changed_at + MOVE_COOLDOWN_MS - Date.now()) / (24 * 60 * 60 * 1000));
+      const days = Math.ceil((c.home_changed_at + MOVE_COOLDOWN_MS - Date.now()) / (DAY_MS));
       return res.status(400).json({ error: `Pindah kewarganegaraan bisa dilakukan lagi dalam ${days} hari.` });
     }
     // UPDATE bersyarat = penjaga race: bila perjalanan dimulai bersamaan
@@ -1941,7 +1948,7 @@ export function registerCore(app) {
       const c = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
       const existing = await t.one('SELECT * FROM war_support WHERE region_id = ? AND citizen_id = ?', [region_id, c.id]);
       if (existing) throw Object.assign(new Error('Kamu sudah mendukung pemberontakan di wilayah ini.'), { status: 400 });
-      const cost = reg.name === 'Jakarta' ? 100 : 50; // ibu kota lebih mahal
+      const cost = reg.name === REBEL_CAPITAL_NAME ? REBEL_COST_CAPITAL : REBEL_COST; // ibu kota lebih mahal
       const active = await t.one("SELECT * FROM wars WHERE region_id = ? AND status = 'active'", [region_id]);
       if (active) throw Object.assign(new Error('Sudah ada perang aktif di wilayah ini.'), { status: 400 });
       const upd = await t.run('UPDATE citizens SET gold = gold - ? WHERE id = ? AND gold >= ?', [cost, c.id, cost]);
@@ -1962,7 +1969,7 @@ export function registerCore(app) {
         const defenderLabel = warlord?.username || ownerCountry?.name || `Pembela ${reg.name}`;
         await t.run(
           `INSERT INTO wars (name, region_id, attacker_label, defender_label, ends_at, created_at) VALUES (?,?,?,?,?,?) RETURNING id`,
-          [`Pemberontakan ${reg.name}`, region_id, `Pemberontak ${reg.name}`, defenderLabel, Date.now() + 24 * 60 * 60 * 1000, Date.now()]);
+          [`Pemberontakan ${reg.name}`, region_id, `Pemberontak ${reg.name}`, defenderLabel, Date.now() + WAR_DURATION_MS, Date.now()]);
         await t.run('DELETE FROM war_support WHERE region_id = ?', [region_id]);
         warStarted = true;
       }
@@ -2018,7 +2025,7 @@ export function registerCore(app) {
       }
       const slot = existing.length;
       const cv = await t.run('INSERT INTO convoys (citizen_id, slot, building, region_id, expires_at, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
-        [c.id, slot, building, c.region_id, Date.now() + 7 * 24 * 60 * 60 * 1000, Date.now()]);
+        [c.id, slot, building, c.region_id, Date.now() + 7 * DAY_MS, Date.now()]);
       return cv.id;
     });
     res.json({ ok: true, convoyId });

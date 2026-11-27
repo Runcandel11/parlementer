@@ -2,7 +2,7 @@
 // Dipanggil otomatis saat ada request (cek tanggal) + interval 10 menit.
 // Aman di Render free (tanpa cron eksternal): tick jalan saat ada yang membuka game.
 import { sql, one, run, getParliamentOpensAt } from './db.js';
-import { DAILY_PRODUCTION, PRODUCTION_INPUT, MILITARY_UNITS, worldEventFor, worldEventEndsDay, RETENTION, productionWithBonus, BUDGET_KINDS, BUDGET_DURATION_MS, lawEffectText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, systemDef, COUNTRY_JOIN_MIN_YES } from './game.js';
+import { DAILY_PRODUCTION, PRODUCTION_INPUT, MILITARY_UNITS, worldEventFor, worldEventEndsDay, RETENTION, productionWithBonus, BUDGET_KINDS, BUDGET_DURATION_MS, lawEffectText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, systemDef, COUNTRY_JOIN_MIN_YES, DAY_MS, ELECTION_VOTE_MS, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_CYCLE_DAYS } from './game.js';
 
 function todayStr(d = new Date()) { return d.toISOString().slice(0, 10); }
 
@@ -23,15 +23,15 @@ export async function ensureElections() {
     const pres = await one("SELECT * FROM elections WHERE country_id = ? AND type = 'president' AND status IN ('scheduled','open') ORDER BY opens_at ASC", [country.id]);
     const needsPresident = systemDef(country.system).autoPresidentElection || !country.president_id;
     if (!pres && needsPresident) {
-      const opens = now + 7 * 24 * 60 * 60 * 1000;
+      const opens = now + PRESIDENT_ELECTION_DELAY_DAYS * DAY_MS;
       await run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','scheduled',?,?,?,?) RETURNING id",
-        [opens, opens + 3 * 24 * 60 * 60 * 1000, country.id, now]);
+        [opens, opens + ELECTION_VOTE_MS, country.id, now]);
     }
     const parl = await one("SELECT * FROM elections WHERE country_id = ? AND type = 'parliament' AND status IN ('scheduled','open') ORDER BY opens_at ASC", [country.id]);
     if (!parl) {
-      const opens = Math.max(parOpensAt, now + 30 * 24 * 60 * 60 * 1000);
+      const opens = Math.max(parOpensAt, now + PARLIAMENT_ELECTION_CYCLE_DAYS * DAY_MS);
       await run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('parliament','scheduled',?,?,?,?) RETURNING id",
-        [opens, opens + 3 * 24 * 60 * 60 * 1000, country.id, now]);
+        [opens, opens + ELECTION_VOTE_MS, country.id, now]);
     }
   }
 }
@@ -55,6 +55,12 @@ async function applyLawEffect(law) {
   if (!law.country_id) { await run('UPDATE laws SET effect_applied = 1 WHERE id = ?', [law.id]); return; }
   if (kind === 'tax_income') {
     await run('UPDATE country SET tax_income = ? WHERE id = ?', [Number(law.value), law.country_id]);
+  } else if (kind === 'tax_import') {
+    // (Tahap 7) UU pajak impor: tarif impor negara berubah 1–5%. Sebelumnya
+    // jenis UU ini tidak ada — kolom tax_import tidak bisa diubah dan pasar
+    // global mengabaikannya (selalu 2%). Sekarang tarifnya benar-benar
+    // berlaku lewat getImportTaxRate.
+    await run('UPDATE country SET tax_import = ? WHERE id = ?', [Number(law.value), law.country_id]);
   } else if (kind === 'admin_pay') {
     await run('UPDATE country SET admin_pay_mult = ? WHERE id = ?', [Number(law.value) / 100, law.country_id]);
   } else if (kind === 'travel') {
@@ -93,8 +99,13 @@ export async function runDailyTick() {
       + CASE WHEN EXISTS (SELECT 1 FROM convoys WHERE citizen_id = citizens.id AND building = 'health' AND expires_at > ?) THEN 10 ELSE 0 END,
     energy_updated_at = ?,
     bread_today = 0, energy_spent_today = 0,
-    chat_today = 0, fatigue = CASE WHEN fatigue > 2000 THEN fatigue - 2000 ELSE 0 END, missions = '{}'`,
+    chat_today = 0, fatigue = CASE WHEN fatigue > 2000 THEN fatigue - 2000 ELSE 0 END`,
     [now, now, now]);
+  // (Tahap 7) Reset misi harian: dulu `missions = '{}'` di UPDATE di atas
+  // (kolom JSON sudah dihapus) — sekarang hapus baris progres + klaim misi
+  // dari tabel relasional. Kronik TIDAK direset (progres tutorial permanen).
+  await run('DELETE FROM mission_progress');
+  await run('DELETE FROM mission_claims');
 
   // 2) Produksi perusahaan -> inventaris pemilik.
   const industryOwners = new Set((await sql(

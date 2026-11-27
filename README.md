@@ -12,8 +12,9 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
 - **100% tanpa bot.** Tidak ada nama random, warga/penjual/jurnalis/partai/pejuang
   palsu. Semua daftar mulai KOSONG (pasar 0 penawaran, 0 partai, 0 artikel,
   0 perang) dan hanya terisi oleh aksi pemain asli.
-- Satu-satunya pengecualian: **6 lowongan resmi ADMIN** di Pekerjaan sebagai
-  modal awal pemain baru. **Lowongan ADMIN dibayar BAHAN MENTAH, bukan uang**
+- Satu-satunya pengecualian: **18 lowongan resmi ADMIN** (satu per wilayah,
+  Kepulauan Riau 2) di Pekerjaan sebagai modal awal pemain baru.
+  **Lowongan ADMIN dibayar BAHAN MENTAH, bukan uang**
   (jenis bahan sesuai pekerjaannya — Besi/Minyak/Kayu/Gandum/Kapas/Batu Bara
   Mentah; jumlah per shift nilainya ≈ gaji lama ~48 USD). Pekerjaan dari
   perusahaan pemain tetap dibayar seperti semula (USD tetap / bagi hasil).
@@ -26,33 +27,70 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   cookie httpOnly. Token bisa dicabut server-side (`token_version` — naik
   saat logout). Menu login tampil dulu sebelum masuk game. Tombol keluar di
   Pengaturan.
-- **Dashboard:** level, XP, energi 100, emas + USD, latihan atribut
-  (Kekuatan / Pendidikan / Ekonomi), kerja shift, klaim pasokan harian,
+- **Dashboard:** level, XP, energi (batas 100 + 5×(level−1), +20 Premium,
+  +10 RS Lapangan; pulih +2/menit), emas + USD, latihan atribut
+  (Kekuatan / Pendidikan / Ekonomi — Pendidikan mempercepat latihan:
+  jeda −5% per level, maks −50%; Ekonomi menaikkan gaji shift +3%/level),
+  kerja shift, klaim pasokan harian (+5 emas, +50 USD, +40 XP),
   misi harian, Kronik 5 babak, pencapaian (19 tonggak, total 1.275 emas).
-- **Peta:** 17 wilayah Indonesia, perjalanan (1 Tiket), pemberontakan
+- **Peta besar:** peta geografis Indonesia (SVG, klik wilayah → panel
+  politik/negara, cari wilayah, zoom); wilayah tanpa negara = kaca abu-abu
+  + "?". **Peta:** 17 wilayah Indonesia, perjalanan butuh waktu
+  (2 menit + 1 menit per 100 km, maks 30 menit; Kepri → Jakarta 10 menit),
+  pindah kewarganegaraan gratis (jeda 7 hari), pemberontakan
   (50 emas; 100 emas untuk ibu kota Jakarta — 5 pendukung menyulut perang 24 jam).
-- **Pasar lokal (USD) + Pasar Global (emas):** 15 komoditas, pajak penghasilan 2%,
-  penawaran minimum 10 unit.
+- **Pasar lokal (USD) + Pasar Global (emas):** 16 komoditas, pajak
+  penghasilan 2% (parlemen bisa mengubah 1–5% lewat UU; minggu Pasar
+  Bergairah −1 poin), pajak impor = tarif negara pembeli (1–5% lewat UU;
+  tanpa negara 2%), penawaran minimum 10 unit, ubah penawaran sendiri.
 - **Valas:** cetak 1 emas = 10 USD + penawaran antar warga (berlaku 72 jam,
   1 penawaran terbuka per arah).
 - **Pekerjaan:** lowongan ADMIN (dibayar bahan mentah, lihat di atas) +
-  lowongan perusahaan pemain (tetap / bagi hasil).
+  lowongan perusahaan pemain (tetap / bagi hasil). Menu Pekerjaan default
+  hanya lowongan wilayah pemain saat ini.
 - **Perusahaan:** 4 jenis — Pabrik Sumber Daya 100 emas, Pabrik 100 emas,
   Industri Ringan 250 emas, Industri Berat 500 emas; produksi harian masuk
-  inventaris pemilik.
-- **Negara:** Republik Indonesia — presiden, 4 menteri, kas negara, pajak.
+  inventaris pemilik; rantai produksi penuh (tiap jenis butuh bahan baku);
+  bonus ~1/10 produksi tiap shift; bisa diedit + pasang foto (maks 500 KB).
+- **Negara:** TIDAK ADA negara awal — dunia mulai terpecah, warga mendirikan
+  negara (Level 10 + 100 emas; pendiri bukan otomatis presiden). Ideologi
+  (Konservatisme/Sosialisme/Liberalisme/Nasionalisme) + sistem pemerintahan
+  (Presidensial/Parlementer/Imperial/Diktator) berefek nyata (pajak, upah,
+  klaim, kerusakan perang). Unifikasi wilayah lewat voting warga wilayah itu.
 - **Partai:** dirikan butuh Level 10 + 50 emas; gabung langsung / lamaran / tertutup.
-- **Parlemen:** 60 kursi, mayoritas 31, usul UU (Level 5 + 5 emas), voting 7 hari.
-- **Pemilu:** presiden (hak pilih Level 5 + 3 hari jadi warga) & parlemen
-  (kursi dibagi proporsional).
-- **Perang:** front aktif, serang dari garis depan (harus di wilayah perang,
-  10 energi + 1 senjata; Drone ×1,5 kerusakan).
+- **Parlemen:** dibuka **2 Desember 2026** (sebelumnya terkunci); 60 kursi,
+  mayoritas 31, usul UU (Level 5 + 5 emas), voting 7 hari. UU bisa mengubah
+  pajak penghasilan, pajak impor, upah ADMIN, biaya perjalanan,
+  ideologi, dan sistem pemerintahan.
+- **Pemilu:** presiden (hak pilih Level 5 + 3 hari jadi warga; calon hanya
+  lewat nominasi ketua partai) & parlemen (kursi dibagi proporsional).
+- **Perang + Militer:** front aktif, serang dari garis depan (harus di
+  wilayah perang, 10 energi + 1 senjata). Rekrut 3 unit — Infanteri,
+  Drone Perang, Kendaraan Berat — yang menaikkan pengali kerusakan perang
+  (maks ×1,5) + perawatan harian; wilayah yang kalah perang berpindah
+  pengendali (pajaknya mengalir ke panglima perang).
 - **Pers:** dirikan koran 5 emas, tulis/baca/komentar artikel, reaksi, Liga Pers.
-- **Obrolan:** tab Global / Indonesia / Negara (+ Ruang Sidang & chat per front
+- **Obrolan:** tab Global / Indonesia / Wilayah (+ Ruang Sidang & chat per front
   perang), avatar + nama + tag partai + ikon premium + jam kirim, pratinjau
   tautan artikel, laporkan (Pelecehan / Ujaran kebencian / Spam / Lainnya) &
-  blokir. Chat mulai kosong.
-- **Pesan pribadi (DM), Organisasi, Kontrak, Konvoi, Notifikasi, Profil.**
+  blokir, daftar pemain yang diblokir. Chat mulai kosong.
+- **Kredit skor:** semua warga mulai 100; laporan chat yang TERBUKTI benar
+  oleh admin menurunkan skor penulis −10; pulih +1/hari; makin rendah makin
+  banyak batasan (pers <80, partai <60, pasar <40, chat/DM <20); skor 0 =
+  akun banned otomatis (bisa banding; unban mengembalikan skor ke 50).
+- **Event dunia mingguan** (rotasi 6 minggu, deterministik): Panen Raya,
+  Festival Rakyat, Badai Besar, Wabah Melanda, Pasar Bergairah, Darurat
+  Militer — masing-masing mengubah angka game (upah, XP, pajak, biaya
+  latih, kerusakan, waktu travel).
+- **Reputasi dagang + demografi:** tiap transaksi pasar selesai +1 reputasi
+  (pembeli & penjual; tier Pedagang Baru → Saudagar Besar); halaman wilayah
+  menampilkan demografi + kekuatan militer wilayah.
+- **Minuman energi:** 0,10 emas/kaleng, +1 energi (beli + minum di Inventaris).
+- **Konvoi:** bangun dengan BAHAN MENTAH (bukan emas) — RS Lapangan, Sekolah
+  Keliling, Gudang Industri, Pos Militer — masing-masing memberi bonus nyata.
+- **Tiket (Laporan & Saran):** pemain mengirim saran/laporan dari dalam game;
+  admin membalas dari panel Admin; saran yang dipakai dihadiahi 50 emas.
+- **Pesan pribadi (DM), Organisasi, Kontrak, Notifikasi, Profil.**
 - **Akun Admin:** hanya akun Khalid (`koboijuniorkhalid@gmail.com`, sudah
   terdaftar sebagai admin sejak 27 Nov 2026). Pemberian admin berbasis email
   DICABUT 27 Nov 2026 — registrasi baru dengan email apa pun tidak lagi jadi
@@ -64,7 +102,7 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   di log admin (`admin_actions`). Aksi admin dibatasi 120 POST/jam per admin.
 - **Referral:** setiap pemain punya kode unik 8 karakter (tanpa 0/O/1/I/l);
   daftar dengan kode valid → bonus **cair saat pendaftar mencapai Level 3**:
-  pemilik kode **+100 emas + 2 hari premium**, pendaftar baru **+50 emas +
+  pemilik kode **+200 emas + 2 hari premium**, pendaftar baru **+100 emas +
   1 hari premium** (premium diperpanjang dari yang masih aktif). Maks **5
   bonus terbayar per hari per pemilik kode** (anti farming multi-akun;
   bonus ke-6+ hari itu ditunda). Form daftar ada field Kode Referral + link
@@ -78,8 +116,10 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   (top-up manual via WA).
 - **Daily tick:** dunia maju 1 hari tiap tengah malam (pasokan harian, produksi
   perusahaan, progres perang/voting/pemilu, refund valas kedaluwarsa, konvoi
-  kedaluwarsa). Berjalan otomatis saat ada yang membuka game + interval 10 menit
-  — tanpa cron eksternal, jadi aman di Render free.
+  kedaluwarsa, reset misi harian, perawatan militer). Berjalan otomatis saat
+  ada yang membuka game + interval 10 menit — tanpa cron eksternal, jadi
+  aman di Render free. Di VPS, service `parlementer` jalan terus (systemd)
+  dan tick berkala tetap jalan lewat interval yang sama.
 
 ## Menjalankan lokal
 
@@ -101,17 +141,26 @@ Variabel environment (lihat `.env.example`):
 ## Tes
 
 ```bash
-npm test            # e2e HTTP di SQLite (DB sekali pakai): 239 pemeriksaan
-npm run test:pg     # jalur Postgres via pg-mem: 28 pemeriksaan
-npm run test:modal  # DOM modal laporan (jsdom): 28 pemeriksaan
-npm run test:all    # ketiganya
-npm run test:pg-verify # migrasi initDb di Postgres 16 sungguhan: 17 pemeriksaan
-npm run test:conc    # balapan HTTP (pasar/klaim/shift/pencapaian/blokir) di Postgres 16: 18 pemeriksaan
+npm test            # e2e HTTP di SQLite (DB sekali pakai): 881 pemeriksaan
+npm run test:pg     # jalur Postgres via pg-mem: 46 pemeriksaan
+npm run test:modal  # DOM modal laporan (jsdom): 155 pemeriksaan
+npm run test:all    # pg + e2e + modal + chat-dom
+npm run test:pg-verify # migrasi initDb di Postgres 16 sungguhan: 133 pemeriksaan
+npm run test:conc    # balapan HTTP (pasar/klaim/shift/pencapaian/blokir) di Postgres 16: 38 pemeriksaan
+npm run test:stage7-dom # DOM integrasi Tahap 7 (jsdom): 28 pemeriksaan
+# Suite DOM lain: test:chat-dom (43), test:market-dom (14),
+# test:ui-batch2 (53), test:landing-glass (40), test:photo-upload (32),
+# test:profile-admin (49), test:ssl (6), test:jobs-region (22),
+# test:ui-icons (18), test:company-dom (25), test:map-dom (47),
+# test:credit-dom (22), test:ticket-dom (56), test:stage6-dom (27).
+# Total seluruh suite: 1735 pemeriksaan.
 ```
 
-Hasil terakhir (27 Nov 2026, Tahap 2): **e2e 239/239 lolos, pg-test 28/28
-lolos, modal 28/28 lolos, pg-verify 17/17 lolos, pg-concurrency 18/18 lolos.**
-Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+2 XP) → latih → lamar
+Hasil terakhir (28 Nov 2026, Tahap 7 v4.1.0): **e2e 881/881 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 133/133 lolos,
+pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos** — dan semua suite
+DOM lain hijau (lihat daftar di atas).
+Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lamar
 kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara ~48,40 USD; USD tidak
 berubah) → pasar (jual/beli, pajak 2%) → makan → valas (cetak 1 emas = 10 USD)
 → perjalanan (1 Tiket) → chat + lapor + blokir → aturan dunia (partai Level 10,
@@ -142,7 +191,17 @@ benar di Postgres sungguhan — pola yang sama lolos di tes e2e SQLite);
 (2) ROLLBACK tidak berfungsi di emulator, jadi pemeriksaan rollback dilewati
 dan harus diverifikasi di Postgres sungguhan saat deploy pertama.
 
-## Deploy GRATIS — Vercel (Hobby, tanpa kartu) ← cara utama saat ini
+## Deploy LIVE saat ini — VPS (parlementer.my.id)
+
+Game sudah LIVE di **https://parlementer.my.id** (VPS Ubuntu, Node 22 +
+Postgres lokal, systemd service `parlementer`, nginx reverse proxy,
+HTTPS Let's Encrypt). Deploy otomatis: setiap push ke `master` di GitHub
+ditarik otomatis oleh cron auto-pull di VPS (tiap 3 menit: `git pull
+--ff-only` → `npm install` bila `package.json` berubah → restart service).
+**https://parlementer.vercel.app tetap hidup tapi hanya me-redirect
+semuanya ke parlementer.my.id** (bukan lagi tempat game berjalan).
+
+## Deploy GRATIS — Vercel (Hobby, tanpa kartu) ← dulu cara utama, kini hanya redirector
 
 Aplikasi sudah diadaptasi untuk Vercel Serverless Function (`api/index.js` +
 `vercel.json`; Express app dipisah ke `src/app.js` supaya `node server.js`
@@ -231,8 +290,8 @@ disimpan di repo sebagai alternatif.**
 
 1. Buka URL game → halaman login muncul.
 2. Daftar dengan email + password → dashboard menampilkan 50 emas, 500 USD.
-3. Cek Pekerjaan: 6 lowongan ADMIN terlihat; cek Pasar: 0 penawaran.
-4. Klaim pasokan harian → emas jadi 55, USD 550.
+3. Cek Pekerjaan: 18 lowongan ADMIN terlihat; cek Pasar: 0 penawaran.
+4. Klaim pasokan harian → emas jadi 55, USD 550, +40 XP.
 
 ### Catatan Render free tier
 
@@ -247,18 +306,25 @@ disimpan di repo sebagai alternatif.**
 ## Struktur proyek
 
 ```
-server.js            # Launcher server biasa: ensureReady() + listen (Render/lokal)
+server.js            # Launcher server biasa: ensureReady() + listen (VPS/lokal)
 src/
   app.js             # Express app + ensureReady() (dipakai server.js & api/index.js)
   db.js              # Adapter DB (Postgres via DATABASE_URL / SQLite lokal)
   util.js            # JWT cookie, auth middleware, validasi
-  game.js            # Aturan main (gaji, pajak, XP, kronik, toko, dll.)
-  api-core.js        # Auth, dashboard, kerja, pasar, valas, peta, toko
-  api-civic.js       # Negara, partai, parlemen, pemilu, perang, pers, chat
+  game.js            # Aturan main (gaji, pajak, XP, kronik, toko, konstanta) — SUMBER TUNGGAL angka
+  api-core.js        # Auth, dashboard, kerja, pasar, valas, peta, toko, misi, kronik
+  api-civic.js       # Negara, partai, parlemen, pemilu, perang, pers, chat, pajak
+  api-admin.js       # Panel admin (grant, tiket, pengumuman, skor kredit)
+  api-appeals.js     # Banding akun banned
+  api-military.js    # Rekrut/buang unit militer
   tick.js            # Daily tick + jadwal pemilu otomatis (+ klaim atomik)
+  bcrypt-pool.js     # Pool worker bcrypt (login cepat)
 api/
   index.js           # Vercel Serverless Function (adapter Express, tanpa listen)
 vercel.json          # Routing Vercel: /api/* + SPA fallback -> api/index.js
+docs/
+  AUDIT.md           # Audit Tahap 1 + cakupan Tahap 2–8
+  ARSITEKTUR.md      # Keputusan arsitektur + register sumber-tunggal
 public/
   index.html         # Halaman login + shell aplikasi
   css/style.css      # Tema gelap navy-hitam + aksen emas
@@ -266,6 +332,10 @@ public/
 test/
   e2e.js             # Tes end-to-end HTTP (SQLite)
   pg-test.js         # Tes jalur Postgres (pg-mem)
+  pg-verify.mjs      # Tes migrasi initDb di Postgres 16 sungguhan
+  pg-concurrency.mjs # Tes balapan HTTP di Postgres 16 sungguhan
+  *-dom.js           # Suite DOM per fitur (jsdom): chat, market, map, credit,
+                     # ticket, stage6, stage7, dst.
 render.yaml          # Blueprint Render (free tier)
 Dockerfile           # Alternatif deploy container
 .env.example         # Contoh variabel environment
@@ -273,9 +343,8 @@ Dockerfile           # Alternatif deploy container
 
 ## Status
 
-Siap deploy ke **Vercel (Hobby gratis, tanpa kartu)** atau Render.
-**Belum di-deploy ke mana pun** — butuh akun gratis Vercel yang dibuat
-pemilik (langkah di atas) + `DATABASE_URL` Neon yang sudah ada. Setelah
-deploy pertama, verifikasi ulang: daftar → shift → jual/beli → chat di URL
-production, dan cek ROLLBACK transaksi di Postgres sungguhan (lihat catatan
-tes di atas).
+**LIVE di https://parlementer.my.id (v4.1.0, Tahap 7)** — VPS + Postgres
+lokal, deploy otomatis tiap push ke `master` (auto-pull 3 menit).
+Vercel hanya redirector ke domain utama. Detail arsitektur + keputusan
+desain: lihat `docs/ARSITEKTUR.md`. Audit + cakupan tahap overhaul:
+lihat `docs/AUDIT.md`.

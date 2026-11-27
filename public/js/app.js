@@ -979,9 +979,10 @@ ROUTES.dashboard = async () => {
   </div>
   <div class="panel">
     <h3>💪 LATIHAN</h3>
-    ${[['str', 'strength', 'Kekuatan', c.attr_str, 'Kerusakan perang'], ['edu', 'strategy', 'Pendidikan', c.attr_edu, 'Pelatihan lebih cepat'], ['eco', 'charisma', 'Ekonomi', c.attr_eco, 'Hasil produksi lebih banyak']].map(([k, serverKey, label, lv, desc]) => {
-      // Jeda latihan (2 menit × level): tombol nonaktif + hitung mundur
-      // selagi atribut ini jeda; atribut lain tetap bisa dilatih.
+    ${[['str', 'strength', 'Kekuatan', c.attr_str, 'Kerusakan perang'], ['edu', 'strategy', 'Pendidikan', c.attr_edu, 'Latihan lebih cepat (−5% jeda/level, maks −50%)'], ['eco', 'charisma', 'Ekonomi', c.attr_eco, 'Gaji shift lebih besar (+3%/level)']].map(([k, serverKey, label, lv, desc]) => {
+      // Jeda latihan (2 menit × level, dikurangi Pendidikan): tombol
+      // nonaktif + hitung mundur selagi atribut ini jeda; atribut lain
+      // tetap bisa dilatih.
       const cd = c.trainCooldowns?.[serverKey];
       const cooling = cd && cd.remainingMs > 0;
       return `<div class="kv"><span class="k">${label} · LV ${lv}<br><small class="muted">${desc}</small></span>

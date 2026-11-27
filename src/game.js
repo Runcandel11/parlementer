@@ -39,8 +39,22 @@
 // pajak pasar wilayah taklukan mengalir ke panglima perang); rantai
 // produksi penuh (semua perusahaan butuh bahan baku); reputasi dagang;
 // demografi wilayah; event dunia mingguan.
+// Update sedang v4.1.0 = Tahap 7 master overhaul — INTEGRASI (28 Nov 2026):
+// satu sumber kebenaran untuk angka yang dipakai di banyak tempat (pajak
+// impor dari kolom negara, pajak shift ikut event dunia, jeda latihan,
+// klaim harian, durasi pemilu, jeda chat, TTL valas, biaya pemberontakan,
+// slot konvoi, hari dunia); misi harian + kronik pindah dari JSON TEXT ke
+// tabel relasional; Pendidikan akhirnya punya efek nyata (jeda latihan
+// −5% per level); teks janji palsu dihapus (tagline Deluxe, deskripsi
+// Ekonomi/Premium); README + docs/ARSITEKTUR.md disinkronkan.
 // Ditampilkan di footer (landing + drawer) dan dikirim API /api/world + /api/me.
-export const VERSION = '4.0.0';
+export const VERSION = '4.1.0';
+
+// --- Satuan waktu dasar (Tahap 7) ---
+// Satu sumber kebenaran untuk "sehari" dalam milidetik — semua konstanta
+// durasi di bawah memakai ini, bukan lagi literal 24*60*60*1000 yang
+// tersebar di banyak file.
+export const DAY_MS = 24 * 60 * 60 * 1000;
 
 // --- Sistem kredit skor (v3.0.0, saran LIO tiket #7) ---
 // Semua warga mulai 100. Laporan chat yang terbukti benar menurunkan skor
@@ -50,7 +64,7 @@ export const VERSION = '4.0.0';
 export const CREDIT_START_SCORE = 100;
 export const CREDIT_MAX_SCORE = 100;
 export const CREDIT_RECOVERY_PER_DAY = 1;
-export const CREDIT_DAY_MS = 24 * 60 * 60 * 1000;
+export const CREDIT_DAY_MS = DAY_MS;
 export const CREDIT_DEDUCTION_PROVEN_REPORT = 10;
 export const CREDIT_UNBAN_RESET_SCORE = 50;
 // Batasan bertingkat — skor minimal untuk tiap aksi (dipakai middleware
@@ -91,8 +105,13 @@ export function creditInfo(score) {
 export const WA_TOPUP_URL = 'https://wa.me/6285220743283';
 export const MINT_RATE = 10; // 1 emas dicetak jadi 10 USD
 export const INCOME_TAX = 0.02;
-export const IMPORT_TAX = 0.02;
+export const IMPORT_TAX = 0.02; // tarif impor BILA pembeli tidak bernegara;
+// warga bernegara memakai tarif impor negaranya (country.tax_import,
+// baca lewat getImportTaxRate di api-civic.js — Tahap 7).
 export const MIN_OFFER_QTY = 10;
+// Penawaran valas kedaluwarsa setelah 72 jam (Tahap 7: dulu literal di
+// api-core.js; satu konstanta supaya TTL tidak berbeda di dua tempat).
+export const FX_OFFER_TTL_MS = 72 * DAY_MS;
 
 // XP: naik level butuh level*100 XP (level 1 -> 100 XP, level 2 -> 200 XP,
 // dst. — RATUSAN, bukan puluhan; permintaan LIO tiket #22, 28 Nov 2026).
@@ -153,8 +172,19 @@ export function trainCost(level) { return level + 1; }
 // LV 5 → 10 mnt, LV 10 → 20 mnt. Satu konstanta supaya gampang diubah.
 // Jeda dihitung PER ATRIBUT: melatih Kekuatan tidak mengunci Pendidikan /
 // Ekonomi. Ditegakkan di server (POST /api/train), UI hanya menampilkan.
+// PENDIDIKAN (Tahap 7): tiap level Pendidikan mempercepat SEMUA latihan —
+// jeda −5% per level Pendidikan (maks −50%). Sebelum Tahap 7 deskripsi
+// "Pelatihan lebih cepat" di UI adalah janji kosong: attr_edu tidak dipakai
+// di mekanik apa pun. Sekarang efeknya nyata dan satu-satunya sumbernya
+// fungsi ini (dipakai handler /api/train + tampilan /api/me).
 export const TRAIN_COOLDOWN_MIN_PER_LEVEL = 2;
-export function trainCooldownMs(newLevel) { return TRAIN_COOLDOWN_MIN_PER_LEVEL * 60 * 1000 * Math.max(0, newLevel); }
+export const TRAIN_COOLDOWN_DISCOUNT_PER_EDU = 0.05;
+export const TRAIN_COOLDOWN_DISCOUNT_MAX = 0.5;
+export function trainCooldownMs(newLevel, eduLevel = 0) {
+  const base = TRAIN_COOLDOWN_MIN_PER_LEVEL * 60 * 1000 * Math.max(0, newLevel);
+  const discount = Math.min(TRAIN_COOLDOWN_DISCOUNT_MAX, TRAIN_COOLDOWN_DISCOUNT_PER_EDU * Math.max(0, eduLevel));
+  return Math.round(base * (1 - discount));
+}
 // Format sisa jeda untuk pesan error + UI: "7 mnt" / "45 dtk".
 export function formatCooldownMs(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000));
@@ -205,7 +235,7 @@ export function travelMinutesFor(fromName, toName) {
 // Jeda pindah kewarganegaraan: 7 hari sejak pindah terakhir (anti-lompat
 // pemilu/unifikasi — tanpa jeda, warga bisa pindah, memilih, lalu pindah
 // lagi). Pindah pertama bebas (home_changed_at = 0 = belum pernah pindah).
-export const MOVE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+export const MOVE_COOLDOWN_MS = 7 * DAY_MS;
 
 // Makan: Makanan T1..T5 memberi 10/20/30/40/50 energi. Batas harian 10 unit.
 export function foodEnergy(tier) { return tier * 10; }
@@ -217,12 +247,37 @@ export function warDamage(strength, ammo) {
   return d;
 }
 
+// Pemberontakan (Tahap 7): biaya emas untuk memulai pemberontakan di satu
+// wilayah — 50 emas, 100 bila wilayahnya ibu kota (Jakarta). Dulu literal
+// inline di api-core.js; satu konstanta supaya biaya yang ditampilkan di UI
+// tidak bisa berbeda dari yang dipotong server.
+export const REBEL_COST = 50;
+export const REBEL_COST_CAPITAL = 100;
+export const REBEL_CAPITAL_NAME = 'Jakarta';
+// Perang pemberontakan berlangsung 24 jam (ends_at saat perang dibuat).
+export const WAR_DURATION_MS = DAY_MS;
+
+// --- Klaim harian (Tahap 7) ---
+// Satu sumber kebenaran untuk hadiah pasokan harian — dulu literal 5/50/40
+// di handler klaim (api-core.js) sementara README menulis +2 XP yang sudah
+// usang sejak rescale XP ×20. Bonus ideologi/anggaran (+2 emas) BUKAN bagian
+// dari konstanta ini — itu bonus di atas klaim dasar.
+export const DAILY_CLAIM = { gold: 5, usd: 50, xp: 40 };
+
 // --- Misi harian (masing-masing +10 emas saat diklaim) ---
 export const DAILY_MISSIONS = [
   { key: 'energy', label: 'Habiskan 500 energi', target: 500, reward: 10 },
   { key: 'bread', label: 'Makan jatah roti harian (10)', target: 10, reward: 10 },
   { key: 'chat', label: 'Tulis 5 pesan obrolan', target: 5, reward: 10 },
 ];
+
+// --- Chat (Tahap 7) ---
+// Jeda antar pesan 5 detik (anti-spam, ditegakkan server); progres misi
+// chat hanya dihitung untuk pesan ≥3 kata dan paling cepat 30 detik sekali
+// (supaya spam pesan pendek tidak menyelesaikan misi).
+export const CHAT_COOLDOWN_MS = 5000;
+export const CHAT_COUNT_WINDOW_MS = 30000;
+export const CHAT_COUNT_MIN_WORDS = 3;
 
 // --- Kronik (tutorial) — 5 babak, 20 tugas ---
 export const CHRONICLE = [
@@ -336,7 +391,7 @@ export function shiftBonusText(co) {
 // --- Toko (harga rupiah, top-up manual via WhatsApp) ---
 export const SHOP_PACKAGES = [
   { id: 'pemula', name: 'PAKET PEMULA', tagline: 'Langkah pertama ke lingkaran dalam.', price: 15000, was: 17000, save: 'HEMAT 12%', premiumMonths: 1, gold: 1000 },
-  { id: 'deluxe', name: 'PAKET DELUXE', tagline: 'Satu musim keistimewaan dan peti perang yang serius.', price: 50000, was: 58000, save: 'HEMAT 14%', premiumMonths: 6, gold: 5000, best: true },
+  { id: 'deluxe', name: 'PAKET DELUXE', tagline: 'Satu musim keistimewaan dengan emas berlimpah.', price: 50000, was: 58000, save: 'HEMAT 14%', premiumMonths: 6, gold: 5000, best: true },
   { id: 'ultimate', name: 'PAKET ULTIMATE', tagline: 'Setahun penuh di puncak — tingkat negarawan.', price: 100000, was: 125000, save: 'HEMAT 20%', premiumMonths: 12, gold: 20000 },
 ];
 export const SHOP_PREMIUM = [
@@ -345,7 +400,7 @@ export const SHOP_PREMIUM = [
   { months: 6, price: 25000, perMonth: 4167 },
   { months: 12, price: 45000, perMonth: 3750 },
 ];
-export const PREMIUM_PERKS = 'Batas energi 120 (bukan 100), slot konvoi keempat, dan namamu berwarna Premium di chat.';
+export const PREMIUM_PERKS = 'Batas energi +20, +1 slot konvoi, dan namamu berwarna Premium di chat.';
 
 // --- Batas energi & regen (Tahap 4) ---
 // Batas dasar naik 5 per level: 100 + 5×(level−1). Bonus lama tetap
@@ -500,6 +555,18 @@ export const CONVOY_BUILDINGS = [
   { type: 'military', name: 'Pos Militer', desc: '+10% kerusakan perang', cost: [{ name: 'Besi Mentah', qty: 30 }, { name: 'Minyak Mentah', qty: 10 }] },
 ];
 
+// Slot konvoi (Tahap 7): 1 slot dasar + 1 per ambang level (25/50/100) +
+// 1 bila Premium aktif. Dulu rumus yang sama ditulis 3× di api-core.js
+// (GET + POST /api/convoy) — sekarang satu fungsi, dipakai server di
+// kedua endpoint. Premium memberi +1 slot (bukan "slot keempat" seperti
+// yang dulu tertulis di teks toko — teksnya ikut diperbaiki).
+export const CONVOY_SLOT_LEVELS = [25, 50, 100];
+export function convoySlotsFor(citizen) {
+  const levelSlots = CONVOY_SLOT_LEVELS.filter((lv) => (citizen?.level || 0) >= lv).length;
+  const premiumSlot = (citizen?.premium_until || 0) > Date.now() ? 1 : 0;
+  return 1 + levelSlots + premiumSlot;
+}
+
 // --- Minuman energi (tiket #17 LIO, 28 Nov 2026) ---
 // Kaleng minuman energi: dibeli di Inventaris seharga 0,10 emas/kaleng,
 // sekali minum +1 energi (dibatasi cap energi pemain).
@@ -576,6 +643,17 @@ export const COUNTRY_JOIN_MIN_YES = 3;
 // atau 3 hari setelah didirikan bila negara itu baru dibentuk sesudahnya.
 export const PRESIDENT_ELECTION_DELAY_DAYS = 7;
 export const PARLIAMENT_ELECTION_DELAY_DAYS = 3;
+// Pemilu (Tahap 7): masa pemungutan suara 3 hari — dulu literal
+// `3 * 24 * 60 * 60 * 1000` di 6 tempat (pendirian negara + tick
+// ensureElections). Syarat usia warga untuk memilih juga 3 hari, tapi itu
+// aturan BERBEDA (bukan durasi pemilu) — konstanta terpisah supaya
+// mengubah satu tidak ikut mengubah yang lain.
+export const ELECTION_VOTE_DAYS = 3;
+export const ELECTION_VOTE_MS = ELECTION_VOTE_DAYS * DAY_MS;
+export const ELECTION_VOTE_MIN_AGE_DAYS = 3;
+export const ELECTION_VOTE_MIN_AGE_MS = ELECTION_VOTE_MIN_AGE_DAYS * DAY_MS;
+// Pemilu parlemen berulang tiap 30 hari (siklusnya, bukan masa voting).
+export const PARLIAMENT_ELECTION_CYCLE_DAYS = 30;
 
 // --- Undang-undang bermuatan mekanik (Tahap 5 — BUG-9) ---
 // Sebelum Tahap 5, UU yang disahkan hanya berubah status jadi 'executed'
@@ -587,6 +665,11 @@ export const PARLIAMENT_ELECTION_DELAY_DAYS = 3;
 // value disimpan apa adanya di laws.value; validasi rentang di api-civic.js.
 export const LAW_KINDS = {
   tax_income: { label: 'Ubah Pajak Penghasilan', hint: 'Tarif baru 1–5% (saat ini lihat halaman Negara). Berlaku untuk penjualan pasar + gaji.', min: 1, max: 5 },
+  // (Tahap 7) Pajak impor bisa diubah parlemen — sebelumnya jenis UU ini
+  // tidak ada, jadi kolom tax_import tidak bisa diubah dan pasar global
+  // mengabaikannya. Efeknya: harga beli pasar global + tarif impor negara
+  // pembeli; pajaknya masuk kas negara pembeli.
+  tax_import: { label: 'Ubah Pajak Impor', hint: 'Tarif baru 1–5% (saat ini lihat halaman Negara). Berlaku untuk pembelian di pasar global.', min: 1, max: 5 },
   admin_pay: { label: 'Ubah Upah Lowongan ADMIN', hint: 'Upah baru 80–120% dari upah dasar (100% = normal). Berlaku untuk semua lowongan ADMIN.', min: 80, max: 120 },
   travel: { label: 'Ubah Biaya Perjalanan', hint: 'Tiket yang dibutuhkan per perjalanan: 1 atau 2.', min: 1, max: 2 },
   // Redesain dunia: ideologi/sistem bisa diubah parlemen lewat UU (nilai =
@@ -602,6 +685,7 @@ export const LAW_KINDS = {
 // Kalimat efek untuk notifikasi + arsip UU (dipakai tick saat UU disahkan).
 export function lawEffectText(kind, value) {
   if (kind === 'tax_income') return `Pajak penghasilan kini ${value}%.`;
+  if (kind === 'tax_import') return `Pajak impor kini ${value}%.`;
   if (kind === 'admin_pay') return `Upah lowongan ADMIN kini ${value}% dari upah dasar.`;
   if (kind === 'travel') return `Perjalanan kini butuh ${value} Tiket.`;
   if (kind === 'ideology') return `Ideologi negara kini ${COUNTRY_IDEOLOGIES[Math.round(Number(value))]?.label || value}.`;
@@ -618,7 +702,7 @@ export const BUDGET_KINDS = {
   train: { label: 'Latihan 10% Lebih Murah', desc: 'Biaya latihan semua warga 10% lebih murah selama 7 hari.', min: 50, max: 500 },
   war: { label: 'Dana Perang (+10% Kerusakan)', desc: 'Serangan garis depan semua warga +10% kerusakan selama 7 hari.', min: 50, max: 500 },
 };
-export const BUDGET_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+export const BUDGET_DURATION_MS = 7 * DAY_MS;
 export const BUDGET_VOTE_DAYS = 3;
 
 // --- Mobilisasi & hari libur (Tahap 5) — wewenang menteri ---
@@ -627,11 +711,11 @@ export const BUDGET_VOTE_DAYS = 3;
 // 50 emas kas negara, semua warga +20 energi (maks batas masing-masing),
 // sekali per 24 jam.
 export const MOBILIZE_COST_GOLD = 100;
-export const MOBILIZE_DURATION_MS = 24 * 60 * 60 * 1000;
+export const MOBILIZE_DURATION_MS = DAY_MS;
 export const MOBILIZE_DAMAGE_MULT = 1.1;
 export const HOLIDAY_COST_GOLD = 50;
 export const HOLIDAY_ENERGY = 20;
-export const HOLIDAY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+export const HOLIDAY_COOLDOWN_MS = DAY_MS;
 
 // --- Pakta antar organisasi (Tahap 5 — diplomasi tanpa multi-negara) ---
 // Dua organisasi bisa mengikat pakta (harus disetujui ketua kedua belah
