@@ -620,9 +620,111 @@ async function main() {
     window.eval('route()');
     await sleep(300);
     check('Inventaris: grid MAKANAN 5 kartu T1–T5', document.querySelectorAll('#page .food-grid .food-card').length === 5, `${document.querySelectorAll('#page .food-grid .food-card').length} kartu`);
+    // 17) Bug tab chat (laporan pemain Vincent): pill aktif harus mengikuti
+    // ruangan — sebelumnya highlight selalu menempel di GLOBAL karena `room`
+    // baru diubah setelah tab dirender. Uji tiap tab: pill + judul + isi.
+    window.api = async (path) => {
+      const m = path.match(/^\/api\/chat\/(global|indonesia|negara)/);
+      if (m) {
+        const room = m[1];
+        const titles = { global: 'OBROLAN GLOBAL', indonesia: 'OBROLAN INDONESIA', negara: 'OBROLAN NEGARA' };
+        return { room, title: titles[room], messages: [{ id: 1, citizen_id: 1, username: 'warga_tes', avatar: null, content: `Pesan tes ruangan ${room} tiga kata`, created_at: Date.now(), isPremium: false, party_tag: null, article_id: null }] };
+      }
+      throw new Error('api tak terduga: ' + path);
+    };
+    const chatRoomCheck = async (hash, tabLabel, title, roomWord) => {
+      window.location.hash = hash;
+      window.eval('route()');
+      await sleep(300);
+      const active = document.querySelector('.chat-tabs .tab.active');
+      const h2 = document.querySelector('.chat-title');
+      const list = document.querySelector('#chat-list');
+      check(`Chat ${hash}: pill aktif = ${tabLabel}`, !!active && active.textContent.trim() === tabLabel, active?.textContent);
+      check(`Chat ${hash}: judul = ${title}`, !!h2 && h2.textContent.includes(title), h2?.textContent);
+      check(`Chat ${hash}: isi pesan ruangan ${roomWord} tampil`, !!list && list.textContent.includes(`Pesan tes ruangan ${roomWord}`), list?.textContent.slice(0, 80));
+    };
+    await chatRoomCheck('#/chat', 'GLOBAL', 'OBROLAN GLOBAL', 'global');
+    await chatRoomCheck('#/chat/indonesia', 'INDONESIA', 'OBROLAN INDONESIA', 'indonesia');
+    await chatRoomCheck('#/chat/negara', 'NEGARA', 'OBROLAN NEGARA', 'negara');
+
+    // 18) Bug koran dobel (laporan pemain Vincent): tombol Dirikan Koran
+    // nonaktif + loading saat request berjalan; tombol Bubarkan ada untuk
+    // koran sendiri dan memanggil DELETE.
+    let npResolve;
+    const dissolveCalls = [];
+    window.api = async (path, opts) => {
+      if (path === '/api/press/newspapers/mine') return { newspapers: [] };
+      if (path === '/api/press/newspaper' && opts?.method === 'POST') return new Promise((res) => { npResolve = () => res({ ok: true, newspaperId: 8 }); });
+      if (path === '/api/me') return meRevamp;
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/newspaper';
+    window.eval('route()');
+    await sleep(300);
+    const btnNp = document.querySelector('#btn-np');
+    check('Dirikan Koran: tombol tampil', !!btnNp);
+    btnNp.click();
+    check('Dirikan Koran: tombol nonaktif + teks loading saat request berjalan', btnNp.disabled === true && btnNp.textContent.includes('MENDIRIKAN'), `disabled=${btnNp.disabled} teks=${btnNp.textContent}`);
+    btnNp.click();
+    check('Dirikan Koran: klik kedua saat loading diabaikan (tetap nonaktif)', btnNp.disabled === true);
+    npResolve();
+    await sleep(300);
+    check('Dirikan Koran: toast sukses tampil setelah request selesai', !document.querySelector('#toast').hidden && document.querySelector('#toast').textContent.includes('Koran didirikan'), document.querySelector('#toast').textContent);
+    // Daftar koranku: tombol Bubarkan tampil + memanggil DELETE (konfirmasi disetujui).
+    window.confirm = () => true;
+    window.api = async (path, opts) => {
+      if (path === '/api/press/newspapers/mine') return { newspapers: [{ id: 5, name: 'Kabar Tes', created_at: Date.now() }] };
+      if (path === '/api/press/newspapers/5' && opts?.method === 'DELETE') { dissolveCalls.push(path); return { ok: true }; }
+      throw new Error('api tak terduga: ' + path);
+    };
+    window.location.hash = '#/newspaper';
+    window.eval('route()');
+    await sleep(300);
+    const btnDissolve = document.querySelector('[data-dissolve="5"]');
+    check('Koran sendiri: tombol Bubarkan tampil', !!btnDissolve && btnDissolve.textContent.includes('Bubarkan'));
+    btnDissolve.click();
+    await sleep(300);
+    check('Bubarkan: DELETE /api/press/newspapers/5 dipanggil', dissolveCalls.includes('/api/press/newspapers/5'), dissolveCalls.join(','));
+    check('Bubarkan: toast sukses tampil', !document.querySelector('#toast').hidden && document.querySelector('#toast').textContent.includes('Koran dibubarkan'), document.querySelector('#toast').textContent);
+
+    // 19) Suara ketukan kedua ("thock" untuk tombol utama): playThock ada,
+    // lebih rendah dari playTap, dan pointerdown mengarahkannya ke tombol
+    // emas/BELI/submit — ketukan biasa tetap memakai playTap.
+    const jsSnd = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+    check('Suara: playThock ada + nada lebih rendah (340→150 Hz + sub 130→70)',
+      jsSnd.includes('function playThock()') && jsSnd.includes('setValueAtTime(340') && jsSnd.includes('setValueAtTime(130'));
+    check('Suara: pointerdown memakai thock untuk .btn-gold/.btn-buy/submit, tap untuk lainnya',
+      jsSnd.includes("el.closest('.btn-gold, .btn-buy, [data-buy], button[type=\"submit\"]')") && jsSnd.includes('playThock()') && jsSnd.includes('else playTap()'));
+    check('Suara: playThock hormat pengaturan yang sama + diam tanpa Web Audio',
+      /function playThock\(\) \{\n  if \(!soundEnabled\(\)\) return;/.test(jsSnd) && jsSnd.includes('if (!AC) return;'));
+
     // Statis: kelas CSS baru ada; tidak ada onclick inline baru.
     const css2 = fs.readFileSync(new URL('../public/css/style.css', import.meta.url), 'utf8');
     check('CSS: kelas rombak UI ada (law-banner, profile-hero, food-grid, popover, seg-bar, quote)', ['.law-banner', '.profile-hero', '.food-grid', '.popover-backdrop', '.seg-bar', '.quote'].every((c) => css2.includes(c)));
+    // Rombak UI gaya Parlamentum (papan pasar + kartu penawaran + menu 2 kolom + banner perang).
+    check('CSS: kelas papan pasar/menu baru ada (board-row, offer-card, nav-grid, war-banner)',
+      ['.board-row', '.board-price', '.offer-card', '.badge-best', '.btn-buy', '.nav-grid', '.war-banner', '.com-icon'].every((c) => css2.includes(c)));
+    const js4 = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+    check('app.js: papan pasar pakai baris + kartu penawaran (TERBAIK, MAKS, pajak impor 2%)',
+      js4.includes('board-row') && js4.includes('offer-card') && js4.includes('TERBAIK') && js4.includes('data-max') && js4.includes('pajak impor 2%'));
+    check('app.js: banner perang hanya dari data perang (activeWars)', js4.includes('ME?.activeWars') && js4.includes('updateWarBanner'));
+    // Open Graph + Twitter Card di halaman utama + gambar preview disajikan.
+    const html2 = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+    check('index.html: meta Open Graph + Twitter Card ada (og:title/description/image/url, twitter:card)',
+      html2.includes('og:title" content="Parlementer — Bangun Negaramu') && html2.includes('og:image" content="https://parlementer.my.id/og-image.jpg') && html2.includes('og:url" content="https://parlementer.my.id/') && html2.includes('twitter:card" content="summary_large_image') && html2.includes('twitter:image" content="https://parlementer.my.id/og-image.jpg'));
+    const ogRes = await fetch(BASE + '/og-image.jpg');
+    check('gambar preview OG disajikan (GET /og-image.jpg 200, image/jpeg)',
+      ogRes.status === 200 && (ogRes.headers.get('content-type') || '').includes('image/jpeg'), `status=${ogRes.status} type=${ogRes.headers.get('content-type')}`);
+    // Bug chat: ruangan ditentukan di awal ROUTES.chat; tidak ada lagi
+    // pengubahan `room` setelah tab dirender (penyebab pill nyangkut di GLOBAL).
+    check('app.js: ruangan chat ditentukan di awal + tidak ada lagi ubah room setelah render',
+      js4.includes("if (sub === 'indonesia') { room = 'indonesia';") && !js4.includes("if (sub === 'indonesia' || sub === 'negara') { room = sub; }"));
+    // Bug koran dobel: tombol loading + Bubarkan di client, penjaga + DELETE di server.
+    check('app.js: tombol Dirikan Koran nonaktif + loading (MENDIRIKAN) + tombol Bubarkan (data-dissolve)',
+      js4.includes('MENDIRIKAN…') && js4.includes('data-dissolve') && js4.includes("method: 'DELETE'"));
+    const civic = fs.readFileSync(new URL('../src/api-civic.js', import.meta.url), 'utf8');
+    check('Server: penjaga koran nama sama (400) + endpoint DELETE bubarkan koran ada',
+      civic.includes('Kamu sudah punya koran bernama itu.') && civic.includes("app.delete('/api/press/newspapers/:id'"));
     const js3 = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
     check('app.js: peti dihubungkan ke claimDaily (POST /api/claim)', js3.includes("$('#btn-crate').onclick = claimDaily") && js3.includes("post('/api/claim')"));
     check('app.js: tombol klaim lama (#btn-claim) sudah dihapus', !js3.includes('#btn-claim'));

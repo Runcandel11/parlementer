@@ -753,6 +753,7 @@ CREATE INDEX IF NOT EXISTS idx_fx_offers_expires ON fx_offers(expires_at);
 CREATE INDEX IF NOT EXISTS idx_war_attacks_war ON war_attacks(war_id);
 CREATE INDEX IF NOT EXISTS idx_articles_author ON articles(author_id);
 CREATE INDEX IF NOT EXISTS idx_articles_newspaper ON articles(newspaper_id);
+CREATE INDEX IF NOT EXISTS idx_newspapers_owner ON newspapers(owner_id);
 CREATE INDEX IF NOT EXISTS idx_market_tx_buyer ON market_tx(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_market_tx_seller ON market_tx(seller_id);
 CREATE INDEX IF NOT EXISTS idx_market_buy_orders ON market_buy_orders(scope, commodity_id);

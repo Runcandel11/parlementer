@@ -627,17 +627,41 @@ export function registerCivic(app) {
   }));
 
   app.post('/api/press/newspaper', authRequired, citizenRequired, r(async (req, res) => {
-    const { name } = req.body || {};
+    const name = String(req.body?.name || '').trim();
     if (!name || name.length < 3 || name.length > 50) return res.status(400).json({ error: 'Nama koran 3–50 karakter.' });
     // Atomik: kunci baris warga + potong 5 emas bersyarat di dalam tx.
+    // Penjaga duplikat (laporan pemain Vincent — ketuk 2× saat lag jadi 2
+    // koran): pemilik yang sama tidak boleh punya 2 koran bernama sama
+    // (perbandingan tak peka huruf besar/kecil). Dicek DI DALAM tx setelah
+    // kunci baris warga, jadi dua request bersamaan pun hanya satu yang
+    // lolos — yang kedua melihat koran pertama dan ditolak 400. Pemilik
+    // BOLEH punya beberapa koran dengan nama berbeda (tulis artikel memakai
+    // <select> koran), jadi yang dicegah hanya nama yang sama.
     const newspaperId = await tx(async (t) => {
       await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      const dup = await t.one('SELECT id FROM newspapers WHERE owner_id = ? AND LOWER(name) = LOWER(?)', [req.citizen.id, name]);
+      if (dup) throw Object.assign(new Error('Kamu sudah punya koran bernama itu.'), { status: 400 });
       const n = await t.run('INSERT INTO newspapers (owner_id, name, created_at) VALUES (?,?,?) RETURNING id', [req.citizen.id, name, Date.now()]);
       const upd = await t.run('UPDATE citizens SET gold = gold - 5 WHERE id = ? AND gold >= 5', [req.citizen.id]);
       if (!upd.changes) throw Object.assign(new Error('Mendirikan koran butuh 5 emas.'), { status: 400 });
       return n.id;
     });
     res.json({ ok: true, newspaperId });
+  }));
+
+  // Bubarkan koran sendiri (untuk koran ganda akibat bug double-submit —
+  // mis. Vincent). Atomik: koran + seluruh artikel + reaksi/komentarnya
+  // dihapus sekaligus. Hanya pemilik yang boleh membubarkan.
+  app.delete('/api/press/newspapers/:id', authRequired, citizenRequired, r(async (req, res) => {
+    await tx(async (t) => {
+      const np = await t.one(forUpdate('SELECT * FROM newspapers WHERE id = ? AND owner_id = ?'), [req.params.id, req.citizen.id]);
+      if (!np) throw Object.assign(new Error('Koran tidak ditemukan atau bukan milikmu.'), { status: 404 });
+      await t.run('DELETE FROM article_reactions WHERE article_id IN (SELECT id FROM articles WHERE newspaper_id = ?)', [np.id]);
+      await t.run('DELETE FROM article_comments WHERE article_id IN (SELECT id FROM articles WHERE newspaper_id = ?)', [np.id]);
+      await t.run('DELETE FROM articles WHERE newspaper_id = ?', [np.id]);
+      await t.run('DELETE FROM newspapers WHERE id = ?', [np.id]);
+    });
+    res.json({ ok: true });
   }));
 
   app.post('/api/press/articles', authRequired, citizenRequired, r(async (req, res) => {

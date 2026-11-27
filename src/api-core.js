@@ -943,10 +943,14 @@ export function registerCore(app) {
       `SELECT commodity_id, MIN(price) AS best, COUNT(*) AS n FROM market_offers WHERE scope = ? GROUP BY commodity_id`,
       [scope]);
     const bestMap = Object.fromEntries(best.map((b) => [b.commodity_id, b]));
+    // Penawaran termurah dulu (100 teratas) + tag organisasi penjual bila
+    // ia anggota organisasi (untuk tampilan kartu penawaran gaya Parlamentum).
     const offers = await sql(
-      `SELECT o.*, u.username AS seller, c.name AS commodity_name FROM market_offers o
+      `SELECT o.*, u.username AS seller, c.name AS commodity_name, og.tag AS seller_org FROM market_offers o
        JOIN citizens sc ON sc.id = o.seller_id JOIN users u ON u.id = sc.user_id
        JOIN commodities c ON c.id = o.commodity_id
+       LEFT JOIN org_members om ON om.citizen_id = o.seller_id
+       LEFT JOIN organizations og ON og.id = om.org_id
        WHERE o.scope = ? ORDER BY o.price ASC LIMIT 100`,
       [scope]);
     const mine = await sql(

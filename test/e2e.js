@@ -40,6 +40,7 @@ class Client {
   }
   get(p) { return this.req('GET', p); }
   post(p, b) { return this.req('POST', p, b || {}); }
+  delete(p) { return this.req('DELETE', p); }
 }
 
 async function main() {
@@ -1257,7 +1258,11 @@ async function main() {
   setInv5(eId, makananId, 10);
   r = await E.post('/api/market/sell', { scope: 'local', commodity_id: makananId, tier: 1, qty: 10, price: 9 });
   check('E pasang jual 10× Makanan @9 (pakta dagang aktif)', r.status === 200 && !!r.data.offerId, `status=${r.status}`);
-  r = await F.post('/api/market/buy', { offer_id: r.data.offerId, qty: 10 });
+  const eOfferId = r.data.offerId;
+  r = await E.get('/api/market?scope=local');
+  const eOffer = r.data.offers.find((o) => o.id === eOfferId);
+  check('Penawaran E membawa tag organisasi [ODT] (kartu penawaran gaya Parlamentum)', !!eOffer && eOffer.seller === 'tahap4_e' && eOffer.seller_org === 'ODT', JSON.stringify(eOffer));
+  r = await F.post('/api/market/buy', { offer_id: eOfferId, qty: 10 });
   check('F membeli: E terima 88,20 USD (pajak 4% dipotong 50% → 2%)', r.status === 200 && eq(r.data.sellerReceives, 88.2), JSON.stringify(r.data));
   r = await C.post(`/api/orgs/${org1}/pact`, { target_org_id: org2, kind: 'defense' });
   check('C mengusulkan Pakta Pertahanan', r.status === 200 && !!r.data.pactId, `status=${r.status} ${r.data.error || ''}`);
@@ -1347,6 +1352,47 @@ async function main() {
   check('B mengomentari artikel', r.status === 200 && !!r.data.commentId, `status=${r.status}`);
   r = await A.get(`/api/press/articles/${articleId}`);
   check('Suka + komentar tampil di detail artikel', r.data.article.likes === 1 && r.data.comments.length === 1, `likes=${r.data.article.likes} komentar=${r.data.comments.length}`);
+
+  console.log('  [24b] Penjaga duplikat koran + bubarkan koran (bug Vincent)');
+  // Isi ulang emas A agar pembuatan koran tambahan tidak gagal karena saldo.
+  const meA24 = (await A.get('/api/me')).data;
+  const db24 = new DatabaseSync(DB_PATH);
+  db24.prepare('UPDATE citizens SET gold = gold + 100 WHERE id = ?').run(meA24.citizen.id);
+  db24.close();
+  r = await A.post('/api/press/newspaper', { name: 'Kabar Warga Tes' });
+  check('Nama koran sama (persis) ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/press/newspaper', { name: 'kabar warga tes' });
+  check('Nama koran sama (beda huruf besar/kecil) ditolak (400)', r.status === 400, `status=${r.status}`);
+  const tNp0 = performance.now();
+  r = await A.post('/api/press/newspaper', { name: 'Kabar Kedua Tes' });
+  const tNp = performance.now() - tNp0;
+  check('Nama koran berbeda BOLEH (pemilik boleh punya >1 koran)', r.status === 200 && !!r.data.newspaperId, `status=${r.status} ${r.data.error || ''}`);
+  check('Latensi POST /api/press/newspaper < 500ms (lokal hangat)', tNp < 500, `${tNp.toFixed(0)}ms`);
+  const paper2 = r.data.newspaperId;
+  // Double-submit bersamaan dengan nama yang sama → tepat satu lolos.
+  const [d1, d2] = await Promise.all([
+    A.post('/api/press/newspaper', { name: 'Kabar Kilat Tes' }),
+    A.post('/api/press/newspaper', { name: 'Kabar Kilat Tes' }),
+  ]);
+  const okCount = [d1, d2].filter((x) => x.status === 200).length;
+  check('Dua request bersamaan nama sama: tepat satu lolos, satu ditolak 400', okCount === 1 && [d1, d2].some((x) => x.status === 400), `status=${d1.status}/${d2.status}`);
+  const paper3 = (d1.status === 200 ? d1 : d2).data.newspaperId;
+  // Bubarkan: bukan pemilik ditolak; pemilik berhasil; artikel ikut hilang.
+  r = await B.delete('/api/press/newspapers/' + paper2);
+  check('B bukan pemilik: bubarkan ditolak (404)', r.status === 404, `status=${r.status}`);
+  r = await A.post('/api/press/articles', { newspaper_id: paper2, title: 'Artikel Koran Kedua', content: 'Isi artikel koran kedua yang panjangnya lebih dari dua puluh karakter.' });
+  check('A menulis artikel di koran kedua', r.status === 200 && !!r.data.articleId, `status=${r.status}`);
+  const article2 = r.data.articleId;
+  r = await A.delete('/api/press/newspapers/' + paper2);
+  check('A (pemilik) membubarkan koran kedua', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.get('/api/press/newspapers/mine');
+  check('Koran kedua hilang dari daftar koranku (koran pertama tetap ada)', !(r.data.newspapers || []).some((n) => n.id === paper2) && (r.data.newspapers || []).some((n) => n.id === paperId), `n=${(r.data.newspapers || []).length}`);
+  r = await A.get(`/api/press/articles/${article2}`);
+  check('Artikel koran yang dibubarkan ikut hilang (404)', r.status === 404, `status=${r.status}`);
+  r = await A.delete('/api/press/newspapers/' + paper2);
+  check('Bubarkan koran yang sudah tidak ada ditolak (404)', r.status === 404, `status=${r.status}`);
+  r = await A.get('/api/press/newspapers/mine');
+  check('Koran hasil double-submit tetap ada 1 (bukan 0/2)', (r.data.newspapers || []).some((n) => n.id === paper3), `n=${(r.data.newspapers || []).length}`);
 
   stop();
   console.log(`\n[e2e] SELESAI: ${passed} lolos, ${failed} gagal`);

@@ -120,6 +120,42 @@ function playTap() {
     osc.stop(t0 + 0.08);
   } catch { /* suara gagal: jangan ganggu permainan */ }
 }
+// Ketukan kedua — "thock" yang sedikit lebih rendah/dalam untuk tombol
+// UTAMA/konfirmasi (BELI, KIRIM, SIMPAN, tombol emas). Ketukan halus di
+// atas tetap dipakai untuk ketukan biasa. Sama-sama disintesis Web Audio
+// (tanpa file audio, tanpa dependensi), hormat 'parlementer_sound', diam
+// bila Web Audio tidak tersedia, volume dijaga pelan (≤0.08) agar tidak
+// mengganggu. Nada: triangle 340→150 Hz + sub sine 130→70 Hz.
+function playThock() {
+  if (!soundEnabled()) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    __audioCtx = __audioCtx || new AC();
+    if (__audioCtx.state === 'suspended') void __audioCtx.resume();
+    const t0 = __audioCtx.currentTime;
+    const osc = __audioCtx.createOscillator();
+    const gain = __audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(340, t0);
+    osc.frequency.exponentialRampToValueAtTime(150, t0 + 0.08);
+    gain.gain.setValueAtTime(0.08, t0);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.11);
+    osc.connect(gain).connect(__audioCtx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.12);
+    const sub = __audioCtx.createOscillator();
+    const subGain = __audioCtx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(130, t0);
+    sub.frequency.exponentialRampToValueAtTime(70, t0 + 0.09);
+    subGain.gain.setValueAtTime(0.05, t0);
+    subGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.1);
+    sub.connect(subGain).connect(__audioCtx.destination);
+    sub.start(t0);
+    sub.stop(t0 + 0.11);
+  } catch { /* suara gagal: jangan ganggu permainan */ }
+}
 // Navigasi tanpa inline onclick: CSP Tahap 2 (script-src 'self') memblokir
 // SEMUA handler inline, sehingga 50 tombol navigasi (TULIS ARTIKEL, Buka
 // Parlemen, kartu artikel, dsb.) mati di browser sungguhan — klik tidak
@@ -130,9 +166,13 @@ document.addEventListener('click', (e) => {
   if (go) { location.hash = go.dataset.goto; return; }
   if (e.target?.closest?.('[data-reload]')) location.reload();
 });
-// Tiap ketukan pada elemen interaktif membunyikan tap.
+// Tiap ketukan pada elemen interaktif membunyikan tap — tombol utama /
+// konfirmasi (emas, BELI, submit form) memakai thock yang lebih dalam.
 document.addEventListener('pointerdown', (e) => {
-  if (e.target?.closest?.('button, a, input, select, textarea, [role="button"], .nav-item')) playTap();
+  const el = e.target?.closest?.('button, a, input, select, textarea, [role="button"], .nav-item');
+  if (!el) return;
+  if (el.closest('.btn-gold, .btn-buy, [data-buy], button[type="submit"]')) playThock();
+  else playTap();
 });
 
 async function api(path, opts = {}) {
@@ -249,20 +289,46 @@ const NAV = [
 function buildNav() {
   const adminGroup = ME?.citizen?.is_admin ? `
     <div class="nav-group">ADMIN</div>
-    <button class="nav-item" data-route="admin" type="button"><span class="ico">🛡️</span>Panel Admin</button>` : '';
+    <div class="nav-grid"><button class="nav-item" data-route="admin" type="button"><span class="ico">🛡️</span>Panel Admin</button></div>` : '';
   $('#drawer-nav').innerHTML = NAV.map((g) => `
     <div class="nav-group">${g.group}</div>
-    ${g.items.map(([slug, label, ico]) => `
+    <div class="nav-grid">${g.items.map(([slug, label, ico]) => `
       <button class="nav-item" data-route="${slug}" type="button">
         <span class="ico">${ico}</span>${label}
-      </button>`).join('')}`).join('') + adminGroup + `
+      </button>`).join('')}</div>`).join('') + adminGroup + `
     <div class="nav-group">AKUN</div>
-    <button class="nav-item" data-route="settings" type="button"><span class="ico">⚙️</span>Pengaturan</button>
-    <button class="nav-item" id="nav-logout" type="button"><span class="ico">🚪</span>Keluar</button>`;
+    <div class="nav-grid">
+      <button class="nav-item" data-route="settings" type="button"><span class="ico">⚙️</span>Pengaturan</button>
+      <button class="nav-item" id="nav-logout" type="button"><span class="ico">🚪</span>Keluar</button>
+    </div>
+    <div id="drawer-war"></div>`;
   $$('#drawer-nav .nav-item[data-route]').forEach((b) => {
     b.onclick = () => { closeDrawer(); location.hash = '#/' + b.dataset.route; };
   });
   $('#nav-logout').onclick = logout;
+  updateWarBanner();
+}
+
+// Banner perang di bawah menu (gaya Parlamentum): HANYA bila /api/me
+// melaporkan perang aktif untuk pemain ini (ME.activeWars) — tidak pernah
+// dikarang. Diperbarui tiap refreshMe supaya muncul/hilang mengikuti data.
+function updateWarBanner() {
+  const slot = $('#drawer-war');
+  if (!slot) return;
+  const wars = ME?.activeWars || [];
+  if (!wars.length) { slot.innerHTML = ''; return; }
+  const w = wars[0];
+  const total = (Number(w.score_a) || 0) + (Number(w.score_d) || 0);
+  const pct = total ? Math.round((Number(w.score_a) || 0) / total * 100) : 50;
+  slot.innerHTML = `<button class="war-banner" type="button" data-goto="#/war">
+    <span class="war-ico">⚔️</span>
+    <span class="war-txt">
+      <span class="war-title">Negaramu sedang berperang</span>
+      <span class="war-sub">${esc(w.name)} · ${esc(w.region_name || '')} — ${fmt(w.score_a)} vs ${fmt(w.score_d)}</span>
+      <span class="bar red"><i style="width:${pct}%"></i></span>
+    </span>
+  </button>`;
+  slot.querySelector('.war-banner').onclick = () => { closeDrawer(); location.hash = '#/war'; };
 }
 
 function openDrawer() { $('#drawer').classList.add('open'); $('#drawer-overlay').classList.add('open'); }
@@ -357,6 +423,8 @@ function renderHUD() {
     const cb = $('#badge-crate');
     if (cb) cb.hidden = !canClaim;
   }
+  // Banner perang di bawah menu mengikuti data perang terbaru (/api/me).
+  updateWarBanner();
 }
 
 // Sisa waktu sampai akhir voting UU, gaya "1j 15mnt" / "45 mnt".
@@ -1353,6 +1421,15 @@ window.addEventListener('scroll', () => {
 boot();
 
 // ---------- PASAR ----------
+// Ikon tiap komoditas (tampilan saja) untuk papan pasar gaya Parlamentum.
+const COMMODITY_ICONS = {
+  'Makanan': '🍞', 'Senjata': '🔫', 'Tiket': '🎫', 'Kapal': '🚢', 'Drone': '🛸',
+  'Gandum Mentah': '🌾', 'Besi Mentah': '🔩', 'Minyak Mentah': '🛢️',
+  'Kapas Mentah': '☁️', 'Kayu': '🪵', 'Batu Bara': '🪨', 'Tembaga Mentah': '🔶',
+  'Bahan Bangunan': '🧱', 'Bahan Bakar': '⛽', 'Elektronik': '🔌',
+};
+const comIcon = (name) => COMMODITY_ICONS[name] || '📦';
+
 function marketPage(scope) {
   return async () => {
     const data = await api('/api/market?scope=' + scope);
@@ -1370,14 +1447,15 @@ function marketPage(scope) {
       <button class="tab ${scope === 'global' ? 'active' : ''}" data-goto="#/global">Pasar Global</button>
     </div>
     <div class="panel">
-      <div class="panel-head"><h3>📊 PAPAN PASAR — SEMUA KOMODITAS</h3></div>
-      <table class="table"><tr><th>Komoditas</th><th>Harga Terbaik</th><th>Penawaran</th><th></th></tr>
-      ${data.commodities.map((c) => `<tr>
-        <td><b>${esc(c.name)}</b><br><small class="muted">${esc(c.category)}</small></td>
-        <td class="gold-text"><b>${c.best != null ? fmt(c.best, 2) : '—'}</b></td>
-        <td>${c.offers}</td>
-        <td><button class="btn-gold btn-sm" data-com="${c.id}">Lihat</button></td></tr>`).join('')}
-      </table>
+      <div class="panel-head"><h3>📊 PAPAN PASAR</h3></div>
+      <div class="board">
+        <div class="board-head"><span>Komoditas</span><span>Harga Terbaik</span><span>Penawaran</span><span></span></div>
+        ${data.commodities.map((c) => `<button type="button" class="board-row" data-com="${c.id}">
+          <span class="board-com"><span class="com-icon">${comIcon(c.name)}</span><span class="board-name">${esc(c.name)}</span></span>
+          <span class="board-price">${c.best != null ? fmt(c.best, 2) : '—'}</span>
+          <span class="board-count">${c.offers}</span>
+          <span class="board-chev">›</span></button>`).join('')}
+      </div>
     </div>
     <div class="panel" id="offer-detail"><h3>📋 PENAWARAN</h3><p class="muted">Pilih komoditas di atas untuk melihat penawaran.</p></div>
     <div class="panel"><h3>📈 GRAFIK HARGA — 14 HARI</h3>
@@ -1427,14 +1505,50 @@ function marketPage(scope) {
         : '<p class="muted">Belum ada transaksi.</p>'}
     </div>`);
     $$('[data-com]').forEach((b) => b.onclick = async () => {
+      $$('.board-row').forEach((r) => r.classList.remove('sel'));
+      b.classList.add('sel');
       const cid = Number(b.dataset.com);
       const offers = data.offers.filter((o) => o.commodity_id === cid);
       const com = data.commodities.find((c) => c.id === cid);
-      $('#offer-detail').innerHTML = `<h3>📋 ${esc(com.name)} — PENAWARAN</h3>` + (offers.length ? offers.map((o) => `
-        <div class="kv"><span class="k">🧑 ${esc(o.seller)} · T${o.tier} ×${o.qty}<br><small class="muted">${fmt(o.price, 2)} ${cur}/unit</small></span>
-        <span class="v"><input type="number" value="1" min="1" max="${o.qty}" style="width:70px" id="q-${o.id}">
-        <button class="btn-gold btn-sm" data-buy="${o.id}">BELI</button></span></div>`).join('')
+      // Penawaran sudah diurutkan termurah dulu oleh API — lencana TERBAIK
+      // untuk penawaran termurah tiap tingkat. Harga besar = harga per unit
+      // YANG DIBAYAR pembeli: pasar global +2% pajak impor (IMPORT_TAX),
+      // pasar lokal tanpa pajak impor. Tidak ada klaim perjanjian dagang —
+      // pakta dagang di Parlementer hanya memotong pajak penghasilan penjual.
+      const IMPORT_TAX = 0.02;
+      const seenTier = new Set();
+      const unitLabel = scope === 'global' ? 'g' : 'USD';
+      $('#offer-detail').innerHTML = `<h3>📋 ${esc(com.name)} — PENAWARAN</h3>
+        ${offers.length ? `<p class="muted small">100 penawaran termurah tiap barang dan tingkat</p>` : ''}` + (offers.length ? offers.map((o) => {
+        const isBest = !seenTier.has(o.tier); seenTier.add(o.tier);
+        const unit = scope === 'global' ? o.price * (1 + IMPORT_TAX) : o.price;
+        const sellerTag = o.seller_org ? `<span class="org-tag">[${esc(o.seller_org)}]</span> ` : '';
+        return `
+        <div class="offer-card">
+          <div class="offer-top">
+            <span class="com-icon">${comIcon(com.name)}</span>
+            <div class="offer-mid">
+              <div class="offer-title">${esc(com.name)} <span class="tier">T${o.tier}</span> × ${fmt(o.qty)}</div>
+              ${isBest ? '<span class="badge-best">TERBAIK</span>' : ''}
+              <div class="offer-seller"><span class="avatar-initial" style="width:20px;height:20px;font-size:11px">${esc((o.seller[0] || '?').toUpperCase())}</span> ${sellerTag}${esc(o.seller)}</div>
+            </div>
+            <div class="offer-price">
+              <div class="big">${fmt(unit, 2)} <small>${unitLabel}</small></div>
+              <div class="detail">${fmt(o.price, 2)} ${cur}/unit${scope === 'global' ? ` · +pajak impor 2%<span class="tax">+${fmt(o.price * IMPORT_TAX, 2)} ${cur} pajak/unit</span>` : ''}</div>
+            </div>
+          </div>
+          <div class="offer-actions">
+            <input type="number" value="1" min="1" max="${o.qty}" id="q-${o.id}" aria-label="Jumlah beli">
+            <button class="btn-ghost btn-sm" type="button" data-max="${o.id}">MAKS</button>
+            <button class="btn-buy" type="button" data-buy="${o.id}">BELI</button>
+          </div>
+        </div>`;
+      }).join('')
         : '<p class="muted">Belum ada penawaran untuk komoditas ini.</p>');
+      $$('[data-max]').forEach((mb) => mb.onclick = () => {
+        const input = $('#q-' + mb.dataset.max);
+        if (input) input.value = input.max;
+      });
       $$('[data-buy]').forEach((bb) => bb.onclick = async () => {
         const qty = Number($('#q-' + bb.dataset.buy)?.value || 1);
         try { const r = await post('/api/market/buy', { offer_id: Number(bb.dataset.buy), qty });
@@ -2310,13 +2424,29 @@ ROUTES.newspaper = async () => {
     <button class="btn-gold" id="btn-np">DIRIKAN KORAN (5 emas)</button>
   </div>
   <div class="panel"><h3>📰 KORANKU</h3>
-    ${mine.newspapers.length ? mine.newspapers.map((n) => `<div class="kv"><span class="k">${esc(n.name)}</span><span class="v small muted">${fmtDate(n.created_at)}</span></div>`).join('')
+    ${mine.newspapers.length ? mine.newspapers.map((n) => `<div class="kv"><span class="k">${esc(n.name)}</span><span class="v small muted">${fmtDate(n.created_at)} <button class="btn-danger btn-sm" type="button" data-dissolve="${n.id}">Bubarkan</button></span></div>`).join('')
       : '<p class="muted">Belum punya koran.</p>'}
   </div>`);
   $('#btn-np').onclick = async () => {
+    // Anti double-submit (laporan pemain Vincent): tombol nonaktif +
+    // status loading selama request berjalan — tidak bisa diketuk 2×.
+    const btn = $('#btn-np');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    const oldLabel = btn.textContent;
+    btn.textContent = 'MENDIRIKAN…';
     try { await post('/api/press/newspaper', { name: $('#np-name').value.trim() }); toast('Koran didirikan! Sekarang kamu bisa menulis artikel.'); await refreshMe(); route(); }
-    catch (e) { toast(e.message); }
+    catch (e) { toast(e.message); btn.disabled = false; btn.textContent = oldLabel; }
   };
+  $$('[data-dissolve]').forEach((b) => b.onclick = async () => {
+    if (!window.confirm('Bubarkan koran ini? Semua artikel di koran ini ikut terhapus.')) return;
+    if (b.disabled) return;
+    b.disabled = true;
+    const oldLabel = b.textContent;
+    b.textContent = 'Membubarkan…';
+    try { await api('/api/press/newspapers/' + b.dataset.dissolve, { method: 'DELETE' }); toast('Koran dibubarkan.'); route(); }
+    catch (e) { toast(e.message); b.disabled = false; b.textContent = oldLabel; }
+  });
 };
 
 // ---------- CHAT ----------
@@ -2363,10 +2493,19 @@ async function renderChatRoom(room) {
 }
 
 ROUTES.chat = async (sub) => {
+  // BUG (laporan pemain Vincent): pill aktif tab chat tidak ikut pindah —
+  // isi sudah ke INDONESIA tapi highlight tetap di GLOBAL. Penyebab: `room`
+  // baru diubah dari `sub` SETELAH tab dirender, jadi tab selalu dihitung
+  // dari room='global'. Satu sumber kebenaran: ruangan + judul + sublabel
+  // diturunkan dari `sub` DI AWAL, sebelum tab/judul/isi dirender. Judul
+  // mengikuti roomTitle() server (OBROLAN GLOBAL/INDONESIA/NEGARA, RUANG
+  // SIDANG, PERTEMPURAN).
   let room = 'global';
   let title = 'OBROLAN GLOBAL';
   let subLabel = 'Kirim pesan ke dunia...';
-  if (sub === 'parliament') { room = 'parliament'; title = 'RUANG SIDANG'; subLabel = 'Hanya anggota parlemen, menteri, dan presiden yang bisa menulis.'; }
+  if (sub === 'indonesia') { room = 'indonesia'; title = 'OBROLAN INDONESIA'; subLabel = 'Kirim pesan ke seluruh Indonesia...'; }
+  else if (sub === 'negara') { room = 'negara'; title = 'OBROLAN NEGARA'; subLabel = 'Kirim pesan ke negaramu...'; }
+  else if (sub === 'parliament') { room = 'parliament'; title = 'RUANG SIDANG'; subLabel = 'Hanya anggota parlemen, menteri, dan presiden yang bisa menulis.'; }
   else if (sub && sub.startsWith('war_')) {
     room = sub;
     title = 'PERTEMPURAN';
@@ -2386,12 +2525,10 @@ ROUTES.chat = async (sub) => {
   <p class="page-sub">${esc(subLabel)}</p>
   <div id="chat-list" style="max-height:55vh;overflow-y:auto"></div>
   <div class="chat-input">
-    <input id="chat-text" aria-label="Tulis pesan chat" placeholder="Kirim pesan ke dunia..." maxlength="500" autocomplete="off">
+    <input id="chat-text" aria-label="Tulis pesan chat" placeholder="${esc(subLabel)}" maxlength="500" autocomplete="off">
     <button class="btn-gold" id="btn-send">KIRIM</button>
   </div>
   <p class="muted small" style="margin-top:8px">Pesan minimal 3 kata dan jeda 30 detik dihitung untuk misi harian. Chat dimulai kosong — hanya pesan pemain asli.</p>`);
-  // Tab ruangan negara/indonesia memakai room yang sama dengan prefix
-  if (sub === 'indonesia' || sub === 'negara') { room = sub; }
   const send = async () => {
     const input = $('#chat-text');
     const text = input.value.trim();
