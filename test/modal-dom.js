@@ -471,6 +471,162 @@ async function main() {
     check('Validasi gagal: toast menampilkan pesan error', !toastEl.hidden && toastEl.textContent.includes('Judul 5–120 karakter.'), `toast="${toastEl.textContent}" hidden=${toastEl.hidden}`);
     check('Validasi gagal: tetap di #/press/new (tidak redirect)', window.location.hash === '#/press/new', `hash=${window.location.hash}`);
 
+    // 16) Rombak UI gaya Parlamentum: peti pasokan di HUD, banner UU,
+    // hero profil, blok LEVEL/ENERGI/KELELAHAN/MAKANAN/DOMPET, kartu
+    // KRONIKMU baru, popover energi/kelelahan. Hanya tampilan — semua
+    // angka (regen +2/mnt, ambang 10.000/15.000) dari data game asli.
+    const meRevamp = {
+      user: { id: 1, username: 'warga_tes', publicId: 'PL-000099', is_banned: false },
+      citizen: { id: 1, username: 'warga_tes', energy: 100, energyCap: 100, gold: 500, usd: 500, xp: 0, level: 1, fatigue: 0, energy_spent_today: 0, bread_today: 0, last_claim_date: '2000-01-01', attr_str: 0, attr_edu: 0, attr_eco: 0, isPremium: false },
+      region: { name: 'Jakarta' }, party: null, job: null, activeWars: [],
+      votingLaws: [
+        { id: 1, title: 'UU Tes 1', yes: 1, abstain: 0, no: 0, ends_at: Date.now() + 75 * 60000 + 30000 },
+        { id: 2, title: 'UU Tes 2', yes: 0, abstain: 0, no: 0, ends_at: Date.now() + 200 * 60000 },
+      ],
+      unread: 0, unreadDm: 0, xpNext: 5, world: { day: 3 }, population: 9,
+    };
+    window.eval('ME = ' + JSON.stringify(meRevamp));
+    const revampCalls = [];
+    const chronicleMock = { chapters: [
+      { chapter: 1, title: 'Roti dan Kerja', reward: 10, done: 0, total: 8, claimed: false, tasks: [
+        { key: 'claim', label: 'Ambil pasokan harian', done: false },
+        { key: 'job', label: 'Dapatkan pekerjaan', done: false },
+        { key: 'shift', label: 'Kerjakan satu giliran', done: false },
+        { key: 'train', label: 'Latih satu atribut', done: false },
+        { key: 'eat', label: 'Isi ulang energi dengan roti', done: false },
+        { key: 'map', label: 'Jelajahi peta', done: false },
+        { key: 'market', label: 'Lihat pasar', done: false },
+        { key: 'country', label: 'Kunjungi halaman negara', done: false },
+      ] },
+      { chapter: 2, title: 'Warga Aktif', reward: 25, done: 0, total: 4, claimed: false, tasks: [
+        { key: 'travel', label: 'Bepergian ke wilayah lain', done: false },
+        { key: 'buy', label: 'Beli sesuatu di pasar', done: false },
+        { key: 'sell', label: 'Pasang penawaran jual', done: false },
+        { key: 'chat5', label: 'Tulis 5 pesan obrolan', done: false },
+      ] },
+      { chapter: 3, title: 'Pebisnis Muda', reward: 25, done: 0, total: 4, claimed: false, tasks: [
+        { key: 'company', label: 'Dirikan perusahaan', done: false },
+        { key: 'fx', label: 'Cetak USD dari emas / pasang penawaran valas', done: false },
+        { key: 'level5', label: 'Capai Level 5', done: false },
+        { key: 'party', label: 'Gabung atau dirikan partai', done: false },
+      ] },
+      { chapter: 4, title: 'Politisi', reward: 25, done: 0, total: 2, claimed: false, tasks: [
+        { key: 'law', label: 'Usulkan undang-undang', done: false },
+        { key: 'vote', label: 'Ikut memilih dalam pemilu / voting UU', done: false },
+      ] },
+      { chapter: 5, title: 'Pejuang', reward: 30, done: 0, total: 2, claimed: false, tasks: [
+        { key: 'attack', label: 'Serang di garis depan perang', done: false },
+        { key: 'article', label: 'Tulis satu artikel pers', done: false },
+      ] },
+    ] };
+    window.api = async (path, opts) => {
+      if (path === '/api/me') return meRevamp;
+      if (path === '/api/missions') return { missions: [
+        { key: 'energy', label: 'Habiskan 500 energi', progress: 0, target: 500, claimed: false },
+        { key: 'bread', label: 'Makan jatah roti harian (10)', progress: 0, target: 10, claimed: false },
+        { key: 'chat', label: 'Tulis 5 pesan obrolan', progress: 0, target: 5, claimed: false },
+      ] };
+      if (path === '/api/chronicle') return chronicleMock;
+      if (path === '/api/inventory') return { items: [{ name: 'Makanan', tier: 1, qty: 3, ref_usd: 9 }], totalQty: 3, marketValue: 27 };
+      if (path === '/api/profile/warga_tes') return { profile: { username: 'warga_tes', isPremium: false, region_name: 'Jakarta', level: 1, avatar: null, publicId: 'PL-000099', party: null, created_at: Date.now(), bio: '', attr_str: 0, attr_edu: 0, attr_eco: 0, total_damage: 0, attacks: 0, frontline_attacks: 0, shifts: 0, total_salary: 0, companies: [], articles: [], referral: null } };
+      if (opts?.method === 'POST') {
+        revampCalls.push(path);
+        if (path === '/api/claim') return { reward: { gold: 5, usd: 50, xp: 2 } };
+        if (path === '/api/eat') return { ok: true, gained: 10, energy: 100 };
+        return { ok: true };
+      }
+      throw new Error('api tak terduga: ' + path);
+    };
+    // HUD: peti + banner UU.
+    check('HUD: tombol peti pasokan (#btn-crate) ada di HTML', !!document.querySelector('#btn-crate'));
+    check('HUD: banner UU (#law-banner) ada di HTML', !!document.querySelector('#law-banner'));
+    window.eval('renderHUD()');
+    const lawBanner = document.querySelector('#law-banner');
+    check('Banner UU tampil saat ada 2 UU divoting (jumlah + sisa waktu)', !lawBanner.hidden && lawBanner.textContent.includes('2 undang-undang sedang dibahas') && /sisa \d+j \d+ mnt/.test(lawBanner.textContent), lawBanner.textContent);
+    const crate = document.querySelector('#btn-crate');
+    check('Peti: aktif + berdenyut + badge tampil saat pasokan belum diambil', !crate.disabled && crate.classList.contains('ready') && !document.querySelector('#badge-crate').hidden, `disabled=${crate.disabled} class=${crate.className}`);
+    // Pasokan sudah diambil hari ini → peti mati + badge hilang.
+    window.eval(`ME.citizen.last_claim_date = '${new Date().toISOString().slice(0, 10)}'`);
+    window.eval('renderHUD()');
+    check('Peti: mati + badge hilang saat pasokan hari ini sudah diambil', crate.disabled && crate.classList.contains('claimed') && document.querySelector('#badge-crate').hidden);
+    window.eval("ME.citizen.last_claim_date = '2000-01-01'");
+    window.eval('renderHUD()');
+    // Dashboard baru.
+    window.location.hash = '#/dashboard';
+    window.eval('route()');
+    await sleep(300);
+    const dashText = document.querySelector('#page').textContent;
+    check('Dashboard: hero profil tampil (nama + Republik Indonesia + Jakarta)', !!document.querySelector('.profile-hero-name') && dashText.includes('Republik Indonesia') && dashText.includes('Jakarta'));
+    check('Dashboard: blok LEVEL tampil (angka emas + XP)', dashText.includes('LEVEL') && dashText.includes('0 / 5 XP'));
+    check('Dashboard: blok ENERGI tampil (100/100 + teks penuh)', dashText.includes('ENERGI') && dashText.includes('100/100') && dashText.includes('Penuh — gunakan untuk bekerja'));
+    check('Dashboard: blok KELELAHAN tampil (ambang 10.000/15.000)', dashText.includes('KELELAHAN') && dashText.includes('10.000 ×0.75') && dashText.includes('15.000 ×0.5'));
+    const foodCards = document.querySelectorAll('.food-grid .food-card');
+    check('Dashboard: grid MAKANAN berisi 5 kartu T1–T5', foodCards.length === 5, `${foodCards.length} kartu`);
+    check('Dashboard: kartu T1 ⚡10 ×3 bisa dimakan, T5 kosong & mati', foodCards[0]?.textContent.includes('⚡10') && foodCards[0]?.textContent.includes('×3') && foodCards[4]?.disabled === true, foodCards[0]?.textContent);
+    check('Dashboard: blok DOMPET tampil (emas + USD)', dashText.includes('DOMPET') && dashText.includes('500'));
+    check('Dashboard: tombol AMBIL PASOKAN lama sudah tidak ada (diganti peti HUD)', !document.querySelector('#btn-claim'));
+    // Kartu KRONIKMU baru.
+    const kronik = document.querySelector('#kronik-card');
+    check('KRONIKMU: kartu tampil (judul + progres 0/20)', !!kronik && kronik.textContent.includes('KRONIKMU') && kronik.textContent.includes('0/20'));
+    check('KRONIKMU: seg-bar 20 segmen (satu per tugas)', kronik.querySelectorAll('.seg-bar i').length === 20, `${kronik.querySelectorAll('.seg-bar i').length} segmen`);
+    check('KRONIKMU: kutipan serif + TUGASMU + tugas pertama', kronik.querySelector('.quote')?.textContent.includes('Tak ada yang mulai dari nol') && kronik.textContent.includes('TUGASMU') && kronik.querySelector('.task-big')?.textContent.includes('Ambil pasokan harian'));
+    check('KRONIKMU: dua tombol (BACA BABAK INI LAGI / LEWATI PELATIHAN)', kronik.textContent.includes('BACA BABAK INI LAGI') && kronik.textContent.includes('LEWATI PELATIHAN (TANPA HADIAH)'));
+    const chapterHeads = kronik.querySelectorAll('.chapter-head');
+    check('KRONIKMU: 5 judul babak (I–V) bisa dibuka', chapterHeads.length === 5, `${chapterHeads.length} judul`);
+    check('KRONIKMU: Babak I terbuka, Babak II tertutup saat awal', !chapterHeads[0].nextElementSibling.hidden && chapterHeads[1].nextElementSibling.hidden);
+    chapterHeads[1].click();
+    check('KRONIKMU: klik Babak II membuka daftar tugasnya', !chapterHeads[1].nextElementSibling.hidden && chapterHeads[1].getAttribute('aria-expanded') === 'true');
+    // Popover energi: angka asli (+2/mnt, batas 100) — bukan angka referensi.
+    document.querySelector('[data-popover="energy"]').click();
+    await sleep(100);
+    const pop = document.querySelector('.popover-card');
+    check('Popover energi tampil (+2 / mnt, Energi maksimum 100)', !!pop && pop.textContent.includes('+2 / mnt') && pop.textContent.includes('Energi maksimum') && pop.textContent.includes('100'));
+    document.querySelector('#popover-backdrop').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await sleep(100);
+    check('Popover tertutup lewat klik backdrop', !document.querySelector('.popover-card'));
+    document.querySelector('[data-popover="fatigue"]').click();
+    await sleep(100);
+    const popF = document.querySelector('.popover-card');
+    check('Popover kelelahan tampil (tier 0–10.000 ×1, 10.000–15.000 ×0.75, 15.000+ ×0.5)', !!popF && popF.textContent.includes('KELELAHAN') && popF.textContent.includes('×0.75') && popF.textContent.includes('×0.5'));
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await sleep(100);
+    check('Popover tertutup lewat Escape', !document.querySelector('.popover-card'));
+    // Makan dari kartu T1 → POST /api/eat.
+    document.querySelector('.food-grid .food-card[data-eat="1"]').click();
+    await sleep(300);
+    check('Kartu T1: klik memanggil POST /api/eat', revampCalls.includes('/api/eat'), revampCalls.join(','));
+    // Klaim via claimDaily (handler peti) → POST /api/claim + toast.
+    window.eval('claimDaily()');
+    await sleep(300);
+    check('Peti: claimDaily memanggil POST /api/claim', revampCalls.includes('/api/claim'), revampCalls.join(','));
+    check('Peti: toast menampilkan hadiah pasokan', !document.querySelector('#toast').hidden && document.querySelector('#toast').textContent.includes('Pasokan diterima: +5 emas'), document.querySelector('#toast').textContent);
+    // LEWATI: sembunyikan kartu (preferensi lokal), hadiah tetap di KRONIKMU.
+    document.querySelector('#btn-kronik-hide').click();
+    await sleep(300);
+    check('LEWATI: kartu KRONIKMU hilang dari Dashboard + tersimpan lokal', !document.querySelector('#kronik-card') && window.localStorage.getItem('parlementer_kronik_hide') === '1');
+    // Halaman KRONIKMU: kutipan + seg-bar + daftar tugas per babak.
+    window.location.hash = '#/chronicle';
+    window.eval('route()');
+    await sleep(300);
+    const chronText = document.querySelector('#page').textContent;
+    check('Halaman KRONIKMU tampil (5 babak + kutipan + tugas)', chronText.includes('Babak I — Roti dan Kerja') && chronText.includes('Babak V — Pejuang') && !!document.querySelector('#page .quote') && chronText.includes('Ambil pasokan harian'));
+    // Halaman Profil: hero merah + nama + wilayah.
+    window.location.hash = '#/profile';
+    window.eval('route()');
+    await sleep(300);
+    check('Profil: hero tampil (nama + Republik Indonesia + Jakarta)', !!document.querySelector('.profile-hero-name') && document.querySelector('.profile-hero-name').textContent.includes('warga_tes') && document.querySelector('#page').textContent.includes('Republik Indonesia') && document.querySelector('#page').textContent.includes('Jakarta'));
+    // Halaman Inventaris: grid makanan 5 kartu.
+    window.location.hash = '#/inventory';
+    window.eval('route()');
+    await sleep(300);
+    check('Inventaris: grid MAKANAN 5 kartu T1–T5', document.querySelectorAll('#page .food-grid .food-card').length === 5, `${document.querySelectorAll('#page .food-grid .food-card').length} kartu`);
+    // Statis: kelas CSS baru ada; tidak ada onclick inline baru.
+    const css2 = fs.readFileSync(new URL('../public/css/style.css', import.meta.url), 'utf8');
+    check('CSS: kelas rombak UI ada (law-banner, profile-hero, food-grid, popover, seg-bar, quote)', ['.law-banner', '.profile-hero', '.food-grid', '.popover-backdrop', '.seg-bar', '.quote'].every((c) => css2.includes(c)));
+    const js3 = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+    check('app.js: peti dihubungkan ke claimDaily (POST /api/claim)', js3.includes("$('#btn-crate').onclick = claimDaily") && js3.includes("post('/api/claim')"));
+    check('app.js: tombol klaim lama (#btn-claim) sudah dihapus', !js3.includes('#btn-claim'));
+
     dom.window.close();
   } finally {
     stop();

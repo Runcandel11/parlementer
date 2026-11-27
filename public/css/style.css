@@ -329,7 +329,129 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
 .announce-body { white-space: pre-line; font-size: 14px; line-height: 1.6; }
 .announce-unread { border-left: 3px solid var(--gold); padding-left: 10px; }
 
-/* ---------- perbaikan layar kecil (audit HP portrait) ---------- */
+/* ---------- rombak UI gaya Parlamentum (judul emas kapital, angka besar,
+   navy + teal; hanya tampilan — tidak ada mekanik yang berubah) ---------- */
+:root { --serif: Georgia, 'Times New Roman', serif; --red-hero1: #7a2323; --red-hero2: #3d1010; }
+.page h2 { color: var(--gold-bright); }
+
+/* Header: kolom kiri (hamburger + peti pasokan), perisai tengah besar. */
+.hud-side { display: flex; flex-direction: column; gap: 6px; flex: none; }
+.crate-btn { position: relative; width: 40px; height: 40px; border-radius: 50%; background: #0a0f1c; border: 2px solid var(--gold); color: var(--gold-bright); font-size: 19px; display: flex; align-items: center; justify-content: center; flex: none; }
+.crate-btn .badge { background: #e8821e; top: -4px; right: -4px; }
+.crate-btn.claimed { border-color: var(--line); color: var(--muted2); }
+.crate-btn:disabled { opacity: .45; cursor: default; }
+.hud-shield-xp { font-size: 24px; }
+
+/* Banner UU di bawah header (satu baris, hanya bila ada UU divoting). */
+.law-banner { display: block; width: 100%; background: linear-gradient(90deg, rgba(217,164,65,.18), rgba(217,164,65,.05)); border: none; border-bottom: 1px solid var(--gold-dim); padding: 8px 14px; text-align: center; font-size: 14px; color: var(--text); font: inherit; cursor: pointer; }
+.law-banner b { color: var(--gold-bright); font-family: 'Oswald', sans-serif; letter-spacing: .05em; text-transform: uppercase; }
+
+/* Profil: banner gradien merah gelap + nama kapital putih besar. */
+.profile-hero { background: linear-gradient(180deg, var(--red-hero1) 0%, #571818 55%, var(--red-hero2) 100%); border: 1px solid #8a3a3a; border-radius: var(--radius); padding: 18px 16px 14px; margin-bottom: 14px; }
+.profile-hero-name { font-family: 'Oswald', sans-serif; font-size: 30px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #fff; line-height: 1.1; overflow-wrap: break-word; }
+.profile-hero-sub { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; color: #f3d9d9; font-size: 14px; }
+.profile-hero-sub .dot-red { color: #ff5a5a; }
+.profile-hero-sub .muted { color: #d8a8a8; }
+
+/* Blok statistik besar (LEVEL / ENERGI / KELELAHAN / MAKANAN / DOMPET). */
+.stat-block { padding: 10px 0; border-bottom: 1px solid #16213a; }
+.stat-block:first-child { padding-top: 2px; }
+.stat-block:last-child { border-bottom: none; padding-bottom: 2px; }
+.stat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.stat-head .lbl { font-family: 'Oswald', sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--gold-bright); font-size: 15px; }
+.stat-head .lbl .ico { margin-right: 6px; }
+.big-num { font-family: 'Oswald', sans-serif; font-size: 40px; font-weight: 700; line-height: 1; color: #fff; white-space: nowrap; }
+.big-num small { font-size: 20px; color: var(--muted); font-weight: 500; }
+.big-num.gold { color: var(--gold-bright); }
+.bar.thick { height: 12px; margin: 8px 0; }
+.fatigue-marks { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 4px; }
+button.stat-block-btn { display: block; width: 100%; background: none; border: none; color: var(--text); text-align: left; padding: 10px 0; font: inherit; cursor: pointer; }
+
+/* Kutipan serif + bar progres bersegmen (KRONIKMU). */
+.quote { font-family: var(--serif); font-size: 17px; line-height: 1.65; border-left: 3px solid var(--gold); padding: 4px 0 4px 14px; color: #dfe5ef; margin: 12px 0; }
+.seg-bar { display: flex; gap: 3px; margin: 10px 0 4px; }
+.seg-bar i { flex: 1; height: 8px; background: #1b2740; border-radius: 2px; min-width: 0; }
+.seg-bar i.on { background: var(--gold); }
+.btn-text { background: none; border: none; color: var(--muted); font-family: 'Oswald', sans-serif; font-size: 14px; letter-spacing: .08em; text-transform: uppercase; padding: 10px 4px; }
+.btn-text.gold { color: var(--gold-bright); }
+.chapter-head { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: none; color: var(--text); text-align: left; font-family: 'Oswald', sans-serif; font-size: 17px; letter-spacing: .04em; text-transform: uppercase; padding: 8px 0; cursor: pointer; }
+.chapter-head .chev { margin-left: auto; color: var(--muted); font-size: 13px; }
+.chapter-body { padding: 2px 0 8px; }
+.task-row { display: flex; align-items: center; gap: 10px; padding: 7px 0 7px 2px; color: var(--muted2); }
+.task-row.done { color: var(--text); }
+.task-row.active { color: #fff; font-weight: 600; }
+.task-dot { width: 9px; height: 9px; border-radius: 50%; background: #2a3a58; flex: none; }
+.task-row.done .task-dot { background: var(--gold); }
+.task-row.active .task-dot { background: var(--gold-bright); box-shadow: 0 0 0 3px rgba(242,193,78,.25); }
+
+/* Kartu makanan T1–T5. */
+.food-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.food-card { background: #0a0f1c; border: 1px solid var(--line); border-radius: 10px; padding: 10px 2px; text-align: center; min-width: 0; }
+.food-card .tier { font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700; line-height: 1.1; }
+.food-card .val { color: var(--teal); font-weight: 700; font-size: 14px; white-space: nowrap; }
+.food-card .qty { color: var(--muted); font-size: 13px; }
+.food-card.empty { opacity: .45; }
+
+/* Popover penjelasan (energi / kelelahan): kartu tengah, klik backdrop menutup. */
+.popover-backdrop { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.65); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.popover-card { background: #0c1220; border: 1px solid var(--gold-dim); border-radius: 14px; padding: 20px; width: 100%; max-width: 380px; max-height: calc(100vh - 40px); overflow-y: auto; animation: popIn .18s ease; }
+.popover-card h3 { color: var(--gold-bright); font-size: 16px; letter-spacing: .1em; margin-bottom: 2px; }
+.popover-big { font-family: 'Oswald', sans-serif; font-size: 34px; font-weight: 700; color: #fff; line-height: 1.15; }
+.popover-close { float: right; background: none; border: none; color: var(--muted); font-size: 20px; padding: 0 2px; }
+
+/* Peti pasokan siap diambil: berdenyut emas (mati bila reduced motion). */
+.crate-btn.ready { animation: crateGlow 1.6s ease-in-out infinite; }
+@keyframes crateGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(242,193,78,0); } 50% { box-shadow: 0 0 16px 3px rgba(242,193,78,.55); } }
+@media (prefers-reduced-motion: reduce) { .crate-btn.ready { animation: none; } }
+
+/* Banner UU di desktop: selebar layar penuh di bawah header (grid #app). */
+@media (min-width: 900px) { .law-banner { grid-column: 1 / -1; } }
+
+/* Baris rincian di popover (label kiri, angka kanan; baris aktif disorot). */
+.pop-rows { margin: 12px 0; }
+.pop-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #16213a; }
+.pop-row:last-child { border-bottom: none; }
+.pop-row .v { font-weight: 700; text-align: right; }
+.pop-row .v.teal { color: var(--teal); }
+.pop-row .v.gold { color: var(--gold-bright); }
+.pop-row .v.red { color: #ff8a8e; }
+.pop-row.current { background: rgba(217,164,65,.08); margin: 0 -6px; padding-left: 6px; padding-right: 6px; border-radius: 6px; }
+.pop-note { color: var(--muted); font-size: 13px; line-height: 1.55; margin-top: 10px; }
+
+/* Bar kelelahan: garis emas menandai ambang 10.000 (15.000 = ujung bar). */
+.fatigue-bar { position: relative; display: block; margin: 8px 0; }
+.fatigue-bar .bar { margin: 0; }
+.fatigue-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--gold); }
+
+/* Kartu makanan sebagai tombol (ketuk = makan); kartu kosong redup & mati. */
+button.food-card { font: inherit; color: var(--text); cursor: pointer; }
+button.food-card:disabled { cursor: default; }
+.food-card span { display: block; }
+.food-card:not(.empty):hover { border-color: var(--gold-dim); }
+.food-card .eat { color: var(--gold-bright); font-size: 12px; font-family: 'Oswald', sans-serif; letter-spacing: .06em; text-transform: uppercase; margin-top: 2px; }
+
+/* KRONIKMU: label emas kecil, judul tugas besar, nomor babak, sub-babak. */
+.lbl-gold { font-family: 'Oswald', sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--gold-bright); font-size: 14px; margin: 12px 0 2px; }
+.task-big { font-family: 'Oswald', sans-serif; font-size: 26px; font-weight: 700; color: #fff; line-height: 1.2; margin-bottom: 4px; }
+.kronik-sub { color: var(--muted); font-size: 14px; margin-top: -6px; }
+.kronik-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.chapter-num { width: 30px; height: 30px; flex: none; border: 1px solid var(--gold-dim); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: var(--gold-bright); font-size: 14px; }
+/* Blok stat sebagai tombol (energi / kelelahan): isinya span, bukan div —
+   tombol hanya boleh berisi phrasing content. */
+.stat-block-btn .stat-head { display: flex; }
+.stat-block-btn .bar { display: block; }
+.stat-block-btn > .teal-text, .stat-block-btn > .muted { display: block; text-align: left; margin-top: 6px; }
+
+@media (max-width: 560px) {
+  .big-num { font-size: 34px; }
+  .big-num small { font-size: 17px; }
+  .profile-hero-name { font-size: 26px; }
+  .food-card .tier { font-size: 17px; }
+  .food-card .val { font-size: 12px; }
+  .hud-shield-xp { font-size: 18px; }
+  .crate-btn { width: 36px; height: 36px; font-size: 17px; }
+  .hud-side { gap: 4px; }
+}
 /* Tabel panjang (pasar, parlemen) bisa di-scroll horizontal, bukan meluber. */
 .table { display: block; overflow-x: auto; }
 .kv .k { min-width: 0; }

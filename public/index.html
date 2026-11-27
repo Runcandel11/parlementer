@@ -53,7 +53,10 @@
 <!-- ============ APLIKASI GAME ============ -->
 <div id="app" hidden>
   <header class="hud">
-    <button id="btn-menu" class="hud-icon" type="button" aria-label="Menu">☰</button>
+    <div class="hud-side">
+      <button id="btn-menu" class="hud-icon" type="button" aria-label="Menu">☰</button>
+      <button id="btn-crate" class="crate-btn" type="button" aria-label="Ambil pasokan harian">📦<span class="badge" id="badge-crate" hidden>1</span></button>
+    </div>
     <div class="hud-shield" id="hud-shield">
       <span class="hud-shield-xp" id="hud-xp">0</span>
       <span class="hud-shield-lv" id="hud-lv">1</span>
@@ -72,6 +75,9 @@
       <button class="hud-icon" id="btn-settings" type="button" aria-label="Pengaturan">⚙️</button>
     </div>
   </header>
+
+  <!-- Banner UU sedang divoting (rombak UI): diisi renderHUD, ketuk → Parlemen. -->
+  <button id="law-banner" class="law-banner" type="button" data-goto="#/parliament" hidden></button>
 
   <nav id="drawer" class="drawer" aria-label="Menu utama">
     <button id="drawer-close" class="drawer-close" type="button" aria-label="Tutup menu">✕</button>
@@ -125,6 +131,7 @@
 </div>
 
 <div id="toast" class="toast" hidden role="status"></div>
+<div id="popover-root"></div>
 <script src="/js/app.js"></script>
 </body>
 </html>

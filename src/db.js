@@ -854,7 +854,10 @@ PERBAIKAN BUG
 • Game lebih ringan: polling otomatis kini berhenti saat tab tidak aktif (dan langsung menyegarkan saat tab dibuka lagi), dan data dunia di-cache 30 detik — supaya koneksi database tidak berebut dan game tidak terasa nge-lag. Catatan jujur: jeda saat membuka game pertama kali (cold start server gratis) masih bisa terjadi — itu batas paket gratis, bukan bug.
 • Server sempat hampir mati karena antrean cold start: setiap kali server bangun, ia menjalankan migrasi berat sambil mengunci database, sehingga yang lain antre puluhan detik lalu timeout. Kini cold start tidak lagi menjalankan migrasi — migrasi hanya jalan sekali tiap update, jadi game tidak lagi timeout saat banyak pemain membuka bersamaan.
 • Menulis artikel kini bisa lagi: tombol TULIS ARTIKEL sebelumnya tidak berfungsi karena aturan keamanan browser memblokir tombol-tombol di dalam halaman. Semua tombol navigasi di dalam halaman kini diperbaiki — termasuk pencarian wilayah yang ikut mati.
-• Log peringatan admin di server kini tidak lagi berisik: status jalan darurat admin cukup dilihat di Panel Admin.`;
+• Log peringatan admin di server kini tidak lagi berisik: status jalan darurat admin cukup dilihat di Panel Admin.
+
+TAMPILAN BARU
+• Tampilan dirombak mengikuti gaya Parlamentum: header dengan perisai level besar, pasokan harian kini di tombol peti di kiri atas (berdenyut emas bila belum diambil), banner undang-undang yang sedang divoting, kartu KRONIKMU dan profil baru, serta rincian energi dan kelelahan saat diketuk. Tampilannya saja yang berubah — semua aturan dan angka game tetap sama.`;
 
 export const ADMIN_JOBS = [  { title: 'Pekerja Gudang Pelabuhan', salary: 48, resource: 'Besi Mentah', qty: 44, region: 'Kepulauan Riau', desc: 'Bongkar muat peti kemas di pelabuhan. Kerja fisik, dibayar besi mentah.' },
   { title: 'Kurir Kota', salary: 46, resource: 'Minyak Mentah', qty: 40, region: 'Kepulauan Riau', desc: 'Antar paket keliling kota. Butuh stamina dan hafal jalan.' },

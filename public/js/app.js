@@ -268,6 +268,13 @@ function buildNav() {
 function openDrawer() { $('#drawer').classList.add('open'); $('#drawer-overlay').classList.add('open'); }
 function closeDrawer() { $('#drawer').classList.remove('open'); $('#drawer-overlay').classList.remove('open'); }
 
+// Pasokan harian (rombak UI): peti di HUD menggantikan tombol AMBIL PASOKAN
+// lama — POST /api/claim, lalu segarkan HUD + halaman.
+async function claimDaily() {
+  try { const r = await post('/api/claim'); toast(`Pasokan diterima: +${r.reward.gold} emas, +${r.reward.usd} USD, +${r.reward.xp} XP.`); await refreshMe(); route(); }
+  catch (e) { toast(e.message); }
+}
+
 async function showApp() {
   hideLoading();
   $('#auth-view').hidden = true;
@@ -281,6 +288,9 @@ async function showApp() {
   $('#energy-chat').onclick = () => { location.hash = '#/chat'; };
   $('#btn-notif').onclick = () => { location.hash = '#/notifications'; };
   $('#btn-settings').onclick = () => { location.hash = '#/settings'; };
+  // Peti pasokan harian (rombak UI): sama dengan tombol AMBIL PASOKAN
+  // lama — POST /api/claim, lalu segarkan HUD + halaman.
+  $('#btn-crate').onclick = claimDaily;
   window.addEventListener('hashchange', route);
   route();
   maybeShowAnnouncement();
@@ -324,6 +334,83 @@ function renderHUD() {
   badge('#badge-notif', ME.unread);
   badge('#badge-chat', ME.unreadDm);
   badge('#badge-chat2', ME.unreadDm);
+  // Banner UU (rombak UI): jumlah UU yang sedang divoting + sisa waktu
+  // voting terdekat. Tersembunyi bila tidak ada UU yang divoting.
+  const banner = $('#law-banner');
+  if (banner) {
+    const laws = ME.votingLaws || [];
+    if (laws.length) {
+      const ends = laws.map((l) => Number(l.ends_at) || 0).filter((x) => x > 0);
+      const nearest = ends.length ? Math.min(...ends) : 0;
+      banner.hidden = false;
+      banner.innerHTML = `<b>${laws.length} undang-undang sedang dibahas</b> · sisa ${fmtRemaining(nearest ? nearest - Date.now() : 0)}`;
+    } else banner.hidden = true;
+  }
+  // Tombol peti pasokan harian (rombak UI): di bawah hamburger; berdenyut
+  // emas + badge 1 bila pasokan hari ini belum diambil.
+  const crate = $('#btn-crate');
+  if (crate) {
+    const canClaim = c.last_claim_date !== new Date().toISOString().slice(0, 10);
+    crate.disabled = !canClaim;
+    crate.classList.toggle('ready', canClaim);
+    crate.classList.toggle('claimed', !canClaim);
+    const cb = $('#badge-crate');
+    if (cb) cb.hidden = !canClaim;
+  }
+}
+
+// Sisa waktu sampai akhir voting UU, gaya "1j 15mnt" / "45 mnt".
+const fmtRemaining = (ms) => {
+  if (ms == null || ms <= 0) return 'segera berakhir';
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return m + ' mnt';
+  return Math.floor(m / 60) + 'j ' + (m % 60) + ' mnt';
+};
+
+// ---------- POPOVER PENJELASAN (rombak UI) ----------
+// Kartu penjelasan tengah layar (energi / kelelahan) — menutup lewat tombol
+// ✕, klik backdrop, atau Escape. Isinya angka game yang sebenarnya
+// (regen +2/mnt, ambang kelelahan 10.000/15.000), bukan angka referensi.
+function showPopover(title, big, bodyHtml) {
+  const root = $('#popover-root');
+  root.innerHTML = `<div class="popover-backdrop" id="popover-backdrop">
+    <div class="popover-card" role="dialog" aria-label="${esc(title)}">
+      <button class="popover-close" id="popover-close" type="button" aria-label="Tutup">✕</button>
+      <h3>${esc(title)}</h3>
+      <div class="popover-big">${big}</div>
+      ${bodyHtml}
+    </div></div>`;
+  $('#popover-close').onclick = closePopover;
+  $('#popover-backdrop').addEventListener('click', (e) => { if (e.target.id === 'popover-backdrop') closePopover(); });
+}
+function closePopover() { const root = $('#popover-root'); if (root) root.innerHTML = ''; }
+function showEnergyPopover() {
+  const c = ME.citizen;
+  const cap = c.energyCap || 100;
+  const base = 100 + 5 * (Math.max(1, c.level) - 1);
+  const bonus = cap - base;
+  showPopover('REGENERASI ENERGI', '+2 / mnt', `
+    <div class="pop-rows">
+      <div class="pop-row"><span>Dasar</span><span class="v">+2 / mnt</span></div>
+      <div class="pop-row"><span>Energi maksimum</span><span class="v">${cap}</span></div>
+      ${bonus > 0 ? `<div class="pop-row"><span>Bonus batas (Premium / RS Lapangan)</span><span class="v teal">+${bonus}</span></div>` : ''}
+      <div class="pop-row"><span>Energi sekarang</span><span class="v">${c.energy} / ${cap}</span></div>
+    </div>
+    <p class="pop-note">${c.energy >= cap ? 'Penuh — gunakan untuk bekerja.' : 'Pulih otomatis +2/menit sampai batas maksimum, termasuk saat kamu offline.'} Energi maksimum ${cap}, ditambah 5 per level.</p>`);
+}
+function showFatiguePopover() {
+  const c = ME.citizen;
+  const fatigue = c.fatigue || 0;
+  const spent = c.energy_spent_today || 0;
+  const tier = fatigue >= 15000 ? 2 : fatigue >= 10000 ? 1 : 0;
+  const mult = tier === 2 ? '0.5' : tier === 1 ? '0.75' : '1';
+  showPopover('KELELAHAN', `Hari ini ${fmt(spent)} energi dipakai bekerja`, `
+    <div class="pop-rows">
+      <div class="pop-row ${tier === 0 ? 'current' : ''}"><span>Kelelahan 0–10.000</span><span class="v">×1</span></div>
+      <div class="pop-row ${tier === 1 ? 'current' : ''}"><span>Kelelahan 10.000–15.000</span><span class="v gold">×0.75</span></div>
+      <div class="pop-row ${tier === 2 ? 'current' : ''}"><span>Kelelahan 15.000+</span><span class="v red">×0.5</span></div>
+    </div>
+    <p class="pop-note">Kelelahanmu sekarang ${fmt(fatigue)} — hasil kerja ×${mult}. Energi yang kamu pakai bekerja dihitung per hari; kelelahan berkurang 2.000 tiap pergantian hari. Upah mengikuti hasil produksi; XP tidak berubah.</p>`);
 }
 
 // ---------- ROUTER ----------
@@ -450,12 +537,47 @@ const emptyState = (ico, title, sub) => `
   <div class="panel"><div class="empty"><div class="big-ico">${ico}</div>
   <h3>${title}</h3><p class="muted">${sub}</p></div></div>`;
 
+// Kutipan pembuka tiap babak KRONIKMU + petunjuk tugas Babak I (teks tampilan
+// saja — bukan mekanik; angka hadiah/syarat tetap dari server).
+const CHRONICLE_QUOTES = {
+  1: 'Tak ada yang mulai dari nol. Setiap hari negara memberi setiap warga sedikit emas, sedikit uang, dan sedikit pengalaman.',
+  2: 'Warga yang aktif dikenal di mana-mana — di pasar, di jalan, dan di obrolan.',
+  3: 'Uang tidak tidur. Bangun usahamu selagi yang lain masih bermimpi.',
+  4: 'Negara ini milik mereka yang mau bersuara — di parlemen, bukan di pinggir jalan.',
+  5: 'Sejarah ditulis oleh mereka yang berani maju ke garis depan.',
+};
+const TASK_HINTS = {
+  claim: 'Tekan peti yang bersinar di tab kecil di bawah header, kiri atas. Peti terisi sekali sehari.',
+  job: 'Buka halaman Pekerjaan dari menu dan ambil lowongan yang tersedia di wilayahmu.',
+  shift: 'Kerjakan satu giliran di pekerjaanmu — butuh 100 energi.',
+  train: 'Latih satu atribut di bawah ini — biayanya beberapa emas.',
+  eat: 'Ketuk salah satu kartu MAKANAN di bawah untuk mengisi energi.',
+  map: 'Buka Peta Dunia dari menu dan lihat wilayah-wilayah yang ada.',
+  market: 'Buka Pasar Lokal dari menu dan lihat-lihat barang yang dijual.',
+  country: 'Buka halaman Negara dari menu.',
+};
+const ROMAN = ['I', 'II', 'III', 'IV', 'V'];
+
 // ---------- DASHBOARD ----------
 ROUTES.dashboard = async () => {
-  const [m, ch] = await Promise.all([api('/api/missions'), api('/api/chronicle')]);
+  const [m, ch, inv] = await Promise.all([api('/api/missions'), api('/api/chronicle'), api('/api/inventory')]);
   const c = ME.citizen;
-  const canClaim = c.last_claim_date !== new Date().toISOString().slice(0, 10);
   const ch1 = ch.chapters[0];
+  const totalDone = ch.chapters.reduce((s, x) => s + x.done, 0);
+  const totalTasks = ch.chapters.reduce((s, x) => s + x.total, 0);
+  const cap = c.energyCap || 100;
+  const foods = inv.items.filter((i) => i.name === 'Makanan');
+  const foodQty = (t) => foods.find((f) => f.tier === t)?.qty || 0;
+  const fatigue = c.fatigue || 0;
+  const fatigueMultNow = fatigue >= 15000 ? '0.5' : fatigue >= 10000 ? '0.75' : '1';
+  const firstTodo = ch1.tasks.find((t) => !t.done);
+  let kronikHidden = false;
+  try { kronikHidden = localStorage.getItem('parlementer_kronik_hide') === '1'; } catch { /* abaikan */ }
+  const foodCards = [1, 2, 3, 4, 5].map((t) => {
+    const q = foodQty(t);
+    return `<button class="food-card ${q ? '' : 'empty'}" type="button" data-eat="${t}" ${q ? '' : 'disabled'} aria-label="Makan Makanan T${t}, tambah ${t * 10} energi">
+      <span class="tier">T${t}</span><span class="val">⚡${t * 10}</span><span class="qty">×${q}</span>${q ? '<span class="eat">MAKAN</span>' : ''}</button>`;
+  }).join('');
   $('#page').innerHTML = page('DASHBOARD', `Hari ${ME.world.day} · Populasi dunia: ${fmt(ME.population)} warga`, `
   ${ME.activeWars.length ? `<div class="panel"><h3>⚔️ SEDANG TERJADI</h3>
     ${ME.activeWars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}
@@ -464,19 +586,39 @@ ROUTES.dashboard = async () => {
     ${ME.votingLaws.map((l) => `<div class="kv"><span class="k">${esc(l.title)}</span><span class="v">${l.yes} Ya / ${l.abstain} / ${l.no} Tidak</span></div>`).join('')}
     <button class="btn-gold btn-sm" data-goto="#/parliament">Buka Parlemen</button></div>` : ''}
   <div class="panel">
-    <div class="panel-head"><h3>👤 ${esc(c.username)}</h3><span class="chip">${c.isPremium ? '◆ PREMIUM' : 'WARGA'}</span></div>
-    <div class="kv"><span class="k">Negara</span><span class="v">🇮🇩 Republik Indonesia</span></div>
-    <div class="kv"><span class="k">Berada di</span><span class="v">${esc(ME.region?.name || '')}</span></div>
+    <div class="profile-hero">
+      <div class="profile-hero-name">${esc(c.username)}</div>
+      <div class="profile-hero-sub">
+        <span><span class="dot-red">■</span> Republik Indonesia</span>
+        <span><span class="muted">📍</span> ${esc(ME.region?.name || '')}</span>
+      </div>
+    </div>
     <div class="kv"><span class="k">Partai</span><span class="v">${ME.party ? esc(ME.party.name) + ' [' + esc(ME.party.tag) + ']' : 'Belum berpartai'}</span></div>
     <div class="kv"><span class="k">Pekerjaan</span><span class="v">${ME.job ? esc(ME.job.title) : 'Belum bekerja'}</span></div>
-    <div class="kv"><span class="k">Level</span><span class="v">${c.level} · ${c.xp}/${ME.xpNext} XP</span></div>
-    <div class="bar gold" style="margin:6px 0 12px"><i style="width:${Math.min(100, c.xp / ME.xpNext * 100)}%"></i></div>
-    <div class="kv"><span class="k">⚡ Energi</span><span class="v">${c.energy}/${c.energyCap || 100}</span></div>
-    <div class="bar" style="margin:6px 0 12px"><i style="width:${Math.min(100, c.energy / (c.energyCap || 100) * 100)}%"></i></div>
-    <p class="muted small">${c.energy >= (c.energyCap || 100) ? 'Penuh — gunakan untuk bekerja' : 'Makan roti untuk mengisi energi.'} ⚡ Pulih otomatis +2/menit sampai batas ${c.energyCap || 100} (naik 5 tiap level).</p>
-    <div class="row" style="margin-top:12px">
-      <button class="btn-gold" id="btn-claim" ${canClaim ? '' : 'disabled'}>${canClaim ? '🎁 AMBIL PASOKAN HARIAN' : '✓ Pasokan hari ini diambil'}</button>
-      <button class="btn-ghost" data-goto="#/inventory">🍞 Makan Roti</button>
+    <div class="stat-block">
+      <div class="stat-head"><span class="lbl">📈 LEVEL</span><span><span class="muted">${c.xp} / ${ME.xpNext} XP</span> <span class="big-num gold">${c.level}</span></span></div>
+      <div class="bar gold thick"><i style="width:${Math.min(100, c.xp / ME.xpNext * 100)}%"></i></div>
+    </div>
+    <button class="stat-block stat-block-btn" type="button" data-popover="energy" aria-label="Lihat rincian regenerasi energi">
+      <span class="stat-head"><span class="lbl">⚡ ENERGI</span><span class="big-num">${c.energy}<small>/${cap}</small></span></span>
+      <span class="bar thick"><i style="width:${Math.min(100, c.energy / cap * 100)}%"></i></span>
+      <span class="teal-text">${c.energy >= cap ? 'Penuh — gunakan untuk bekerja' : 'Makan roti untuk mengisi energi.'}</span>
+    </button>
+    <button class="stat-block stat-block-btn" type="button" data-popover="fatigue" aria-label="Lihat rincian kelelahan">
+      <span class="stat-head"><span class="lbl">🔋 KELELAHAN</span><span class="muted">hari ini ${c.energy_spent_today || 0}</span></span>
+      <span class="fatigue-bar"><span class="bar thick"><i style="width:${Math.min(100, fatigue / 15000 * 100)}%"></i></span><span class="fatigue-tick" style="left:66.7%"></span></span>
+      <span class="fatigue-marks"><span>10.000 ×0.75</span><span>15.000 ×0.5</span></span>
+      <span class="muted">Hasil ×${fatigueMultNow} · mulai 10.000: ×0.75</span>
+    </button>
+    <div class="stat-block">
+      <div class="stat-head"><span class="lbl">🌾 MAKANAN</span><span class="muted">Sisa roti hari ini ${10 - (c.bread_today || 0)}/10</span></div>
+      <div class="food-grid" style="margin-top:10px">${foodCards}</div>
+      <p class="muted small" style="margin-top:8px">Ketuk kartu untuk makan. Batas 10 roti per hari.</p>
+    </div>
+    <div class="stat-block">
+      <div class="stat-head"><span class="lbl">👛 DOMPET</span><button class="btn-text gold" type="button" data-goto="#/shop">TOP-UP ›</button></div>
+      <div class="kv"><span class="k">Emas</span><span class="v gold-text">◈ ${fmt(c.gold)}</span></div>
+      <div class="kv"><span class="k">Dolar</span><span class="v">${fmtUSD(c.usd)} USD</span></div>
     </div>
   </div>
   <div class="panel">
@@ -492,18 +634,31 @@ ROUTES.dashboard = async () => {
       <span class="v">${mi.progress}/${mi.target} ${mi.claimed ? '✓ Diklaim' : mi.progress >= mi.target ? `<button class="btn-gold btn-sm" data-mission="${mi.key}">KLAIM +10 🪙</button>` : ''}</span></div>
       <div class="bar" style="margin:4px 0 10px"><i style="width:${Math.min(100, mi.progress / mi.target * 100)}%"></i></div>`).join('')}
   </div>
-  <div class="panel">
-    <div class="panel-head"><h3>📖 KRONIKMU — Babak I "${esc(ch1.title)}"</h3><span class="chip">${ch1.done}/${ch1.total}</span></div>
-    ${ch1.tasks.map((t) => `<div class="kv"><span class="k">${t.done ? '✓' : '○'} ${esc(t.label)}</span></div>`).join('')}
-    <div class="row" style="margin-top:10px">
-      <button class="btn-ghost" data-goto="#/chronicle">Lihat Semua Babak</button>
-      ${ch1.done === ch1.total && !ch1.claimed ? `<button class="btn-gold" data-chronicle="1">KLAIM +${ch1.reward} EMAS</button>` : ''}
+  ${kronikHidden ? '' : `<div class="panel" id="kronik-card">
+    <div class="panel-head"><h3>📖 KRONIKMU</h3><span class="chip">${totalDone}/${totalTasks}</span></div>
+    <p class="kronik-sub">Babak I · ${esc(ch1.title)}</p>
+    <div class="seg-bar" role="img" aria-label="Progres ${totalDone} dari ${totalTasks} tugas">${Array.from({ length: totalTasks }, (_, i) => `<i class="${i < totalDone ? 'on' : ''}"></i>`).join('')}</div>
+    <div class="quote">${esc(CHRONICLE_QUOTES[1])}</div>
+    <p class="lbl-gold">TUGASMU</p>
+    <h4 class="task-big">${firstTodo ? esc(firstTodo.label) : 'Semua tugas Babak I selesai!'}</h4>
+    <p class="muted">${firstTodo ? esc(TASK_HINTS[firstTodo.key] || '') : 'Klaim hadiah babakmu di bawah.'}</p>
+    <div class="kronik-actions">
+      <button class="btn-text gold" type="button" data-goto="#/chronicle">📖 BACA BABAK INI LAGI</button>
+      <button class="btn-text" type="button" id="btn-kronik-hide">LEWATI PELATIHAN (TANPA HADIAH)</button>
     </div>
-  </div>`);
-  $('#btn-claim')?.addEventListener('click', async () => {
-    try { const r = await post('/api/claim'); toast(`Pasokan diterima: +${r.reward.gold} emas, +${r.reward.usd} USD, +${r.reward.xp} XP.`); await refreshMe(); route(); }
-    catch (e) { toast(e.message); }
-  });
+    ${ch.chapters.map((cc, idx) => `
+    <div>
+      <button class="chapter-head" type="button" data-chapter="${cc.chapter}" aria-expanded="${idx === 0 ? 'true' : 'false'}">
+        <span class="chapter-num">${ROMAN[idx] || cc.chapter}</span><span>${esc(cc.title)}</span>
+        <span class="chip">${cc.done}/${cc.total}</span>
+        <span class="chev">${idx === 0 ? '▲' : '▼'}</span>
+      </button>
+      <div class="chapter-body" ${idx === 0 ? '' : 'hidden'}>
+        ${cc.tasks.map((t) => `<div class="task-row ${t.done ? 'done' : ''} ${!t.done && cc.chapter === 1 && firstTodo && t.key === firstTodo.key ? 'active' : ''}"><span class="task-dot"></span><span>${esc(t.label)}</span></div>`).join('')}
+        ${cc.done === cc.total && !cc.claimed ? `<button class="btn-gold btn-sm" data-chronicle="${cc.chapter}">KLAIM +${cc.reward} EMAS</button>` : cc.claimed ? '<p class="teal-text small">✓ Hadiah sudah diklaim.</p>' : ''}
+      </div>
+    </div>`).join('')}
+  </div>`}`);
   $$('[data-train]').forEach((b) => b.onclick = async () => {
     try { await post('/api/train', { attr: b.dataset.train }); toast('Latihan selesai! Atribut naik 1 level.'); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
@@ -516,14 +671,43 @@ ROUTES.dashboard = async () => {
     try { await post('/api/chronicle/claim', { chapter: Number(b.dataset.chronicle) }); toast('Hadiah babak diterima!'); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   });
+  // Kartu MAKANAN: ketuk kartu = makan (sama seperti tombol MAKAN di Inventaris).
+  $$('[data-eat]').forEach((b) => b.onclick = async () => {
+    try { const r = await post('/api/eat', { tier: Number(b.dataset.eat) }); toast(`Energi +${r.gained} (sekarang ${r.energy}/${ME.citizen.energyCap || 100}).`); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
+  // Blok ENERGI / KELELAHAN: ketuk = popover rincian.
+  $$('[data-popover]').forEach((b) => b.onclick = () => {
+    if (b.dataset.popover === 'energy') showEnergyPopover();
+    else showFatiguePopover();
+  });
+  // Daftar babak KRONIKMU: ketuk judul babak = buka/tutup daftar tugasnya.
+  $$('[data-chapter]').forEach((b) => b.onclick = () => {
+    const body = b.nextElementSibling;
+    const open = body.hidden;
+    body.hidden = !open;
+    b.setAttribute('aria-expanded', String(open));
+    const chev = b.querySelector('.chev');
+    if (chev) chev.textContent = open ? '▲' : '▼';
+  });
+  // LEWATI hanya menyembunyikan kartu dari Dashboard (preferensi lokal) —
+  // tidak ada mekanisme hangus hadiah di server; hadiah babak tetap bisa
+  // diklaim di halaman KRONIKMU.
+  $('#btn-kronik-hide')?.addEventListener('click', () => {
+    try { localStorage.setItem('parlementer_kronik_hide', '1'); } catch { /* abaikan */ }
+    toast('Kartu KRONIKMU disembunyikan dari Dashboard — babak dan hadiahnya tetap ada di halaman KRONIKMU.');
+    route();
+  });
 };
 
 ROUTES.chronicle = async () => {
   const ch = await api('/api/chronicle');
-  $('#page').innerHTML = page('KRONIKMU', 'Ikuti babak demi babak, kumpulkan hadiah emas.', ch.chapters.map((c) => `
+  $('#page').innerHTML = page('KRONIKMU', 'Ikuti babak demi babak, kumpulkan hadiah emas.', ch.chapters.map((c, idx) => `
     <div class="panel">
-      <div class="panel-head"><h3>Babak ${c.chapter} — ${esc(c.title)}</h3><span class="chip">${c.done}/${c.total} · +${c.reward} emas</span></div>
-      ${c.tasks.map((t) => `<div class="kv"><span class="k">${t.done ? '✓' : '○'} ${esc(t.label)}</span></div>`).join('')}
+      <div class="panel-head"><h3>📖 Babak ${ROMAN[idx] || c.chapter} — ${esc(c.title)}</h3><span class="chip">${c.done}/${c.total} · +${c.reward} emas</span></div>
+      <div class="quote">${esc(CHRONICLE_QUOTES[c.chapter] || '')}</div>
+      <div class="seg-bar" role="img" aria-label="Progres ${c.done} dari ${c.total} tugas">${Array.from({ length: c.total }, (_, i) => `<i class="${i < c.done ? 'on' : ''}"></i>`).join('')}</div>
+      ${c.tasks.map((t) => `<div class="task-row ${t.done ? 'done' : ''}"><span class="task-dot"></span><span>${esc(t.label)}</span></div>`).join('')}
       ${c.done === c.total && !c.claimed ? `<button class="btn-gold" data-chronicle="${c.chapter}">KLAIM +${c.reward} EMAS</button>` : c.claimed ? '<p class="teal-text small">✓ Hadiah sudah diklaim.</p>' : ''}
     </div>`).join(''));
   $$('[data-chronicle]').forEach((b) => b.onclick = async () => {
@@ -536,12 +720,16 @@ ROUTES.chronicle = async () => {
 ROUTES.inventory = async () => {
   const inv = await api('/api/inventory');
   const foods = inv.items.filter((i) => i.name === 'Makanan');
+  const foodQty = (t) => foods.find((f) => f.tier === t)?.qty || 0;
   $('#page').innerHTML = page('INVENTARIS', `${inv.totalQty} unit · ${inv.items.length} jenis barang · nilai pasar ±${fmtUSD(inv.marketValue)} USD`, `
   <div class="panel"><h3>🍞 MAKANAN</h3>
-    <p class="muted small">Sisa roti hari ini: ${10 - ME.citizen.bread_today}/10 · T1 +10 ⚡, T2 +20, T3 +30, T4 +40, T5 +50</p>
-    ${foods.length ? foods.map((f) => `<div class="kv"><span class="k">Makanan T${f.tier} ×${f.qty}</span>
-      <span class="v"><button class="btn-gold btn-sm" data-eat="${f.tier}">MAKAN +${f.tier * 10} ⚡</button></span></div>`).join('')
-      : '<p class="muted">Tidak ada roti. Beli di Pasar.</p>'}
+    <p class="muted small">Sisa roti hari ini: ${10 - ME.citizen.bread_today}/10 · Ketuk kartu untuk makan.</p>
+    <div class="food-grid" style="margin-top:10px">${[1, 2, 3, 4, 5].map((t) => {
+      const q = foodQty(t);
+      return `<button class="food-card ${q ? '' : 'empty'}" type="button" data-eat="${t}" ${q ? '' : 'disabled'} aria-label="Makan Makanan T${t}, tambah ${t * 10} energi">
+        <span class="tier">T${t}</span><span class="val">⚡${t * 10}</span><span class="qty">×${q}</span>${q ? '<span class="eat">MAKAN</span>' : ''}</button>`;
+    }).join('')}</div>
+    ${foods.length ? '' : '<p class="muted" style="margin-top:8px">Tidak ada roti. Beli di Pasar.</p>'}
   </div>
   <div class="panel"><h3>📦 SEMUA BARANG</h3>
     ${inv.items.length ? `<table class="table"><tr><th>Barang</th><th>Tingkat</th><th>Jumlah</th><th>Nilai</th></tr>
@@ -654,8 +842,15 @@ ROUTES.profile = async (username) => {
   const p = await api('/api/profile/' + encodeURIComponent(name));
   const pr = p.profile;
   $('#page').innerHTML = page('BERKAS WARGA', '', `
+  <div class="profile-hero">
+    <div class="profile-hero-name">${esc(pr.username)}${pr.isPremium ? ' ◆' : ''}</div>
+    <div class="profile-hero-sub">
+      <span><span class="dot-red">■</span> Republik Indonesia</span>
+      <span><span class="muted">📍</span> ${esc(pr.region_name)}</span>
+    </div>
+  </div>
   <div class="panel">
-    <div class="panel-head"><h3>👤 ${esc(pr.username)} ${pr.isPremium ? '◆' : ''}</h3><span class="chip">LEVEL ${pr.level}</span></div>
+    <div class="panel-head"><h3>👤 IDENTITAS</h3><span class="chip">LEVEL ${pr.level}</span></div>
     <div class="profile-avatar-row">
       <span id="profile-avatar">${avatarHtml(pr.avatar, pr.username, 96)}</span>
       ${pr.username === ME.citizen.username ? `
@@ -2452,6 +2647,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('#report-modal').hidden) $('#report-modal').hidden = true;
   // Tahap 3: drawer juga bisa ditutup dengan Escape (sebelumnya hanya modal).
   if (e.key === 'Escape' && $('#drawer').classList.contains('open')) closeDrawer();
+  // Rombak UI: popover penjelasan (energi / kelelahan) juga ditutup Escape.
+  if (e.key === 'Escape' && $('#popover-root')?.children.length) closePopover();
 });
 $('#report-submit').onclick = async () => {
   if (!reportReason) { toast('Pilih alasan laporan dulu.'); return; }
