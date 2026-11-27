@@ -78,3 +78,29 @@ export function ensureReady() {
   }
   return readyPromise;
 }
+
+// Default export: handler serverless (req, res).
+// Vercel mendeteksi file bernama `app` yang mengimpor express (di root atau
+// di src/) sebagai entry aplikasi Express, dan runtime-nya menuntut default
+// export berupa function/server — tanpanya deploy gagal dengan
+// "Invalid export found in module .../src/app.js. The default export must
+// be a function or server" (FUNCTION_INVOCATION_FAILED, exit 1).
+// Karena itu handler didefinisikan DI SINI (bukan hanya di api/index.js):
+// baik Vercel memuat api/index.js maupun src/app.js langsung sebagai entry,
+// keduanya valid dan perilakunya sama (init DB dulu, lalu Express).
+// server.js (mode server biasa) tidak memakai export ini.
+export default async function handler(req, res) {
+  await ensureReady();
+  // Tunggu respons Express benar-benar selesai dikirim sebelum fungsi selesai.
+  // Kalau hanya `return app(req, res)`, runtime bisa membekukan fungsi saat
+  // promise resolve padahal handler async di dalam route belum selesai.
+  await new Promise((resolve, reject) => {
+    res.once('finish', resolve);
+    res.once('close', resolve);
+    try {
+      app(req, res);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
