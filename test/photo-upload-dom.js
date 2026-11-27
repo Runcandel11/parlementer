@@ -1,20 +1,24 @@
-// Parlementer — tes DOM upload foto (avatar + sampul artikel).
+// Parlementer — tes DOM upload foto (avatar + sampul artikel + inline).
 // Membuktikan (di jsdom + server sungguhan):
-//   (1) REGRESI KASUS KHALID (28 Nov 2026): foto JPEG 120 KB yang dipilih
-//       lewat picker Android dengan file.type KOSONG tetap diterima —
-//       processAvatarFile/processCoverFile tidak lagi menolak hanya karena
-//       file.type bukan image/*, selama ekstensi namanya .jpg/.jpeg/.png/
-//       .webp (decode lewat <img> tetap jadi penjaga akhir);
-//   (2) PESAN ERROR JUJUR: file bukan gambar / tidak bisa di-decode → pesan
+//   (1) RONDE 2 (28 Nov 2026): gerbang tipe/ekstensi DIHAPUS — decode lewat
+//       <img> jadi satu-satunya penjaga format. JPEG valid dengan file.type
+//       KOSONG dan nama TANPA ekstensi (atau .gif/.jfif) HARUS diterima;
+//       file yang benar-benar bukan gambar HARUS tetap gagal 'format'.
+//   (2) REGRESI RONDE 1: foto JPEG 120 KB dengan file.type KOSONG tetap
+//       diterima (kasus logo Khalid); file .png tipe octet-stream diterima.
+//   (3) PESAN ERROR JUJUR: file bukan gambar / tidak bisa di-decode → pesan
 //       format ("Format foto tidak didukung atau file rusak..."), BUKAN
 //       tuduhan ukuran; hasil resize tetap > 500 KB → pesan ukuran
 //       ("Foto terlalu besar (maks 500 KB setelah diperkecil).");
-//   (3) UJI TINGKAT UI: di halaman profil sendiri, memilih file .txt
+//   (4) UJI TINGKAT UI: di halaman profil sendiri, memilih file .txt
 //       menampilkan toast pesan format; memilih .jpg tanpa tipe MIME
 //       menampilkan pratinjau foto.
 // Stub: jsdom tidak bisa decode gambar sungguhan, jadi window.Image +
 // canvas di-stub di beforeParse (onload palsu 800×600; toDataURL palsu
-// pendek, atau raksasa bila window.__stubDataUrlBig).
+// pendek, atau raksasa bila window.__stubDataUrlBig). Karena stub tidak
+// memeriksa isi byte, "gagal decode" disimulasikan lewat
+// window.__decodeFail (nama file yang pura-pura gagal di-decode) —
+// pengganti decoder browser sungguhan.
 // Jalankan: node test/photo-upload-dom.js
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -67,14 +71,17 @@ async function bootDom(url, jarFetchFn) {
       // --- Stub Image + canvas (jsdom tidak decode gambar) ---
       window.__stubImageFail = false;
       window.__stubDataUrlBig = false;
-      window.URL.createObjectURL = () => 'blob:stub';
+      window.__lastObjectURLFile = null;
+      window.__decodeFail = new Set();
+      window.URL.createObjectURL = (file) => { window.__lastObjectURLFile = file; return 'blob:stub'; };
       window.URL.revokeObjectURL = () => {};
       window.Image = class {
         constructor() { this.width = 800; this.height = 600; this._src = ''; }
         set src(v) {
           this._src = v;
           setTimeout(() => {
-            if (window.__stubImageFail) { if (typeof this.onerror === 'function') this.onerror(new Error('stub gagal baca')); }
+            const f = window.__lastObjectURLFile;
+            if (window.__stubImageFail || (f && window.__decodeFail.has(f.name))) { if (typeof this.onerror === 'function') this.onerror(new Error('stub gagal baca')); }
             else if (typeof this.onload === 'function') this.onload();
           }, 0);
         }
@@ -123,17 +130,25 @@ async function main() {
     const mkFile = (name, type) => new window.File(['isi-palsu'], name, { type });
     const hasResult = (res, key) => res && typeof res[key] === 'string' && res[key].startsWith('data:image/jpeg;base64,');
 
-    // --- (1) Gerbang file: tipe kosong + ekstensi dikenal = diterima ---
-    check('looksLikeImageFile: tipe kosong + .jpg = gambar', window.looksLikeImageFile(mkFile('logo.jpg', '')) === true);
-    check('looksLikeImageFile: tipe kosong + .JPEG (kapital) = gambar', window.looksLikeImageFile(mkFile('FOTO.JPEG', '')) === true);
-    check('looksLikeImageFile: tipe octet-stream + .png = gambar', window.looksLikeImageFile(mkFile('foto.png', 'application/octet-stream')) === true);
-    check('looksLikeImageFile: tipe image/webp = gambar', window.looksLikeImageFile(mkFile('foto', 'image/webp')) === true);
-    check('looksLikeImageFile: tipe kosong + .txt = bukan gambar', window.looksLikeImageFile(mkFile('catatan.txt', '')) === false);
-    check('looksLikeImageFile: tipe kosong + tanpa ekstensi = bukan gambar', window.looksLikeImageFile(mkFile('foto', '')) === false);
-    check('looksLikeImageFile: null = bukan gambar', window.looksLikeImageFile(null) === false);
+    // --- (1) Ronde 2: gerbang tipe/ekstensi dihapus — decode yang bicara ---
+    check('looksLikeImageFile sudah dihapus (tidak ada kode mati)', typeof window.looksLikeImageFile === 'undefined');
+    const failDecode = (name) => window.__decodeFail.add(name);
+    let res = await window.processAvatarFile(mkFile('foto', ''));
+    check('Avatar (ronde 2): JPEG tanpa tipe MIME DAN tanpa ekstensi DITERIMA', hasResult(res, 'avatar') && hasResult(res, 'avatarSm'), JSON.stringify(res)?.slice(0, 60));
+    res = await window.processAvatarFile(mkFile('foto.gif', ''));
+    check('Avatar (ronde 2): JPEG bernama .gif tanpa tipe MIME DITERIMA', hasResult(res, 'avatar') && hasResult(res, 'avatarSm'));
+    res = await window.processAvatarFile(mkFile('foto.jfif', ''));
+    check('Avatar (ronde 2): JPEG bernama .jfif tanpa tipe MIME DITERIMA', hasResult(res, 'avatar') && hasResult(res, 'avatarSm'));
+    res = await window.processAvatarFile(mkFile('FOTO.JPEG', ''));
+    check('Avatar (ronde 2): JPEG .JPEG kapital tanpa tipe MIME DITERIMA', hasResult(res, 'avatar') && hasResult(res, 'avatarSm'));
+    failDecode('catatan.txt');
+    res = await window.processAvatarFile(mkFile('catatan.txt', ''));
+    check('Avatar (ronde 2): blob teks (bukan gambar) → error format', res && res.error === 'format', JSON.stringify(res));
+    res = await window.processAvatarFile(null);
+    check('Avatar: file null → error format', res && res.error === 'format', JSON.stringify(res));
 
     // --- (1) Avatar: kasus Khalid — JPEG tanpa tipe MIME diterima ---
-    let res = await window.processAvatarFile(mkFile('logo.jpg', ''));
+    res = await window.processAvatarFile(mkFile('logo.jpg', ''));
     check('Avatar: file .jpg tanpa tipe MIME DITERIMA (kasus 120 KB)', hasResult(res, 'avatar') && hasResult(res, 'avatarSm'), JSON.stringify(res)?.slice(0, 60));
     res = await window.processAvatarFile(mkFile('foto.png', 'application/octet-stream'));
     check('Avatar: file .png tipe octet-stream DITERIMA', hasResult(res, 'avatar') && hasResult(res, 'avatarSm'));
@@ -143,6 +158,7 @@ async function main() {
     // --- (2) Avatar: penyebab gagal dibedakan ---
     res = await window.processAvatarFile(mkFile('catatan.txt', ''));
     check('Avatar: file .txt tanpa tipe → error format (bukan size)', res && res.error === 'format', JSON.stringify(res));
+    failDecode('dokumen.pdf');
     res = await window.processAvatarFile(mkFile('dokumen.pdf', 'application/pdf'));
     check('Avatar: file .pdf → error format', res && res.error === 'format');
     window.__stubImageFail = true;
@@ -157,12 +173,30 @@ async function main() {
     // --- (1)+(2) Sampul: pola sama seperti avatar ---
     res = await window.processCoverFile(mkFile('sampul.jpeg', ''));
     check('Sampul: file .jpeg tanpa tipe MIME DITERIMA', hasResult(res, 'cover') && hasResult(res, 'coverSm'), JSON.stringify(res)?.slice(0, 60));
+    res = await window.processCoverFile(mkFile('sampul', ''));
+    check('Sampul (ronde 2): JPEG tanpa tipe MIME DAN tanpa ekstensi DITERIMA', hasResult(res, 'cover') && hasResult(res, 'coverSm'));
+    res = await window.processCoverFile(mkFile('sampul.jfif', ''));
+    check('Sampul (ronde 2): JPEG bernama .jfif tanpa tipe MIME DITERIMA', hasResult(res, 'cover') && hasResult(res, 'coverSm'));
     res = await window.processCoverFile(mkFile('dokumen.pdf', ''));
     check('Sampul: file .pdf tanpa tipe → error format', res && res.error === 'format');
+    res = await window.processCoverFile(null);
+    check('Sampul: file null → error format', res && res.error === 'format');
     window.__stubDataUrlBig = true;
     res = await window.processCoverFile(mkFile('besar.jpg', 'image/jpeg'));
     check('Sampul: hasil resize tetap > 500 KB → error size', res && res.error === 'size', JSON.stringify(res));
     window.__stubDataUrlBig = false;
+
+    // --- (1) Gambar inline artikel: gerbang ketat lama juga dihapus ---
+    res = await window.processInlineImageFile(mkFile('foto', ''));
+    check('Inline (ronde 2): JPEG tanpa tipe MIME DAN tanpa ekstensi DITERIMA', typeof res === 'string' && res.startsWith('data:image/jpeg;base64,'), String(res)?.slice(0, 60));
+    res = await window.processInlineImageFile(mkFile('foto.jfif', ''));
+    check('Inline (ronde 2): JPEG bernama .jfif tanpa tipe MIME DITERIMA', typeof res === 'string' && res.startsWith('data:image/jpeg;base64,'));
+    res = await window.processInlineImageFile(mkFile('foto.jpg', 'image/jpeg'));
+    check('Inline: file image/jpeg normal tetap DITERIMA', typeof res === 'string' && res.startsWith('data:image/jpeg;base64,'));
+    res = await window.processInlineImageFile(mkFile('catatan.txt', ''));
+    check('Inline (ronde 2): blob teks → null (bukan data URL)', res === null, String(res)?.slice(0, 60));
+    res = await window.processInlineImageFile(null);
+    check('Inline: file null → null', res === null);
 
     // --- (2) Pesan error: jujur + berbeda per penyebab ---
     check('Pesan format: sebut JPG/PNG/WebP, tanpa tuduh ukuran',
@@ -187,6 +221,7 @@ async function main() {
         input.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
       };
       // File buruk → toast pesan format.
+      dom.window.__decodeFail.add('catatan.txt');
       setFiles(new dom.window.File(['x'], 'catatan.txt', { type: '' }));
       await sleep(700);
       const toastTxt = doc2.querySelector('#toast')?.textContent || '';

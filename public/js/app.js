@@ -43,18 +43,14 @@ const avatarHtml = (avatar, username, size = 40) => avatar
   ? `<img src="${esc(avatar)}" class="avatar-img" style="width:${size}px;height:${size}px" alt="">`
   : `<span class="avatar-initial" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px">${esc((username || '?')[0].toUpperCase())}</span>`;
 
-// Foto: tipe MIME dari picker tidak selalu bisa diandalkan — picker Android
-// kadang memberi file.type kosong padahal file-nya JPEG valid (kasus: foto
-// logo 120 KB ditolak "melebihi 500 KB"). Terima file bila tipenya image/*
-// ATAU ekstensi namanya .jpg/.jpeg/.png/.webp; decode lewat <img> tetap jadi
-// penjaga akhir (file rusak / format tak didukung tetap ditolak di sana).
-const IMAGE_FILE_EXTS = ['.jpg', '.jpeg', '.png', '.webp'];
-function looksLikeImageFile(file) {
-  if (!file) return false;
-  if (typeof file.type === 'string' && file.type.startsWith('image/')) return true;
-  const name = typeof file.name === 'string' ? file.name.toLowerCase() : '';
-  return IMAGE_FILE_EXTS.some((ext) => name.endsWith(ext));
-}
+// Foto: TIDAK ada gerbang tipe/ekstensi di depan — picker Android sering
+// memberi file.type kosong DAN nama tanpa ekstensi yang dikenali (tanpa
+// ekstensi, .gif, .jfif, dsb.) padahal isinya JPEG valid yang bisa dibaca
+// browser (kasus 28 Nov 2026: JPG < 500 KB ditolak pesan format, ronde 2).
+// Satu-satunya penjaga format adalah decode lewat <img> di dalam tiap
+// process*File: berhasil decode → lanjut resize; gagal decode → 'format'.
+// File yang benar-benar tidak bisa di-decode browser (mis. HEIC berlabel
+// .jpg) tetap ditolak — itu batasan browser, bukan bug alur ini.
 
 // Pesan error upload foto — dibedakan per penyebab supaya tidak lagi menuduh
 // ukuran padahal masalahnya format.
@@ -70,7 +66,7 @@ function imageErrorMessage(err) {
 // 'format' = bukan gambar / tidak bisa dibaca browser, 'size' = hasil
 // resize tetap > 500 KB (thumbnail > 25 KB).
 async function processAvatarFile(file) {
-  if (!looksLikeImageFile(file)) return { error: 'format' };
+  if (!file) return { error: 'format' };
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => {
@@ -120,7 +116,7 @@ function toast(msg) {
 // 400×210 untuk daftar artikel. Mengembalikan { cover, coverSm } atau
 // { error: 'format' | 'size' } (sama seperti processAvatarFile).
 async function processCoverFile(file) {
-  if (!looksLikeImageFile(file)) return { error: 'format' };
+  if (!file) return { error: 'format' };
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => {
@@ -168,7 +164,7 @@ async function processCoverFile(file) {
 // file bukan gambar atau hasil akhirnya tetap > 300 KB biner
 // (≈ 409.600 karakter base64).
 async function processInlineImageFile(file) {
-  if (!file || !file.type.startsWith('image/')) return null;
+  if (!file) return null;
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => {
