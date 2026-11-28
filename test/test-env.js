@@ -56,8 +56,17 @@ export function portOffset() {
 }
 
 // Port server tes: port dasar + offset lane. Hasil selalu port TCP valid.
+//
+// Port terlarang fetch (daftar "forbidden port" WHATWG): server BISA listen
+// di port ini, tapi fetch()/browser menolak konek ("bad port"). Satu-satunya
+// yang kena skema lane: 3659 (chat-dom lane 2 = 3459+200) — server jalan
+// normal, tapi fetch test tidak pernah berhasil. Port turunan yang terlarang
+// digeser +20 (tetap di celah setelah blok lane itu, offset terjaga, jadi
+// tidak bentrok dengan suite lain di lane mana pun; 3679 dst. tidak terlarang).
+const FORBIDDEN_PORTS = new Set([1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697, 10080]);
 export function testPort(base) {
-  const p = base + portOffset();
+  let p = base + portOffset();
+  while (FORBIDDEN_PORTS.has(p)) p += 20;
   if (!Number.isInteger(p) || p < 1 || p > 65535) {
     throw new Error(`[test-env] port hasil ${p} (base ${base} + offset ${portOffset()}) di luar 1–65535`);
   }

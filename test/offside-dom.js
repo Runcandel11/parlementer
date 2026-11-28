@@ -111,11 +111,22 @@ async function main() {
     check('Tandai pengumuman dibaca (API)', rd.status === 200, `status=${rd.status}`);
 
     // --- (3) Banner countdown: tanggal di baris kedua.
+    // Parlemen dibuka 28 Nov 2026 20:00 WIB (epoch 1795870800000): sebelum
+    // dibuka banner tampil + tanggal di baris kedua; sesudah dibuka banner
+    // disembunyikan (app.js: ME.parliamentOpen → pcd.hidden = true).
+    // Asersi sadar-jam (v5.7.4) supaya suite tetap hijau sesudah pembukaan
+    // — sebelum 20:00 WIB checks lama lolos; sesudahnya checks baru lolos.
     dom = await bootDom(BASE + '/#/dashboard', jarP);
     const pcd = dom.window.document.querySelector('#parliament-countdown');
     check('Banner countdown parlemen ada', !!pcd);
-    check('Countdown: tanggal dipisah ke baris kedua (<br>)', (pcd?.innerHTML || '').includes('<br>'), (pcd?.innerHTML || '').slice(0, 160));
-    check('Countdown: tetap menyebut "28 Nov 2026"', (pcd?.textContent || '').includes('28 Nov 2026'), (pcd?.textContent || '').slice(0, 120));
+    const parOpen = Date.now() >= 1795870800000;
+    if (!parOpen) {
+      check('Countdown: tanggal dipisah ke baris kedua (<br>)', (pcd?.innerHTML || '').includes('<br>'), (pcd?.innerHTML || '').slice(0, 160));
+      check('Countdown: tetap menyebut "28 Nov 2026"', (pcd?.textContent || '').includes('28 Nov 2026'), (pcd?.textContent || '').slice(0, 120));
+    } else {
+      check('Countdown: banner disembunyikan setelah parlemen dibuka', pcd?.hidden === true, 'hidden=' + pcd?.hidden);
+      check('Countdown: tidak lagi menyebut tanggal buka setelah dibuka', !(pcd?.textContent || '').includes('28 Nov 2026'), (pcd?.textContent || '').slice(0, 120));
+    }
 
     // --- (4) Dashboard Premium: jatah roti /25.
     const foodHead = [...dom.window.document.querySelectorAll('#page .stat-head')].find((el) => el.textContent.includes('Sisa roti hari ini'));
