@@ -43,6 +43,19 @@ async function jarFetch(url, opts = {}) {
   return res;
 }
 
+// Jar kedua (warga kedua — untuk pesan belum dibaca + DM): cookie terpisah.
+let cookie2 = '';
+async function jarFetch2(url, opts = {}) {
+  const full = typeof url === 'string' && url.startsWith('/') ? BASE + url : url;
+  const res = await fetch(full, {
+    ...opts,
+    headers: { ...(opts.headers || {}), ...(cookie2 ? { Cookie: cookie2 } : {}) },
+  });
+  const sc = res.headers.get('set-cookie');
+  if (sc) cookie2 = sc.split(';')[0];
+  return res;
+}
+
 async function main() {
   for (const suffix of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + suffix); } catch {} }
 
@@ -247,7 +260,8 @@ async function main() {
     window.location.hash = '#/chat';
     window.route();
     await sleep(800);
-    const tabLabels = [...document.querySelectorAll('.chat-tabs .tab')].map((t) => t.textContent.trim());
+    // Label tab dibersihkan dari lencana jumlah (v5.4.0) sebelum dibandingkan.
+    const tabLabels = [...document.querySelectorAll('.chat-tabs .tab')].map((t) => t.textContent.replace(/\+?\d+/g, '').trim());
     check('tab chat: WILAYAH tampil (ganti NEGARA)', tabLabels.includes('WILAYAH'), tabLabels.join(','));
     check('tab chat: NEGARA sudah tidak ada', !tabLabels.includes('NEGARA'), tabLabels.join(','));
     const dbG = new DatabaseSync(DB_PATH);
@@ -270,7 +284,7 @@ async function main() {
     check('halaman chat wilayah: judul OBROLAN WILAYAH', /OBROLAN WILAYAH/.test(wilayahTitle), wilayahTitle);
     const wilayahMsgs = [...document.querySelectorAll('#chat-list .msg')].map((m) => m.textContent);
     check('room wilayah sendiri menampilkan pesannya', wilayahMsgs.some((t) => t.includes('pesan wilayah satu')) && wilayahMsgs.some((t) => t.includes('pesan wilayah dua')), `n=${wilayahMsgs.length}`);
-    const activeTab = document.querySelector('.chat-tabs .tab.active')?.textContent.trim();
+    const activeTab = document.querySelector('.chat-tabs .tab.active')?.textContent.replace(/\+?\d+/g, '').trim();
     check('tab WILAYAH aktif di room wilayah', activeTab === 'WILAYAH', `aktif=${activeTab}`);
     const regionsG = await (await jarFetch(BASE + '/api/regions')).json();
     const otherRegion = (regionsG.regions || []).find((x) => x.id !== myRegionId);
@@ -283,6 +297,92 @@ async function main() {
     check('kirim ke room wilayah orang lain ditolak (404)', postOther.status === 404, `status=${postOther.status}`);
     const getNegara = await jarFetch(BASE + '/api/chat/negara');
     check("room 'negara' lama ditolak (404)", getNegara.status === 404, `status=${getNegara.status}`);
+
+    // [I] v5.4.0 — kolom chat ala Parlementum (bukan full 1 layar).
+    const col = document.querySelector('.chat-column');
+    check('chat dibungkus kolom (.chat-column)', !!col, col ? 'ada' : 'tidak ada');
+    check('daftar chat berada di dalam kolom', !!col && !!col.querySelector('#chat-list'));
+    check('input + tombol KIRIM berada di dalam kolom', !!col && !!col.querySelector('#chat-text') && !!col.querySelector('#btn-send'));
+    check('tab chat memakai kelas chat-tab', document.querySelectorAll('.chat-tabs .chat-tab').length === 3, `n=${document.querySelectorAll('.chat-tabs .chat-tab').length}`);
+    const msgRow = document.querySelector('#chat-list .msg-row');
+    check('pesan memakai baris gelembung + aksi (.msg-row)', !!msgRow);
+    const repBtn = document.querySelector('#chat-list .msg [data-report]');
+    const blkBtn = document.querySelector('#chat-list .msg [data-block]');
+    check('ikon laporkan/blokir tetap ada (ikon saja, aria-label)', !!repBtn && !!blkBtn && repBtn.getAttribute('aria-label') === 'Laporkan pesan' && blkBtn.getAttribute('aria-label') === 'Blokir warga', `${repBtn?.textContent.trim()} / ${blkBtn?.textContent.trim()}`);
+    check('nama pengirim tampil (kelas msg-name)', !!document.querySelector('#chat-list .msg-name'));
+
+    // [J] v5.4.0 — lencana pesan belum dibaca di tab (ala Parlementum).
+    const reg2 = await jarFetch2(BASE + '/api/auth/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'chatdom2@test.local', password: 'rahasia123', username: 'chat_dom2' }),
+    });
+    check('warga kedua terdaftar (untuk pesan belum dibaca)', reg2.status === 200 && !!cookie2, `status=${reg2.status}`);
+    const me2 = await (await jarFetch2(BASE + '/api/me')).json();
+    const citizen2 = me2.citizen.id;
+    // Sisipkan langsung via DB (hindari cooldown kirim 5 detik antar pesan).
+    const dbJ = new DatabaseSync(DB_PATH);
+    const insJ = dbJ.prepare('INSERT INTO chat_messages (citizen_id, room, content, created_at) VALUES (?,?,?,?)');
+    const nowJ = Date.now();
+    insJ.run(citizen2, 'global', 'pesan belum dibaca global', nowJ);
+    insJ.run(citizen2, 'indonesia', 'pesan belum dibaca indonesia', nowJ + 1000);
+    dbJ.close();
+    // Pesan sendiri tidak dihitung + endpoint unread mengembalikan angka nyata.
+    const unread1 = await (await jarFetch(BASE + '/api/chat/unread')).json();
+    check('GET /api/chat/unread: global 1 + indonesia 1 (pesan sendiri tidak dihitung)', unread1.unread?.global === 1 && unread1.unread?.indonesia === 1 && unread1.unread?.wilayah === 0, JSON.stringify(unread1.unread));
+    // Buka chat Global: lencana Global hilang (sudah dibaca), Indonesia tetap 1.
+    window.location.hash = '#/chat';
+    window.route();
+    await sleep(1200);
+    const tabGlobal = document.querySelector('.chat-tabs .tab[data-room="global"]');
+    const tabIndo = document.querySelector('.chat-tabs .tab[data-room="indonesia"]');
+    check('tab Global: lencana hilang setelah dibuka (sudah dibaca)', !!tabGlobal && !tabGlobal.querySelector('.chat-count'), tabGlobal?.textContent.trim());
+    check('tab Indonesia: lencana 1 tetap tampil', !!tabIndo && tabIndo.querySelector('.chat-count')?.textContent === '1', tabIndo?.textContent.trim());
+    const unread2 = await (await jarFetch(BASE + '/api/chat/unread')).json();
+    check('setelah dibuka: unread global 0, indonesia tetap 1', unread2.unread?.global === 0 && unread2.unread?.indonesia === 1, JSON.stringify(unread2.unread));
+    // Endpoint read menolak ruangan yang bukan tab / bukan milik sendiri.
+    const badRead = await jarFetch(BASE + '/api/chat/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ room: 'negara' }) });
+    check('POST /api/chat/read ruangan tidak dikenal ditolak (400)', badRead.status === 400, `status=${badRead.status}`);
+
+    // [K] v5.4.0 — bug DM (tiket LIO #47): pesan menumpuk di atas karena
+    // tidak pernah di-scroll ke bawah saat dibuka.
+    // Palsukan metrik scroll di prototype (jsdom tidak punya layout).
+    const elProto = window.Element.prototype;
+    const origSH = Object.getOwnPropertyDescriptor(elProto, 'scrollHeight');
+    const origST = Object.getOwnPropertyDescriptor(elProto, 'scrollTop');
+    let dmSt = -1;
+    Object.defineProperty(elProto, 'scrollHeight', { get() { return this.id === 'dm-list' ? 3000 : (origSH?.get ? origSH.get.call(this) : 0); }, configurable: true });
+    Object.defineProperty(elProto, 'scrollTop', { get() { return this.id === 'dm-list' ? dmSt : (origST?.get ? origST.get.call(this) : 0); }, set(v) { if (this.id === 'dm-list') dmSt = v; else if (origST?.set) origST.set.call(this, v); }, configurable: true });
+    // Warga kedua mengirim DM ke warga pertama (DM tidak kena cooldown kirim).
+    const dmSend = await jarFetch2(BASE + '/api/dms/' + citizenId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: 'halo, ini DM pertama' }) });
+    check('warga kedua mengirim DM ke warga pertama', dmSend.status === 200, `status=${dmSend.status}`);
+    window.location.hash = '#/messages/' + citizen2;
+    window.route();
+    await sleep(1000);
+    check('buka DM: scroll turun ke pesan terbaru', dmSt === 3000, `scrollTop=${dmSt}`);
+    check('DM tampil di daftar (isi pesan terlihat)', [...document.querySelectorAll('#dm-list .msg')].some((m) => m.textContent.includes('halo, ini DM pertama')));
+    check('DM dibungkus kolom yang sama (.chat-column)', !!document.querySelector('.chat-column #dm-list'));
+    // Kirim balasan → render ulang → scroll lagi ke bawah.
+    dmSt = -1;
+    document.querySelector('#dm-text').value = 'balasan DM';
+    document.querySelector('#btn-dm-send')?.click();
+    await sleep(1200);
+    check('kirim DM: render ulang + scroll ke bawah lagi', dmSt === 3000, `scrollTop=${dmSt}`);
+    check('balasan DM tampil', [...document.querySelectorAll('#dm-list .msg')].some((m) => m.textContent.includes('balasan DM')));
+    // Kembalikan descriptor prototype.
+    if (origSH) Object.defineProperty(elProto, 'scrollHeight', origSH); else delete elProto.scrollHeight;
+    if (origST) Object.defineProperty(elProto, 'scrollTop', origST); else delete elProto.scrollTop;
+
+    // [L] v5.4.0 — bug kartu MILITER dashboard "0/undefined unit": /api/me
+    // kini mengirim cap (50 + 10×level).
+    const meL = await (await jarFetch(BASE + '/api/me')).json();
+    const expCap = 50 + 10 * meL.citizen.level;
+    check('/api/me: military.cap = 50+10×level', meL.military?.cap === expCap, `cap=${meL.military?.cap} level=${meL.citizen.level}`);
+    window.location.hash = '#/dashboard';
+    window.route();
+    await sleep(1000);
+    const milCard = document.querySelector('#dash-military')?.textContent || '';
+    check('dashboard: kartu MILITER menampilkan jumlah/batas unit', new RegExp(`0/${expCap} unit`).test(milCard), milCard.slice(0, 120));
+    check('dashboard: kartu MILITER tidak menampilkan undefined', !/undefined/.test(milCard), milCard.slice(0, 120));
 
     dom.window.close();
     console.log(`\n[chat-dom] SELESAI: ${passed} lolos, ${failed} gagal`);

@@ -231,6 +231,36 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   diblokir). Pemilik masih harus membuat conversion action "Mulai Bermain"
   di aplikasi dengan nama event tersebut, lalu mengatur goal campaign ke
   Pendaftaran.
+- **Kolom chat ala Parlementum v5.4.0 (28 Nov 2026, perintah pemilik):**
+  chat bukan lagi halaman penuh 1 layar — isinya dibungkus `.chat-column`
+  (maks 680px, di tengah, panel berbingkai, padding 16px 14px) mengikuti
+  referensi Parlementum (screenshot + docs/parlamentum-ui-reference/):
+  tab bergaris bawah (bukan pil) huruf Oswald kapital, nama pengirim emas,
+  gelembung gelap + ikon laporkan/blokir di samping gelembung (bukan di
+  dalam), tombol KIRIM emas. Perilaku TIDAK berubah: tab Global /
+  Indonesia / Wilayah (room 'negara' sudah dihapus sejak redesain dunia —
+  brief awal yang menyebut tab Negara sudah kedaluwarsa), avatar 48px,
+  pratinjau artikel (kini + nama koran), cooldown kirim 5 detik, modal
+  Laporkan Konten, polling 5 detik. Lencana pesan belum dibaca (angka
+  nyata, bukan data palsu): tabel baru `chat_read` (citizen_id, room,
+  last_read_at, PK rangkap, skema 28 — dibuat di `schema()` saja, tanpa
+  migrasi CREATE terpisah karena CREATE kedua pada tabel yang sudah ada
+  membuat pg-mem crash, batasan #3 di header test/pg-test.js) +
+  `GET /api/chat/unread` (hitung pesan dengan created_at > last_read,
+  tanpa pesan sendiri + tanpa pengirim yang diblokir, tampil maks "+99")
+  + `POST /api/chat/read` (ruangan diizinkan: global/indonesia/wilayah
+  sendiri, UPSERT). Mark-read dipicu saat muat awal ruangan (force —
+  lolos throttle 10 detik), saat pesan baru tiba di bawah, saat pill
+  "pesan baru" diklik, dan saat scroll manual ke bawah. Dua perbaikan
+  serumpun: (a) kartu MILITER dashboard "0/undefined unit" — penyebabnya
+  `/api/me` tidak mengirim `cap` (padahal `/api/military` mengirimnya);
+  diperbaiki server-side dengan `cap: unitCapFor(level)` = 50+10×level
+  di objek military `/api/me`; (b) bug DM tiket LIO #47 — `#dm-list`
+  tidak pernah di-scroll; kini `scrollTop = scrollHeight` setelah render
+  awal dan setelah kirim (render ulang lewat route()). Dicek chat-dom
+  [I]–[L] (kolom, lencana, auto-scroll DM via mock prototype scrollHeight/
+  scrollTop jsdom, cap militer), e2e (`/api/me` cap), pg-verify [29]
+  (tabel chat_read + UPSERT + FK + idempotensi).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

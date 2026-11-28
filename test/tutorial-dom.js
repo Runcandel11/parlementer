@@ -22,7 +22,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3475;
 const DB_PATH = '/tmp/parlementer-tutorial-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.3.0';
+const EXPECTED_VERSION = '5.4.0';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -97,7 +97,7 @@ async function main() {
     await sleep(1200);
 
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.3.0', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.4.0', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // --- (1) Warga baru: overlay muncul otomatis saat login pertama.
     const jar = makeJar();

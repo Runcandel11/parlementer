@@ -2691,6 +2691,8 @@ async function main() {
   setInvO(m1Id, senjataO, 100); setInvO(m1Id, droneO, 50); setInvO(m1Id, bahanO, 50);
   r = await M1.get('/api/military');
   check('GET /api/military: awal kosong, cap 60 (Lv 1 = 50+10), 3 jenis unit', r.status === 200 && r.data.power === 0 && r.data.mult === 1 && r.data.cap === 60 && Object.keys(r.data.defs || {}).length === 3, JSON.stringify({ power: r.data.power, cap: r.data.cap }));
+  r = await M1.get('/api/me');
+  check('GET /api/me: military.cap = 50+10×level (kartu dashboard tidak lagi undefined)', r.status === 200 && r.data.military && r.data.military.cap === 50 + 10 * r.data.citizen.level, JSON.stringify({ cap: r.data.military?.cap, level: r.data.citizen?.level }));
   r = await M1.post('/api/military/recruit', { type: 'kavaleri', qty: 1 });
   check('Rekrut jenis tak dikenal ditolak (400)', r.status === 400, `status=${r.status}`);
   r = await M1.post('/api/military/recruit', { type: 'infantry', qty: 0 });

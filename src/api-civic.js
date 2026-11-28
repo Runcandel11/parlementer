@@ -1341,6 +1341,46 @@ export function registerCivic(app) {
     res.json({ blocked: rows });
   }));
 
+  // Lencana pesan belum dibaca di tab chat (v5.4.0, ala Parlementum):
+  // jumlah pesan di tiap ruangan tab (global / indonesia / wilayah sendiri)
+  // yang lebih baru dari terakhir dibaca warga — tanpa pesan sendiri dan
+  // tanpa pesan dari warga yang diblokir (sama seperti filter daftar chat).
+  // Tanpa baris chat_read = belum pernah dibaca → semua pesan dihitung.
+  // HARUS terdaftar SEBELUM GET /api/chat/:room (alasan sama seperti
+  // /api/chat/blocked di atas).
+  app.get('/api/chat/unread', authRequired, citizenRequired, r(async (req, res) => {
+    const rooms = [
+      ['global', 'global'],
+      ['indonesia', 'indonesia'],
+      ['region_' + req.citizen.region_id, 'wilayah'],
+    ];
+    const reads = await sql('SELECT room, last_read_at FROM chat_read WHERE citizen_id = ?', [req.citizen.id]);
+    const lastRead = Object.fromEntries(reads.map((x) => [x.room, Number(x.last_read_at) || 0]));
+    const unread = {};
+    for (const [room, key] of rooms) {
+      const row = await one(
+        `SELECT COUNT(*) AS n FROM chat_messages m WHERE m.room = ? AND m.created_at > ? AND m.citizen_id <> ?
+         AND m.citizen_id NOT IN (SELECT blocked_id FROM blocked WHERE blocker_id = ?)`,
+        [room, lastRead[room] || 0, req.citizen.id, req.citizen.id]);
+      unread[key] = Number(row?.n || 0);
+    }
+    res.json({ unread });
+  }));
+
+  // Tandai ruangan sudah dibaca (v5.4.0): dipanggil client saat membuka
+  // ruangan / saat pesan baru terlihat di bawah. Hanya tiga ruangan tab —
+  // ruangan sidang/perang bukan tab dan tidak punya lencana.
+  app.post('/api/chat/read', authRequired, citizenRequired, r(async (req, res) => {
+    const room = String(req.body?.room || '');
+    const allowed = ['global', 'indonesia', 'region_' + req.citizen.region_id];
+    if (!allowed.includes(room)) return res.status(400).json({ error: 'Ruangan tidak dikenal.' });
+    const now = Date.now();
+    await run(`INSERT INTO chat_read (citizen_id, room, last_read_at) VALUES (?,?,?)
+      ON CONFLICT (citizen_id, room) DO UPDATE SET last_read_at = excluded.last_read_at`,
+      [req.citizen.id, room, now]);
+    res.json({ ok: true, room, last_read_at: now });
+  }));
+
   app.get('/api/chat/:room', authRequired, citizenRequired, r(async (req, res) => {
     const room = req.params.room;
     const roomErr = await validateRoom(room, req.citizen);
@@ -1362,7 +1402,8 @@ export function registerCivic(app) {
     const cols = `SELECT m.*, u.username, u.avatar_sm AS avatar, u.premium_until, p.tag AS party_tag,
         (SELECT COUNT(*) FROM article_comments WHERE article_id = m.article_id) AS article_comments,
         (SELECT title FROM articles WHERE id = m.article_id) AS article_title,
-        (SELECT likes FROM articles WHERE id = m.article_id) AS article_likes
+        (SELECT likes FROM articles WHERE id = m.article_id) AS article_likes,
+        (SELECT np.name FROM articles a JOIN newspapers np ON np.id = a.newspaper_id WHERE a.id = m.article_id) AS article_source
        FROM chat_messages m JOIN citizens c ON c.id = m.citizen_id JOIN users u ON u.id = c.user_id
        LEFT JOIN parties p ON p.id = c.party_id`;
     const blocked = `AND m.citizen_id NOT IN (SELECT blocked_id FROM blocked WHERE blocker_id = ?)`;

@@ -889,6 +889,15 @@ CREATE TABLE IF NOT EXISTS chat_reports (
   verdict TEXT NOT NULL DEFAULT '',
   created_at BIGINT NOT NULL
 );
+-- Jejak baca chat per ruangan (v5.4.0): untuk lencana jumlah pesan belum
+-- dibaca di tab chat ala Parlementum. last_read_at = waktu terakhir warga
+-- membuka/membaca ruangan itu; tanpa baris = belum pernah dibaca (0).
+CREATE TABLE IF NOT EXISTS chat_read (
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  room TEXT NOT NULL,
+  last_read_at BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (citizen_id, room)
+);
 -- Riwayat perubahan skor kredit (v3.0.0): siapa, berapa, kenapa, kapan --
 -- dibaca admin lewat GET /api/admin/credit-history/:userId.
 CREATE TABLE IF NOT EXISTS credit_history (
@@ -1330,7 +1339,7 @@ async function runDataFixups() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'company_stock', 'share_clicks', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'company_stock', 'share_clicks', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'chat_read', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -1347,7 +1356,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 27;
+const SCHEMA_VERSION = 28;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -2035,6 +2044,17 @@ async function migrateFirstShiftColumn(t) {
     if (!cols.some((c) => c.name === 'first_shift_done')) await t.exec('ALTER TABLE citizens ADD COLUMN first_shift_done INTEGER NOT NULL DEFAULT 0');
   }
 }
+
+// Jejak baca chat (v5.4.0): tabel chat_read untuk lencana pesan belum dibaca
+// di tab chat ala Parlementum. Idempotent (CREATE TABLE IF NOT EXISTS) —
+// tanpa backfill: warga lama tanpa baris dianggap belum pernah membaca
+// (last_read_at 0), jadi lencana menghitung semua pesan yang ada — itu
+// perilaku yang benar untuk ruangan yang memang belum pernah dibuka.
+// (v5.4.0) Tabel chat_read dibuat di schema() di atas — tidak ada migrasi
+// terpisah: schema() jalan di setiap initDb (CREATE TABLE IF NOT EXISTS),
+// jadi DB lama pun mendapat tabelnya. Migrasi CREATE TABLE terpisah justru
+// dilarang: CREATE kedua pada tabel yang sudah ada membuat pg-mem crash
+// (batasan #3 di header test/pg-test.js) meski di Postgres sungguhan no-op.
 
 // v5.0.0 (28 Nov 2026) — rollback exploit gaji perusahaan.
 // AKAR MASALAH: POST /api/companies/:id/job (buka lowongan baru) TIDAK

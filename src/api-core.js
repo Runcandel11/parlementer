@@ -22,7 +22,7 @@ import {
   breadLimitFor, AUTO_WORK_DURATION_MS,
   SHIFT_MAX_PER_CALL,
   PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
-  MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, tradeReputation, worldEventFor,
+  MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, unitCapFor, tradeReputation, worldEventFor,
   DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
   ONLINE_WINDOW_MS, onlineStatus,
   ADINPLAY_PROPERTY_ID, AD_REWARD_GOLD, AD_TOKEN_TTL_MS, AD_MIN_INTERVAL_MS,
@@ -480,6 +480,11 @@ export function registerCore(app) {
       units: myUnits, power: myPower,
       mult: Math.round(unitDamageMult(myPower) * 100) / 100,
       upkeep: unitUpkeepFor(myUnits), count: unitCountFor(myUnits),
+      // BUG (laporan pemain, v5.4.0): kartu MILITER dashboard menampilkan
+      // "0/undefined unit" — /api/me tidak pernah mengirim `cap`, padahal
+      // dashboard memakai ME.military.cap. Satu sumber kebenaran dengan
+      // /api/military: unitCapFor(level) = 50 + 10×level.
+      cap: unitCapFor(c.level),
       defs: MILITARY_UNITS,
     };
     res.json({

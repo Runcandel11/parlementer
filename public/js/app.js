@@ -3999,10 +3999,36 @@ function clearChatRetry() {
   if (chatRetryTimer) { clearTimeout(chatRetryTimer); chatRetryTimer = null; }
   chatRetryMs = 0;
 }
+// Jejak baca chat (v5.4.0, ala Parlementum): tandai ruangan sudah dibaca
+// supaya lencana jumlah pesan belum dibaca di tab hilang. Fire-and-forget
+// (gagal diam-diam — bukan fitur kritis); throttle 10 detik per ruangan
+// supaya polling 5 detik tidak membanjiri server dengan POST.
+const chatReadMarkAt = {};
+function chatTabKeyFor(room) {
+  if (room === 'global') return 'global';
+  if (room === 'indonesia') return 'indonesia';
+  if (room && room.startsWith('region_')) return 'wilayah';
+  return null;
+}
+async function markChatRead(room, force) {
+  const key = chatTabKeyFor(room);
+  if (!key) return;
+  const now = Date.now();
+  // Throttle 10 detik untuk mark dari polling/scroll — tapi mark saat ruangan
+  // BARU dibuka (force) selalu lolos: itulah yang menghapus lencana tab.
+  if (!force && now - (chatReadMarkAt[room] || 0) < 10000) return;
+  chatReadMarkAt[room] = now;
+  try {
+    await post('/api/chat/read', { room });
+    // Hapus lencana tab ruangan ini secara optimistis (tanpa menunggu
+    // render ulang) — warga sudah membaca ruangan ini.
+    document.querySelector(`.chat-tabs .tab[data-room="${key}"] .chat-count`)?.remove();
+  } catch {}
+}
 async function renderChatRoom(room) {
-  if (chatLoading) return;
+  if (chatLoading) return false;
   const list = $('#chat-list');
-  if (!list) return;
+  if (!list) return false;
   chatLoading = true;
   const isFirstLoad = !chatSince;
   // Ukur posisi SEBELUM pesan baru ditambahkan (scrollHeight membesar
@@ -4025,14 +4051,16 @@ async function renderChatRoom(room) {
           ${m.party_tag ? `<span class="msg-tag">[${esc(m.party_tag)}]</span>` : ''}
           <span class="msg-time">${fmtTime(m.created_at)}</span>
         </div>
-        <div class="msg-bubble">${esc(m.content)}
-          ${m.article_id ? `<a class="article-preview" href="#/press/${m.article_id}">
-            <div class="ap-tag">📰 ARTIKEL</div><div class="ap-title">${esc(m.article_title || 'Artikel')}</div>
-            <div class="ap-meta">👍 ${m.article_likes || 0} · 💬 ${m.article_comments || 0} komentar</div></a>` : ''}
-        </div>
-        <div class="msg-actions">
-          <button data-report="${m.id}" type="button">🚩 Laporkan</button>
-          <button data-block="${m.citizen_id}" type="button">🚫 Blokir</button>
+        <div class="msg-row">
+          <div class="msg-bubble">${esc(m.content)}
+            ${m.article_id ? `<a class="article-preview" href="#/press/${m.article_id}">
+              <div class="ap-tag">📰 ARTIKEL</div><div class="ap-title">${esc(m.article_title || 'Artikel')}</div>
+              <div class="ap-meta">${m.article_source ? esc(m.article_source) + ' · ' : ''}👍 ${m.article_likes || 0} · 💬 ${m.article_comments || 0} komentar</div></a>` : ''}
+          </div>
+          <div class="msg-actions">
+            <button data-report="${m.id}" type="button" title="Laporkan pesan" aria-label="Laporkan pesan">🚩</button>
+            <button data-block="${m.citizen_id}" type="button" title="Blokir warga" aria-label="Blokir warga">🚫</button>
+          </div>
         </div>
       </div>`;
       list.appendChild(div);
@@ -4052,9 +4080,12 @@ async function renderChatRoom(room) {
       chatNewCount += data.messages.length;
       showChatNewPill();
     }
+    // Pesan baru terlihat di bawah (auto-scroll) → tandai sudah dibaca.
+    if (!isFirstLoad && wasNearBottom && data.messages.length) markChatRead(room);
     // Load berhasil: sembunyikan status error dan reset backoff.
     hideChatStatus();
     clearChatRetry();
+    return true;
   } catch (e) {
     // Gagal load (server dingin / jaringan putus): JANGAN diam-diam
     // menampilkan data basi — tampilkan status error yang jelas dan
@@ -4068,6 +4099,7 @@ async function renderChatRoom(room) {
         if (chatRoom === room) renderChatRoom(room);
       }, chatRetryMs);
     }
+    return false;
   } finally {
     chatLoading = false;
   }
@@ -4099,20 +4131,32 @@ ROUTES.chat = async (sub) => {
       subLabel = `GARIS DEPAN: ${(w.war.attacker_label || 'Penyerang').toUpperCase()} → ${(w.war.defender_label || 'Pembela').toUpperCase()}`;
     } catch { subLabel = 'Obrolan front perang'; }
   }
+  // Kolom chat ala Parlementum (v5.4.0): chat bukan lagi halaman penuh 1
+  // layar — isinya dibungkus .chat-column (kolom sempit di tengah, panel
+  // berbingkai). Lencana pesan belum dibaca diambil dulu supaya tab langsung
+  // tampil dengan jumlahnya; gagal diam-diam (tab tetap tampil tanpa angka).
+  let chatUnread = { global: 0, indonesia: 0, wilayah: 0 };
+  try { const u = await api('/api/chat/unread'); if (u.unread) chatUnread = u.unread; } catch {}
   $('#page').innerHTML = page('', '', `
+  <div class="chat-column">
   <div class="chat-tabs">
-    ${CHAT_TABS.map(([r, label]) => `<button class="tab ${room === r || (r === 'wilayah' && room.startsWith('region_')) ? 'active' : ''}" data-goto="#/chat${r === 'global' ? '' : '/' + r}">${label}</button>`).join('')}
+    ${CHAT_TABS.map(([r, label]) => {
+      const n = chatUnread[r] || 0;
+      const badge = n > 0 ? `<span class="chat-count">${n > 99 ? '+99' : n}</span>` : '';
+      return `<button class="tab chat-tab ${room === r || (r === 'wilayah' && room.startsWith('region_')) ? 'active' : ''}" data-room="${r}" data-goto="#/chat${r === 'global' ? '' : '/' + r}">${label}${badge}</button>`;
+    }).join('')}
   </div>
   <h2 class="chat-title">${title}${room.startsWith('war_') ? '<span class="chat-live">● LANGSUNG</span>' : ''}</h2>
   <p class="page-sub">${esc(subLabel)}</p>
   <div id="chat-status" class="chat-status" hidden></div>
-  <div id="chat-list" style="max-height:55vh;overflow-y:auto"></div>
+  <div id="chat-list" class="chat-list"></div>
   <button id="chat-new-pill" class="chat-new-pill" type="button" hidden>↓ pesan baru</button>
   <div class="chat-input">
     <input id="chat-text" aria-label="Tulis pesan chat" placeholder="${esc(subLabel)}" maxlength="500" autocomplete="off">
     <button class="btn-gold" id="btn-send">KIRIM</button>
   </div>
-  <p class="muted small" style="margin-top:8px">Pesan minimal 3 kata dan jeda 30 detik dihitung untuk misi harian. Chat dimulai kosong — hanya pesan pemain asli.</p>`);
+  <p class="muted small" style="margin-top:8px">Pesan minimal 3 kata dan jeda 30 detik dihitung untuk misi harian. Chat dimulai kosong — hanya pesan pemain asli.</p>
+  </div>`);
   const send = async () => {
     const input = $('#chat-text');
     const text = input.value.trim();
@@ -4122,15 +4166,19 @@ ROUTES.chat = async (sub) => {
   };
   $('#btn-send').onclick = send;
   $('#chat-text').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-  // Tombol "pesan baru": lompat ke bawah dan sembunyikan penanda.
+  // Tombol "pesan baru": lompat ke bawah, sembunyikan penanda, tandai dibaca.
   const pill = $('#chat-new-pill');
-  if (pill) pill.onclick = () => { const l = $('#chat-list'); if (l) l.scrollTop = l.scrollHeight; hideChatNewPill(); };
-  // Pengguna scroll manual ke bawah → penanda tidak lagi diperlukan.
+  if (pill) pill.onclick = () => { const l = $('#chat-list'); if (l) l.scrollTop = l.scrollHeight; hideChatNewPill(); markChatRead(room); };
+  // Pengguna scroll manual ke bawah → penanda tidak lagi diperlukan + tandai dibaca.
   const listEl = $('#chat-list');
-  if (listEl) listEl.addEventListener('scroll', () => { if (chatNearBottom()) hideChatNewPill(); });
+  if (listEl) listEl.addEventListener('scroll', () => { if (chatNearBottom()) { hideChatNewPill(); markChatRead(room); } });
   chatSince = 0;
   chatRoom = room;
-  await renderChatRoom(room);
+  const chatOk = await renderChatRoom(room);
+  // Muat awal berhasil → ruangan ini sudah dibaca (lencana hilang).
+  // Force: mark pembukaan ruangan tidak boleh kalah oleh throttle 10 detik
+  // dari mark sebelumnya (mis. baru saja membuka ruangan yang sama).
+  if (chatOk) markChatRead(room, true);
   // Polling hemat (Tahap 5 — lag): lewati polling saat tab tidak aktif.
   chatTimer = setInterval(() => { if (!document.hidden) renderChatRoom(room); }, 5000);
 };
@@ -4142,7 +4190,8 @@ ROUTES.messages = async (otherId) => {
     const convs = await api('/api/dms');
     const other = convs.conversations.find((c) => c.other_id === Number(otherId));
     $('#page').innerHTML = page('PESAN — ' + esc(other?.other_name || '').toUpperCase(), '', `
-    <div id="dm-list" style="max-height:55vh;overflow-y:auto">
+    <div class="chat-column">
+    <div id="dm-list" class="chat-list dm-list">
       ${d.messages.length ? d.messages.map((m) => `
         <div class="msg"><div class="msg-avatar">${avatarHtml(m.from_avatar, m.from_name, 48)}</div>
         <div class="msg-body"><div class="msg-head"><span class="msg-name" data-goto="#/profile/${encodeURIComponent(m.from_name)}" style="cursor:pointer" title="Lihat profil ${esc(m.from_name)}">${esc(m.from_name)}</span><span class="msg-time">${fmtTime(m.created_at)}</span></div>
@@ -4150,7 +4199,13 @@ ROUTES.messages = async (otherId) => {
         : '<p class="muted">Belum ada pesan. Mulai percakapan!</p>'}
     </div>
     <div class="chat-input"><input id="dm-text" placeholder="Tulis pesan..." maxlength="500"><button class="btn-gold" id="btn-dm-send">KIRIM</button></div>
-    <button class="btn-ghost btn-sm" data-goto="#/messages" style="margin-top:10px">← Semua Percakapan</button>`);
+    <button class="btn-ghost btn-sm" data-goto="#/messages" style="margin-top:10px">← Semua Percakapan</button>
+    </div>`);
+    // Bug DM (tiket LIO #47): pesan menumpuk di atas karena daftar tidak
+    // pernah di-scroll ke bawah saat dibuka. Turunkan ke pesan terbaru —
+    // pengiriman pesan baru me-render ulang lewat route(), jadi ikut tercakup.
+    const dmList = $('#dm-list');
+    if (dmList) dmList.scrollTop = dmList.scrollHeight;
     const send = async () => {
       const v = $('#dm-text').value.trim();
       if (!v) return;
