@@ -56,7 +56,7 @@ async function main() {
   async function startServer() {
     server = spawn('node', ['server.js'], {
       cwd: ROOT,
-      env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret', ADMIN_BOOTSTRAP_CODE: 'e2e-bootstrap-code', ADINPLAY_PROPERTY_ID: 'e2e-test-property', AUTO_WORK_INTERVAL_MS: '500' },
+      env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret', ADMIN_BOOTSTRAP_CODE: 'e2e-bootstrap-code', ADINPLAY_PROPERTY_ID: 'e2e-test-property', ADSENSE_BANNER_SLOT: 'e2e-test-banner-slot', AUTO_WORK_INTERVAL_MS: '500' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout.on('data', (d) => { serverLog += d; });
@@ -162,11 +162,23 @@ async function main() {
   // = effectiveQty (52), bukan pay_qty dasar (44). effectiveQty dari
   // /api/jobs adalah angka yang sama dengan yang dibayarkan shift.
   check(`Shift selesai: dibayar ${job.effectiveQty}× Besi Mentah (panen +20%)`, r.status === 200 && r.data.goods === `${job.effectiveQty}× Besi Mentah`, `goods=${r.data.goods}`);
+  // Conversion tracking (v5.3.0): shift pertama A menandai firstShift=true.
+  check('Shift pertama A: firstShift=true (pemicu event mulai_bermain)', r.data.firstShift === true, `firstShift=${r.data.firstShift}`);
   r = await A.get('/api/me');
   check('Energi 0 setelah shift, USD tetap 550 (tanpa gaji uang)', r.data.citizen.energy === 0 && eq(r.data.citizen.usd, 550), `energi=${r.data.citizen.energy} usd=${r.data.citizen.usd}`);
   r = await A.get('/api/inventory');
   const besi = r.data.items.find((i) => i.name === 'Besi Mentah');
   check(`Inventaris: ${job.effectiveQty}× Besi Mentah T1 dari shift`, besi && besi.qty === job.effectiveQty && besi.tier === 1, `besi=${besi?.qty}`);
+  // Shift kedua A (energi diisi ulang lewat DB): firstShift=false — event
+  // 'mulai_bermain' tidak fire lagi. (Besi + XP ekstra dari shift ini
+  // tidak dipakai cek lain; A tetap Level 1.)
+  {
+    const db5c = new DatabaseSync(DB_PATH);
+    db5c.prepare('UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ?').run(100, Date.now(), meA5.data.citizen.id);
+    db5c.close();
+  }
+  r = await A.post('/api/jobs/shift');
+  check('Shift kedua A: firstShift=false', r.status === 200 && r.data.firstShift === false, `status=${r.status} firstShift=${r.data.firstShift}`);
 
   console.log('\n[6] Pasar — mulai kosong (tanpa bot)');
   r = await A.get('/api/market?scope=local');
@@ -3786,6 +3798,75 @@ async function main() {
   const tutAnon = new Client();
   r = await tutAnon.post('/api/tutorial/done', {});
   check('POST /api/tutorial/done tanpa login: 401', r.status === 401, `status=${r.status}`);
+
+  console.log('\n[37] v5.3.0 — Banner iklan AdSense berhadiah (+15, maks 10/hari, lihat 10 detik)');
+  // Server e2e di-boot dengan ADSENSE_BANNER_SLOT test (lihat startServer).
+  r = await A.get('/api/me');
+  const bannerMe = r.data.ads?.banner || {};
+  check('Banner aktif di /api/me (enabled + slot + hadiah 15 + cap 10 + view 10 dtk)',
+    bannerMe.enabled === true && bannerMe.slot === 'e2e-test-banner-slot' && bannerMe.rewardGold === 15 && bannerMe.dailyCap === 10 && bannerMe.viewMs === 10000, JSON.stringify(bannerMe));
+  const goldB0 = r.data.citizen.gold;
+  r = await A.post('/api/ads/banner/start');
+  check('POST /api/ads/banner/start memberi token 64 hex + remainingToday 10',
+    r.status === 200 && typeof r.data.token === 'string' && r.data.token.length === 64 && r.data.remainingToday === 10,
+    `status=${r.status} remaining=${r.data.remainingToday}`);
+  const btok1 = r.data.token;
+  // Klaim langsung (belum 10 detik terlihat) ditolak.
+  r = await A.post('/api/ads/banner/reward', { token: btok1 });
+  check('Klaim banner sebelum 10 detik ditolak', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  // Mundurkan expires_at 11 detik (simulasi banner terlihat 11 detik) +
+  // mundurkan granted_at (jeda 30 detik sejak grant terakhir di [30]).
+  {
+    const dbB = new DatabaseSync(DB_PATH);
+    dbB.prepare('UPDATE ad_tokens SET expires_at = expires_at - 11000 WHERE token = ?').run(btok1);
+    dbB.prepare('UPDATE ad_rewards SET granted_at = ? WHERE citizen_id = ?').run(Date.now() - 60000, adsId);
+    dbB.close();
+  }
+  r = await A.post('/api/ads/banner/reward', { token: btok1 });
+  check('Klaim banner setelah 10 detik: +15 emas, sisa 9× hari ini',
+    r.status === 200 && r.data.reward?.gold === 15 && r.data.remainingToday === 9, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.get('/api/me');
+  check('Saldo emas naik 15 (banner)', r.data.citizen.gold === goldB0 + 15, `${goldB0}→${r.data.citizen.gold}`);
+  // Token dipakai 2× ditolak.
+  r = await A.post('/api/ads/banner/reward', { token: btok1 });
+  check('Token banner dipakai 2× ditolak', r.status === 400, `status=${r.status}`);
+  // Token video tidak bisa ditukar hadiah banner, dan sebaliknya.
+  r = await A.post('/api/ads/start');
+  const vtok = r.data.token;
+  r = await A.post('/api/ads/banner/reward', { token: vtok });
+  check('Token video di endpoint banner ditolak', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/ads/banner/start');
+  const btok2 = r.data.token;
+  r = await A.post('/api/ads/reward', { token: btok2 });
+  check('Token banner di endpoint video ditolak', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  // Batas harian: grant ke-2..ke-10 berhasil, ke-11 ditolak (jeda 30 detik
+  // dilewati dengan memundurkan granted_at; waktu lihat dilewati dengan
+  // memundurkan expires_at token 11 detik).
+  {
+    const dbB = new DatabaseSync(DB_PATH);
+    let okCount = 0;
+    for (let i = 0; i < 9; i++) {
+      const st = await A.post('/api/ads/banner/start');
+      dbB.prepare('UPDATE ad_rewards SET granted_at = ? WHERE citizen_id = ?').run(Date.now() - 60000, adsId);
+      dbB.prepare('UPDATE ad_tokens SET expires_at = expires_at - 11000 WHERE token = ?').run(st.data.token);
+      const rw = await A.post('/api/ads/banner/reward', { token: st.data.token });
+      if (rw.status === 200 && rw.data.reward?.gold === 15) okCount++;
+      else { check(`Grant banner #${i + 2} berhasil`, false, `status=${rw.status} ${rw.data.error || ''}`); break; }
+    }
+    check('Grant banner ke-2 sampai ke-10 berhasil (cap 10/hari)', okCount === 9, `berhasil ${okCount}/9`);
+    // Grant ke-11 (di luar cap) ditolak meski jeda + waktu lihat dilewati.
+    const st11 = await A.post('/api/ads/banner/start');
+    dbB.prepare('UPDATE ad_rewards SET granted_at = ? WHERE citizen_id = ?').run(Date.now() - 60000, adsId);
+    dbB.prepare('UPDATE ad_tokens SET expires_at = expires_at - 11000 WHERE token = ?').run(st11.data.token);
+    const rw11 = await A.post('/api/ads/banner/reward', { token: st11.data.token });
+    check('Grant banner ke-11 ditolak (batas harian 10×/hari)', rw11.status === 400, `status=${rw11.status} ${rw11.data.error || ''}`);
+    const nB = dbB.prepare("SELECT COUNT(*) AS n FROM ad_rewards WHERE citizen_id = ? AND kind = 'banner'").get(adsId);
+    check('Tabel audit mencatat 10 grant banner (kind=banner)', Number(nB.n) === 10, `n=${nB.n}`);
+    const nV = dbB.prepare("SELECT COUNT(*) AS n FROM ad_rewards WHERE citizen_id = ? AND kind = 'video'").get(adsId);
+    check('Grant video tetap tercatat kind=video (7 baris dari [30])', Number(nV.n) === 7, `n=${nV.n}`);
+    dbB.close();
+  }
+
 
   setDayO(1);
 

@@ -987,3 +987,10 @@ body {
   .hud-icon { width: 28px; height: 28px; font-size: 14px; }
   .hud-pill { height: 30px; padding: 0 7px; font-size: 12px; }
 }
+
+/* ---------- Banner iklan AdSense (v5.3.0) ----------
+   Slot banner di halaman #/ads: tinggi minimum supaya layout tidak
+   lompat saat iklan mengisi; placeholder berbingkai putus-putus saat
+   slot belum dikonfigurasi / iklan belum terisi. */
+.ad-banner-slot { min-height: 100px; display: flex; align-items: center; justify-content: center; text-align: center; border: 1px dashed var(--line, #3a3f4a); border-radius: 10px; padding: 12px; margin: 10px 0; overflow: hidden; }
+.ad-banner-slot ins.adsbygoogle { width: 100%; }

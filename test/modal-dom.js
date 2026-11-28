@@ -793,7 +793,11 @@ async function main() {
       civic.includes('Kamu sudah punya koran bernama itu.') && civic.includes("app.delete('/api/press/newspapers/:id'"));
     const js3 = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
     check('app.js: peti dihubungkan ke claimDaily (POST /api/claim)', js3.includes("$('#btn-crate').onclick = claimDaily") && js3.includes("post('/api/claim')"));
-    check('app.js: tombol klaim lama (#btn-claim) sudah dihapus', !js3.includes('#btn-claim'));
+    // Cek presisi (bukan substring '#btn-claim'): tombol banner v5.3.0
+    // bernama #btn-claim-banner — substring itu bukan tombol klaim lama.
+    // Yang dijamin hilang: elemen id="btn-claim" + selector $('#btn-claim').
+    check('app.js: tombol klaim lama (#btn-claim) sudah dihapus',
+      !js3.includes('id="btn-claim"') && !js3.includes("$('#btn-claim')"));
 
     dom.window.close();
   } finally {

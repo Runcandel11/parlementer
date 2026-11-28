@@ -189,13 +189,13 @@ Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lama
 kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara ~48,40 USD; USD tidak
 berubah) → pasar (jual/beli, pajak 2%) → makan → valas (cetak 1 emas = 10 USD)
 
-Hasil terakhir (28 Nov 2026, v5.2.0 overlay tutorial pemain baru + AdSense): **e2e 1119/1119 lolos,
-pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 240/240 lolos,
+Hasil terakhir (28 Nov 2026, v5.3.0 "Lihat Banner Iklan" + Google tag & konversi): **e2e 1134/1134 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 253/253 lolos,
 pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, tutorial-dom 43/43 lolos,
-landing-glass-dom 73/73 lolos** — dan semua suite DOM lain hijau (21 suite DOM = 852/852,
-xp-rollback 49/49, ssl 6/6; total 2350/2350, 0 gagal). Tutorial: overlay 7 langkah muncul otomatis
+landing-glass-dom 79/79 lolos, ads-dom 44/44 lolos, conversion-dom 20/20 lolos** — dan semua suite DOM lain hijau (22 suite DOM = 902/902,
+xp-rollback 49/49, ssl 6/6; total 2428/2428, 0 gagal). Banner: +15 emas per tampilan, batas 10×/hari, klaim setelah banner terlihat 10 detik. Google tag AW-18546219743 + event conversion "Tayangan halaman" di &lt;head&gt;; event "Pendaftaran" (send_to AW-18546219743/qsZPCIw7.8AdEN-1w4tF) fire 1× saat registrasi berhasil; "Mulai Bermain" fire 1× saat shift pertama selesai. Tutorial (v5.2.0): overlay 7 langkah muncul otomatis
 di dashboard saat login pertama pemain baru (tutorial_done = 0, tersimpan di server; warga lama
-di-backfill 1 saat migrasi skema 25), tombol Lewati selalu ada, selesai/lewati menutup permanen,
+di-backfill saat migrasi skema 25), tombol Lewati selalu ada, selesai/lewati menutup permanen,
 replay dari Buku Panduan/Pengaturan; pemain baru yang masuk lewat deep link tidak dibajak —
 overlay baru muncul begitu ia sampai di dashboard. AdSense: script verifikasi
 ca-pub-2013457230013617 di &lt;head&gt; + public/ads.txt (google.com, pub-2013457230013617, DIRECT,

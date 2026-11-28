@@ -27,7 +27,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3462;
 const DB_PATH = '/tmp/parlementer-landing-glass-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.2.0';
+const EXPECTED_VERSION = '5.3.0';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -101,7 +101,7 @@ async function main() {
     check('landing: 3 badge bawah ada', html.includes('GRATIS DIMAINKAN') && html.includes('DIMAINKAN DI BROWSER') && html.includes('SEMUA BISA DIDAPAT DENGAN BERMAIN'));
     check('landing: label OPEN BETA tampil (status game saat ini)', html.includes('OPEN BETA'));
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.2.0 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.3.0 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // --- v5.1.0: kartu preview link (OG) + favicon/logo ---
     check('OG: og:title judul baru (Dunia yang Berjalan oleh Para Pemain)', html.includes('og:title" content="Parlementer — Dunia yang Berjalan oleh Para Pemain'));
@@ -124,6 +124,17 @@ async function main() {
     const adsTxt = await adsTxtRes.text();
     check('AdSense: /ads.txt tersaji 200', adsTxtRes.status === 200, `status=${adsTxtRes.status}`);
     check('AdSense: /ads.txt berisi baris google.com, pub-2013457230013617, DIRECT, f08c47fec0942fa0', adsTxt.trim() === 'google.com, pub-2013457230013617, DIRECT, f08c47fec0942fa0', adsTxt.trim());
+
+    // --- v5.3.0: Google tag (gtag.js) + event konversi "Tayangan halaman" ---
+    check('gtag: script googletagmanager gtag.js ada di <head> (id AW-18546219743)', html.includes('https://www.googletagmanager.com/gtag/js?id=AW-18546219743') && html.includes('async src="https://www.googletagmanager.com/gtag/js?id=AW-18546219743"'));
+    check("gtag: gtag('config', 'AW-18546219743') ada", html.includes("gtag('config', 'AW-18546219743')"));
+    check("gtag: dataLayer + gtag('js', new Date()) diinisialisasi", html.includes('window.dataLayer = window.dataLayer || []') && html.includes("gtag('js', new Date())"));
+    check("gtag: event conversion 'Tayangan halaman' dengan send_to yang benar", html.includes("gtag('event', 'conversion', {'send_to': 'AW-18546219743/_HfVCK6Mg8EdEN-1w4tF'})"));
+    check('gtag: tag Google terletak SETELAH script AdSense (AdSense tidak rusak/tergeser)',
+      html.indexOf('pagead2.googlesyndication.com') !== -1 && html.indexOf('googletagmanager.com/gtag/js') > html.indexOf('pagead2.googlesyndication.com'),
+      `adsense@${html.indexOf('pagead2.googlesyndication.com')} gtag@${html.indexOf('googletagmanager.com/gtag/js')}`);
+    check('gtag: semua tag tracking ada di dalam <head> (sebelum </head>)',
+      html.indexOf('googletagmanager.com/gtag/js') < html.indexOf('</head>') && html.indexOf("_HfVCK6Mg8EdEN-1w4tF") < html.indexOf('</head>'));
 
     // --- v5.1.0: seksi landing baru ada di HTML statis ---
     check('landing: seksi angka dunia ada (id ls-population s.d. ls-tx)', html.includes('id="ls-population"') && html.includes('id="ls-countries"') && html.includes('id="ls-regions-owned"') && html.includes('id="ls-fronts"') && html.includes('id="ls-tx"'));
@@ -155,7 +166,7 @@ async function main() {
     check('tamu: #auth-view tampil, #app tersembunyi', !document.querySelector('#auth-view').hidden && document.querySelector('#app').hidden === true);
     check('tamu: hero landing tampil', !document.querySelector('#landing-hero').hidden);
     check('tamu: kartu login/daftar tersembunyi di awal', document.querySelector('#auth-card-wrap').hidden === true);
-    check('tamu: footer landing menampilkan Parlemen v5.2.0', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
+    check('tamu: footer landing menampilkan Parlemen v5.3.0', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
     const landingCredits = document.querySelector('#landing-credits')?.textContent || '';
     check('tamu: footer landing menampilkan kredit pembuat (Khalid + Angelica)', landingCredits.includes('Khalid Talal Muhammad Zain Al-Ghunaim') && landingCredits.includes('Angelica'), landingCredits);
     check('tamu: kredit landing menyebut Khalid CEO & Pengembang', landingCredits.includes('CEO & Pengembang'), landingCredits);
@@ -199,7 +210,7 @@ async function main() {
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await sleep(2500);
     check('daftar dari landing: aplikasi tampil (#app), landing tidak menghadang', document.querySelector('#app').hidden === false && document.querySelector('#auth-view').hidden === true);
-    check('login: footer drawer menampilkan Parlemen v5.2.0', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
+    check('login: footer drawer menampilkan Parlemen v5.3.0', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
     const drawerCredits = document.querySelector('#drawer-credits')?.textContent || '';
     check('login: footer drawer menampilkan kredit pembuat (Khalid + Angelica)', drawerCredits.includes('Khalid Talal Muhammad Zain Al-Ghunaim') && drawerCredits.includes('Angelica'), drawerCredits);
     check('login: kredit drawer menyebut Khalid CEO & Pengembang', drawerCredits.includes('CEO & Pengembang'), drawerCredits);

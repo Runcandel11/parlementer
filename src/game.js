@@ -95,7 +95,7 @@
 // absurd hasil exploit di-rollback (migrasi clamp). Plus perbaikan bug
 // share link: shareStatsFor tidak lagi memakai `? IS NULL` (Postgres
 // 42P18 — hanya gagal di live, lolos di SQLite).
-export const VERSION = '5.2.0';
+export const VERSION = '5.3.0';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
@@ -114,6 +114,28 @@ export const AD_TOKEN_TTL_MS = 5 * 60 * 1000;
 // grant terakhir. Bukan cap harian — pemain tetap bisa menonton tanpa
 // batas, hanya tidak bisa membanjiri server dengan panggilan beruntun.
 export const AD_MIN_INTERVAL_MS = 30 * 1000;
+
+// --- Banner iklan AdSense berhadiah (v5.3.0) ---
+// Slot unit iklan display AdSense (data-ad-slot) — SATU tempat, dari env
+// ADSENSE_BANNER_SLOT. Kosong = banner belum dikonfigurasi: halaman #/ads
+// menampilkan placeholder yang jujur dan TIDAK ada hadiah banner.
+// PENTING: JANGAN mengarang slot ID — ID asli dibuat di akun AdSense
+// (pub-2013457230013617) lewat AdSense → Iklan → Unit iklan, lalu diisi
+// ke env. Client ID (ca-pub-...) TIDAK ditulis di sini — klien membaca
+// dari tag <script> adsbygoogle yang sudah ada di public/index.html.
+// Tes boleh menyuntik lewat env ADSENSE_BANNER_SLOT.
+export const ADSENSE_BANNER_SLOT = process.env.ADSENSE_BANNER_SLOT || '';
+// Hadiah per tampilan banner: +15 emas (setengah dari video, perintah
+// pemilik 28 Nov 2026).
+export const BANNER_REWARD_GOLD = 15;
+// Batas harian banner: maks 10 tampilan berhadiah/hari/pemain (= 150
+// emas/hari). Mitigasi kebijakan Google (incentivized traffic): hadiah
+// HANYA untuk MELIHAT banner — jangan pernah memberi hadiah untuk klik
+// iklan, dan jangan melacak klik untuk hadiah.
+export const BANNER_DAILY_CAP = 10;
+// Banner harus terlihat di layar minimal 10 detik sebelum hadiah bisa
+// diklaim (ditegakkan server dari waktu terbit token + timer klien).
+export const BANNER_VIEW_MS = 10 * 1000;
 
 // --- Satuan waktu dasar (Tahap 7) ---
 // Satu sumber kebenaran untuk "sehari" dalam milidetik — semua konstanta

@@ -387,6 +387,10 @@ CREATE TABLE IF NOT EXISTS citizens (
   -- Tutorial overlay (v5.2.0): 0 = belum pernah menyelesaikan/melewati
   -- tutorial awal; 1 = sudah selesai atau dilewati (tidak muncul lagi).
   tutorial_done INTEGER NOT NULL DEFAULT 0,
+  -- Conversion tracking Google Ads (v5.3.0): 0 = belum pernah shift,
+  -- 1 = sudah pernah shift (dipakai untuk fire event 'mulai_bermain'
+  -- tepat sekali, saat shift PERTAMA selesai).
+  first_shift_done INTEGER NOT NULL DEFAULT 0,
   energy_spent_today INTEGER NOT NULL DEFAULT 0,
   chat_today INTEGER NOT NULL DEFAULT 0,
   last_chat_at BIGINT NOT NULL DEFAULT 0,
@@ -963,15 +967,18 @@ CREATE TABLE IF NOT EXISTS ad_tokens (
   token TEXT PRIMARY KEY,
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   expires_at BIGINT NOT NULL,
-  used_at BIGINT
+  used_at BIGINT,
+  kind TEXT NOT NULL DEFAULT 'video'
 );
 -- (v4.4.0) Jejak audit hadiah iklan: 1 baris per grant +30 emas, supaya
 -- admin bisa melihat siapa saja yang menerima hadiah iklan dan kapan.
+-- (v5.3.0) kind: 'video' (AdinPlay, +30) atau 'banner' (AdSense, +15).
 CREATE TABLE IF NOT EXISTS ad_rewards (
   id ${id},
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   gold INTEGER NOT NULL,
-  granted_at BIGINT NOT NULL
+  granted_at BIGINT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'video'
 );
 CREATE TABLE IF NOT EXISTS convoys (
   id ${id},
@@ -1260,6 +1267,8 @@ export async function initDb() {
     await migrateWageRollback(t);
     await migrateJobDedup(t);
     await migrateTutorialColumns(t);
+    await migrateBannerAdKind(t);
+    await migrateFirstShiftColumn(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1338,7 +1347,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 25;
+const SCHEMA_VERSION = 27;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1992,6 +2001,39 @@ async function migrateTutorialColumns(t) {
   if (existing) await t.run('UPDATE db_meta SET value = ? WHERE key = ?', [String(Number(done?.n || 0)), TUTORIAL_BACKFILL_KEY]);
   else await t.run('INSERT INTO db_meta (key, value) VALUES (?, ?)', [TUTORIAL_BACKFILL_KEY, String(Number(done?.n || 0))]);
   console.log(`[migrasi tutorial] warga lama ditandai selesai: ${Number(done?.n || 0)}`);
+}
+
+// Banner iklan AdSense (v5.3.0): kolom kind di ad_tokens + ad_rewards
+// untuk membedakan token/grant video vs banner. Token banner yang dipakai
+// di endpoint video (atau sebaliknya) DITOLAK oleh handler — tanpa kind,
+// token banner (yang lebih mudah didapat: cukup lihat banner 10 detik)
+// bisa ditukar +30 emas video. Default 'video' supaya token/grant lama
+// tetap sah. Idempotent (ADD COLUMN IF NOT EXISTS / cek PRAGMA).
+async function migrateBannerAdKind(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('ad_tokens', 'kind', "TEXT NOT NULL DEFAULT 'video'");
+  await addCol('ad_rewards', 'kind', "TEXT NOT NULL DEFAULT 'video'");
+}
+
+// Conversion tracking Google Ads (v5.3.0): kolom first_shift_done di
+// citizens — 0 = belum pernah shift (warga lama ikut 0: shift pertama
+// mereka SETELAH migrasi tetap memicu event 'mulai_bermain' sekali,
+// itu perilaku yang benar). Idempotent (ADD COLUMN IF NOT EXISTS /
+// cek PRAGMA). Tidak ada backfill: default 0 sudah benar untuk semua.
+async function migrateFirstShiftColumn(t) {
+  if (isPg) {
+    await t.exec('ALTER TABLE citizens ADD COLUMN IF NOT EXISTS first_shift_done INTEGER NOT NULL DEFAULT 0');
+  } else {
+    const cols = await t.sql('PRAGMA table_info(citizens)');
+    if (!cols.some((c) => c.name === 'first_shift_done')) await t.exec('ALTER TABLE citizens ADD COLUMN first_shift_done INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 // v5.0.0 (28 Nov 2026) — rollback exploit gaji perusahaan.

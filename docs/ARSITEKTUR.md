@@ -88,6 +88,7 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
 | UU yang tersedia | `LAW_KINDS` (`game.js`) | usul UU, `lawEffectText`, tick |
 | Harga pasar acuan | `COMMODITIES` + `checkPriceBand` (`game.js`) | pasar lokal/global, chart |
 | Hadiah klik share link | `SHARE_GOLD_PER_CLICK` = 10, `SHARE_MAX_GOLD_PER_DAY` = 200, `SHARE_MAX_CLICKS_PER_DAY` = 20 (`game.js`) | klik `/s/:code`, GET `/api/share`, GET `/api/admin/share`, tes |
+| Hadiah banner AdSense | `BANNER_REWARD_GOLD` = 15, `BANNER_DAILY_CAP` = 10/hari, `BANNER_VIEW_MS` = 10 detik, `ADSENSE_BANNER_SLOT` (env, `game.js`) | POST `/api/ads/banner/start` + `/reward`, halaman #/ads, tes e2e [37] + ads-dom |
 | Upah perusahaan maks | TIDAK ADA batas tetap (v5.0.0) — gaji maksimal = USD yang sedang dipegang pemilik perusahaan; gaji dipotong dari pemilik saat shift; bila pemilik tak mampu bayar, shift gagal (`performShift`, `api-core.js`) | POST `/api/companies/:id/job`, PATCH `/api/jobs/:id`, POST `/api/jobs/shift`, UI edit upah + panel CARA KERJA |
 | Shift maks per tekan | `SHIFT_MAX_PER_CALL` = 10 (`game.js`) | POST `/api/jobs/shift` (multi-shift) |
 | Pesan error HEIC | `HEIC_ERROR_MESSAGE` (`util.js`) + `IMAGE_ERROR_HEIC` (`app.js`) — jaga selaras | endpoint foto profil/perusahaan, klien `isHeicFile` |
@@ -111,7 +112,7 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
 
 ## 5. Skema database
 
-- `SCHEMA_VERSION` saat ini **23** (`src/db.js`). Migrasi berurutan
+- `SCHEMA_VERSION` saat ini **27** (`src/db.js`). Migrasi berurutan
   (`migrateStageNColumns`) — jangan pernah menulis ulang `CREATE TABLE`
   tanpa jalur migrasi; data live harus ikut naik versi.
 - **Pelajaran insiden 28 Nov 2026 (v4.6.0 crash-loop, server down 11:11–11:27 WIB):**
@@ -193,6 +194,43 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   AdSense: script verifikasi `ca-pub-2013457230013617` di `<head>`
   (public/index.html) + `public/ads.txt` (satu baris, `google.com,
   pub-2013457230013617, DIRECT, f08c47fec0942fa0`) — dicek landing-glass-dom.
+- **Banner iklan AdSense berhadiah v5.3.0 (28 Nov 2026, perintah pemilik):**
+  opsi "Lihat Banner Iklan" di halaman #/ads, +15 emas per tampilan
+  (setengah dari video), maks 10×/hari (= 150 emas/hari). Token flow
+  meniru video (`POST /api/ads/banner/start` → `/reward`, token acak
+  256-bit, 5 menit, satu kali pakai) dengan kolom `kind` di `ad_tokens` +
+  `ad_rewards` (skema 26, default 'video') — token banner TIDAK bisa
+  ditukar hadiah video dan sebaliknya (dicek `kind` di kedua handler;
+  tanpa ini token banner yang mudah didapat bisa ditukar +30 video).
+  Hadiah HANYA untuk MELIHAT: klien hanya minta token bila slot terisi
+  iklan (`data-ad-status="filled"`) dan tombol klaim aktif setelah banner
+  terlihat 10 detik (ditegakkan server dari waktu terbit token +
+  `BANNER_VIEW_MS`); klik iklan tidak pernah dilacak/diberi hadiah
+  (mitigasi kebijakan Google incentivized traffic). Slot unit iklan
+  (`ADSENSE_BANNER_SLOT`, env) BELUM ADA saat rilis — JANGAN mengarang
+  ID; tanpa slot, halaman menampilkan placeholder jujur dan `/start`
+  menolak 503 (pola yang sama dengan video saat property ID kosong).
+  Banner kosong (situs belum disetujui Google) = tidak ada token/hadiah;
+  itu keadaan yang diharapkan, bukan bug.
+- **Conversion tracking Google Ads v5.3.0 (28 Nov 2026, perintah pemilik):**
+  Google tag (gtag.js, AW-18546219743) + event conversion "Tayangan
+  halaman" (`send_to: AW-18546219743/_HfVCK6Mg8EdEN-1w4tF`) di `<head>`
+  public/index.html, tepat setelah script AdSense (async, tidak menghambat
+  render). Dua event game: `Pendaftaran` — cuplikan conversion PERSIS dari
+  Google (`gtag('event', 'conversion', {'send_to':
+  'AW-18546219743/qsZPCIw7.8AdEN-1w4tF', 'value': 1.0, 'currency': 'IDR'})`,
+  action dibuat pemilik 28 Nov 14:36 WIB) yang di-fire tepat sekali saat
+  registrasi via form berhasil (login biasa TIDAK memicu; BUKAN event
+  'sign_up' polos) — dan `mulai_bermain` (tanpa `send_to`, action "Mulai
+  Bermain" belum dibuat pemilik) yang di-fire sekali saat shift PERTAMA
+  selesai — server menandai lewat kolom `citizens.first_shift_done`,
+  skema 27, UPDATE bersyarat + cek changes supaya dua request paralel
+  hanya satu yang mendapat `firstShift=true` di respons shift. Keduanya
+  dipanggil lewat `firePendaftaranConversion()` / `fireConversionEvent()`
+  yang meng-guard `window.gtag` (tidak crash bila pustaka Google
+  diblokir). Pemilik masih harus membuat conversion action "Mulai Bermain"
+  di aplikasi dengan nama event tersebut, lalu mengatur goal campaign ke
+  Pendaftaran.
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

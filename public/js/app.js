@@ -520,6 +520,11 @@ function showAuth() {
         admin_code: String(fd.get('admin_code') || '').trim() || undefined,
       });
       toast('Selamat datang! Dunia ini masih terpecah — dirikan negaramu sendiri.');
+      // Konversi Google Ads (v5.3.0): 'Pendaftaran' (send_to
+      // AW-18546219743/qsZPCIw7.8AdEN-1w4tF) HANYA saat registrasi baru
+      // berhasil — login biasa tidak memanggil ini. BUKAN event 'sign_up'
+      // polos: action-nya sudah dibuat pemilik dan punya label sendiri.
+      firePendaftaranConversion();
       showApp();
     } catch (ex) { err.textContent = ex.message; err.hidden = false; }
   };
@@ -1119,6 +1124,7 @@ ROUTES.dashboard = async () => {
     <button class="btn-gold" type="button" data-goto="#/ads">▶ TONTON IKLAN (+${adsCfg.rewardGold} EMAS)</button>`
       : `<p class="muted small">Segera hadir — menu nonton iklan sedang disiapkan, menunggu aktivasi dari admin.</p>
     <button class="btn-gold" type="button" data-goto="#/ads">LIHAT MENU ›</button>`}
+    ${adsCfg.banner?.enabled ? `<p class="muted small">📺 Atau lihat banner iklan: +${adsCfg.banner.rewardGold} emas per tampilan (maks ${adsCfg.banner.dailyCap}×/hari).</p>` : ''}
   </div>
   <div class="panel" id="dash-share">
     <div class="panel-head"><h3>🔗 BAGIKAN LINK</h3><button class="btn-text gold" type="button" data-goto="#/share">BUKA ›</button></div>
@@ -2526,6 +2532,9 @@ const payLabel = (j) => j.salary_type === 'goods'
 async function doShift() {
   try {
     const r = await post('/api/jobs/shift');
+    // Konversi Google Ads (v5.3.0): 'mulai_bermain' tepat sekali, saat
+    // shift PERTAMA selesai (server menandai firstShift).
+    if (r.firstShift) fireConversionEvent('mulai_bermain');
     const xpNote = r.xpGained ? ` +${r.xpGained} XP${r.doubleXp ? ' (×2 jam ganda!)' : ''}` : '';
     toast(r.goods ? `Shift selesai! ${r.note}${xpNote}` : `Shift selesai!${r.note ? ' ' + r.note : ''} Gaji bersih ${fmtRp(r.net)} (pajak ${fmtRp(r.tax)}).${xpNote}`);
     await refreshMe(); route();
@@ -4292,6 +4301,33 @@ ROUTES.shop = async () => {
   </div>`);
 };
 
+// ---------- KONVERSI GOOGLE ADS (v5.3.0) ----------
+// 'Pendaftaran' — cuplikan event PERSIS dari Google (action dibuat pemilik
+// 28 Nov 14:36 WIB, web Google Ads, manual + page load, hitung "Satu",
+// nilai sama per konversi, atribusi berbasis data). Fire TEPAT SATU KALI
+// saat registrasi baru berhasil; login biasa TIDAK memanggil ini. Label
+// send_to JANGAN diubah-ubah. Guard: jangan crash bila pustaka Google
+// diblokir (ad-block / offline) — gtag tidak ada = lewati diam-diam.
+function firePendaftaranConversion() {
+  try {
+    if (typeof window.gtag === 'function') {
+      window.gtag('event', 'conversion', {
+        'send_to': 'AW-18546219743/qsZPCIw7.8AdEN-1w4tF',
+        'value': 1.0,
+        'currency': 'IDR',
+      });
+    }
+  } catch (e) { /* abaikan — konversi opsional, game tetap jalan */ }
+}
+// Event konversi game (tanpa send_to — action-nya belum dibuat pemilik di
+// aplikasi Google Ads): 'mulai_bermain' saat shift pertama selesai. Guard
+// sama seperti di atas. TIDAK ada send_to di sini: action "Mulai Bermain"
+// belum dibuat pemilik (dibuat dengan nama event yang sama, baru dipetakan
+// ke campaign).
+function fireConversionEvent(name) {
+  try { if (typeof window.gtag === 'function') window.gtag('event', name); } catch (e) { /* abaikan — konversi opsional, game tetap jalan */ }
+}
+
 // ---------- IKLAN BERHADIAH (AdinPlay, v4.4.0) ----------
 // Library aiptag dimuat dinamis HANYA bila property ID terisi — dengan ID
 // kosong tidak ada skrip pihak ketiga yang dimuat sama sekali, dan menu
@@ -4362,23 +4398,103 @@ async function watchRewardedAd(ads) {
   });
 }
 
-ROUTES.ads = async () => {
-  const ads = ME.ads || { enabled: false, propertyId: '', rewardGold: 30 };
-  if (!ads.enabled) {
-    $('#page').innerHTML = page('🎬 NONTON IKLAN', 'Tonton iklan, dapat emas.', `
-    <div class="panel"><div class="empty"><div class="big-ico">🎬</div>
-    <h3>Segera hadir</h3>
-    <p class="muted">Menu nonton iklan sedang disiapkan — menunggu aktivasi dari admin. Begitu aktif, tiap iklan yang kamu tonton sampai selesai memberi +${ads.rewardGold} emas, tanpa batas harian.</p>
-    <button class="btn-gold" data-goto="#/dashboard">Kembali ke Dashboard</button></div></div>`);
+// ---------- BANNER IKLAN ADSENSE BERHADIAH (v5.3.0) ----------
+// Slot banner AdSense: <ins class="adsbygoogle" data-ad-client="ca-pub-..."
+// data-ad-slot="..."> — slot ID dari /api/me (env ADSENSE_BANNER_SLOT),
+// client ID dibaca dari tag <script> adsbygoogle yang sudah ada di
+// <head> (satu sumber kebenaran — jangan hardcode di sini).
+// Hadiah HANYA untuk MELIHAT banner: klaim aktif bila banner TERISI iklan
+// (data-ad-status="filled") DAN sudah terlihat 10 detik. Banner kosong
+// (situs belum disetujui Google) = tidak ada token, tidak ada hadiah.
+// Klik iklan TIDAK PERNAH dilacak atau diberi hadiah.
+function adsenseClientId() {
+  const s = document.querySelector('script[src*="adsbygoogle.js?client="]');
+  if (!s) return '';
+  try { return new URL(s.src).searchParams.get('client') || ''; } catch { return ''; }
+}
+
+async function viewBannerAd(banner) {
+  const status = $('#banner-status');
+  const btn = $('#btn-claim-banner');
+  const slot = document.querySelector('#ad-banner-slot ins.adsbygoogle');
+  if (!slot) return;
+  if (status) status.textContent = 'Memuat banner iklan…';
+  // Minta AdSense mengisi slot (pustaka sudah dimuat dari <head>, v5.2.0).
+  try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch (e) { /* pustaka gagal dimuat — poll tetap jalan, lalu tampil pesan belum ada iklan */ }
+  // Poll status pengisian: 'filled' = ada iklan, 'unfilled' = kosong.
+  const t0 = Date.now();
+  let filled = false;
+  while (Date.now() - t0 < 20000) {
+    const st = slot.getAttribute('data-ad-status');
+    if (st === 'filled') { filled = true; break; }
+    if (st === 'unfilled') break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!filled) {
+    if (status) status.textContent = 'Banner belum menampilkan iklan — situs masih menunggu persetujuan Google AdSense. Coba lagi nanti.';
     return;
   }
-  $('#page').innerHTML = page('🎬 NONTON IKLAN', `Tonton iklan sampai selesai, dapat +${ads.rewardGold} emas per iklan — tanpa batas harian.`, `
-  <div class="panel"><h3>🎬 TONTON IKLAN, DAPAT EMAS</h3>
+  // Banner terisi: minta token, lalu hitung mundur 10 detik terlihat.
+  let start;
+  try { start = await post('/api/ads/banner/start'); }
+  catch (e) { toast(e.message); if (status) status.textContent = ''; return; }
+  if (start.remainingToday <= 0) {
+    if (status) status.textContent = `Batas harian banner tercapai (${banner.dailyCap}×/hari). Kembali besok.`;
+    return;
+  }
+  const viewMs = start.viewMs || banner.viewMs || 10000;
+  let left = Math.ceil(viewMs / 1000);
+  if (status) status.textContent = `Banner terlihat — hadiah bisa diklaim dalam ${left} detik…`;
+  const timer = setInterval(() => {
+    left -= 1;
+    if (left <= 0) {
+      clearInterval(timer);
+      if (status) status.textContent = `Banner sudah terlihat 10 detik — klaim +${banner.rewardGold} emas! Sisa hari ini: ${start.remainingToday}×.`;
+      if (btn) btn.disabled = false;
+    } else if (status) status.textContent = `Banner terlihat — hadiah bisa diklaim dalam ${left} detik…`;
+  }, 1000);
+  if (btn) btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const r = await post('/api/ads/banner/reward', { token: start.token });
+      toast(`Hadiah banner diterima: +${r.reward.gold} emas!`);
+      await refreshMe(); route();
+    } catch (e) { toast(e.message); if (status) status.textContent = ''; btn.disabled = false; }
+  };
+}
+
+ROUTES.ads = async () => {
+  const ads = ME.ads || { enabled: false, propertyId: '', rewardGold: 30 };
+  const banner = ads.banner || { enabled: false, slot: '', rewardGold: 15, dailyCap: 10, viewMs: 10000 };
+  const clientId = adsenseClientId();
+  const videoPanel = ads.enabled
+    ? `<h3>🎬 TONTON IKLAN, DAPAT EMAS</h3>
   <p class="muted small">Iklan diputar oleh AdinPlay. Hadiah masuk begitu iklan selesai ditonton. Menutup iklan sebelum selesai = tidak ada hadiah.</p>
   <div id="ad-player-slot"><p class="muted small">Pemutar iklan siap. Tekan tombol di bawah untuk memutar iklan.</p></div>
   <div class="row"><button class="btn-gold" id="btn-watch-ad" type="button">▶ TONTON IKLAN (+${ads.rewardGold} EMAS)</button></div>
-  <p class="muted small" id="ad-status"></p></div>`);
-  $('#btn-watch-ad').onclick = () => watchRewardedAd(ads);
+  <p class="muted small" id="ad-status"></p>`
+    : `<h3>🎬 TONTON IKLAN, DAPAT EMAS</h3>
+  <p class="muted small">Segera hadir — menunggu aktivasi dari admin. Begitu aktif, tiap iklan yang kamu tonton sampai selesai memberi +${ads.rewardGold} emas, tanpa batas harian.</p>`;
+  // Banner (v5.3.0): panel selalu tampil — bila slot belum dikonfigurasi,
+  // tampilkan placeholder yang jujur (bukan slot kosong yang membingungkan).
+  const bannerPanel = !banner.enabled
+    ? `<h3>📺 LIHAT BANNER IKLAN</h3>
+  <p class="muted small">Lihat banner iklan, dapat +${banner.rewardGold} emas per tampilan — maks ${banner.dailyCap}×/hari (${banner.rewardGold * banner.dailyCap} emas/hari).</p>
+  <div class="ad-banner-slot"><p class="muted small">Banner iklan belum tersedia — slot AdSense belum dikonfigurasi. Begitu slot diisi dan Google menyetujui situs, banner tampil di sini.</p></div>`
+    : `<h3>📺 LIHAT BANNER IKLAN</h3>
+  <p class="muted small">Lihat banner iklan, dapat +${banner.rewardGold} emas per tampilan — maks ${banner.dailyCap}×/hari. Hadiah hanya untuk MELIHAT banner (bukan untuk klik iklan). Banner harus terlihat minimal 10 detik sebelum hadiah bisa diklaim.</p>
+  <div class="ad-banner-slot" id="ad-banner-slot"><ins class="adsbygoogle" style="display:block" data-ad-client="${esc(clientId)}" data-ad-slot="${esc(banner.slot)}" data-ad-format="auto" data-full-width-responsive="true"></ins></div>
+  <div class="row"><button class="btn-gold" id="btn-claim-banner" type="button" disabled>KLAIM +${banner.rewardGold} EMAS</button></div>
+  <p class="muted small" id="banner-status"></p>`;
+  $('#page').innerHTML = page('🎬 NONTON IKLAN', `Tonton video dapat +${ads.rewardGold} emas · Lihat banner dapat +${banner.rewardGold} emas.`, `
+  <div class="panel">${videoPanel}</div>
+  <div class="panel">${bannerPanel}</div>`);
+  if (ads.enabled) $('#btn-watch-ad').onclick = () => watchRewardedAd(ads);
+  if (banner.enabled && clientId) viewBannerAd(banner);
+  else if (banner.enabled && !clientId) {
+    const st = $('#banner-status');
+    if (st) st.textContent = 'Pustaka AdSense tidak ditemukan di halaman — banner tidak bisa dimuat.';
+  }
 };
 
 // ---------- BAGIKAN LINK (v4.6.0) ----------

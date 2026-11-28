@@ -26,6 +26,7 @@ import {
   DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
   ONLINE_WINDOW_MS, onlineStatus,
   ADINPLAY_PROPERTY_ID, AD_REWARD_GOLD, AD_TOKEN_TTL_MS, AD_MIN_INTERVAL_MS,
+  ADSENSE_BANNER_SLOT, BANNER_REWARD_GOLD, BANNER_DAILY_CAP, BANNER_VIEW_MS,
   SHARE_GOLD_PER_CLICK, SHARE_MAX_GOLD_PER_DAY, SHARE_MAX_CLICKS_PER_DAY, SHARE_CODE_CHARS,
 } from './game.js';
 
@@ -510,7 +511,12 @@ export function registerCore(app) {
       // Iklan berhadiah (v4.4.0): klien perlu tahu apakah AdinPlay aktif +
       // hadiah per iklan — Property ID bukan rahasia (tampil di sumber
       // halaman di semua integrasi AdinPlay), jadi aman dikirim ke klien.
-      ads: { enabled: ADINPLAY_PROPERTY_ID !== '', propertyId: ADINPLAY_PROPERTY_ID, rewardGold: AD_REWARD_GOLD },
+      // Banner AdSense (v5.3.0): slot ID juga bukan rahasia (tampil di
+      // sumber halaman di semua integrasi AdSense).
+      ads: {
+        enabled: ADINPLAY_PROPERTY_ID !== '', propertyId: ADINPLAY_PROPERTY_ID, rewardGold: AD_REWARD_GOLD,
+        banner: { enabled: ADSENSE_BANNER_SLOT !== '', slot: ADSENSE_BANNER_SLOT, rewardGold: BANNER_REWARD_GOLD, dailyCap: BANNER_DAILY_CAP, viewMs: BANNER_VIEW_MS },
+      },
       // Kerja otomatis 24 jam (v4.5.0): status untuk toggle di halaman
       // Pekerjaan — aktif/mati, akhir masa aktif, jumlah shift otomatis,
       // sedang dijeda (kelelahan) atau tidak, jam shift terakhir.
@@ -572,6 +578,9 @@ export function registerCore(app) {
     const result = await tx(async (t) => {
       const row = await t.one(forUpdate('SELECT * FROM ad_tokens WHERE token = ?'), [token]);
       if (!row || Number(row.citizen_id) !== req.citizen.id) throw Object.assign(new Error('Token tontonan tidak valid.'), { status: 400 });
+      // (v5.3.0) Token banner tidak boleh ditukar hadiah video (+30) —
+      // token banner lebih mudah didapat (cukup lihat 10 detik).
+      if (row.kind !== 'video') throw Object.assign(new Error('Token ini bukan token video.'), { status: 400 });
       if (row.used_at) throw Object.assign(new Error('Token sudah dipakai.'), { status: 400 });
       if (Number(row.expires_at) <= now) throw Object.assign(new Error('Token sudah kedaluwarsa. Tonton iklan lagi.'), { status: 400 });
       // Jeda minimum antar grant (anti-skrip): 30 detik sejak grant terakhir.
@@ -583,10 +592,65 @@ export function registerCore(app) {
       const upd = await t.run('UPDATE ad_tokens SET used_at = ? WHERE token = ? AND used_at IS NULL', [now, token]);
       if (!upd.changes) throw Object.assign(new Error('Token sudah dipakai.'), { status: 400 });
       await t.run('UPDATE citizens SET gold = gold + ? WHERE id = ?', [AD_REWARD_GOLD, req.citizen.id]);
-      await t.run('INSERT INTO ad_rewards (citizen_id, gold, granted_at) VALUES (?,?,?)', [req.citizen.id, AD_REWARD_GOLD, now]);
+      await t.run("INSERT INTO ad_rewards (citizen_id, gold, granted_at, kind) VALUES (?,?,?,'video')", [req.citizen.id, AD_REWARD_GOLD, now]);
       return { gold: AD_REWARD_GOLD };
     });
     res.json({ ok: true, reward: { gold: result.gold } });
+  }));
+
+  // ---------- BANNER IKLAN ADSENSE BERHADIAH (v5.3.0) ----------
+  // Alur (meniru token flow video): klien merender slot banner AdSense;
+  // BILA banner terisi iklan (data-ad-status="filled"), klien minta token
+  // (POST /api/ads/banner/start) → banner harus terlihat minimal
+  // BANNER_VIEW_MS (10 detik) → klien panggil POST /api/ads/banner/reward
+  // dengan token itu. Hadiah HANYA untuk MELIHAT banner — klik iklan
+  // TIDAK PERNAH dilacak atau diberi hadiah (kebijakan Google tentang
+  // incentivized traffic; akun AdSense yang sama dengan YouTube pemilik).
+  // Batas harian: maks BANNER_DAILY_CAP (10) grant/hari/pemain. Bila slot
+  // AdSense belum dikonfigurasi, /start menolak 503 (pola yang sama dengan
+  // video saat property ID kosong) — klien menampilkan placeholder jujur.
+  // Token banner TIDAK bisa ditukar hadiah video (cek kind di kedua arah).
+  app.post('/api/ads/banner/start', authRequired, citizenRequired, r(async (req, res) => {
+    if (!ADSENSE_BANNER_SLOT) return res.status(503).json({ error: 'Banner iklan belum aktif. Slot AdSense belum dikonfigurasi.' });
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = Date.now() + AD_TOKEN_TTL_MS;
+    await run("INSERT INTO ad_tokens (token, citizen_id, expires_at, used_at, kind) VALUES (?,?,?,NULL,'banner')", [token, req.citizen.id, expiresAt]);
+    const dayStart = Date.parse(todayStr() + 'T00:00:00Z');
+    const today = await one('SELECT COUNT(*) AS n FROM ad_rewards WHERE citizen_id = ? AND kind = ? AND granted_at >= ?', [req.citizen.id, 'banner', dayStart]);
+    res.json({ ok: true, token, expiresAt, viewMs: BANNER_VIEW_MS, remainingToday: Math.max(0, BANNER_DAILY_CAP - Number(today?.n || 0)) });
+  }));
+
+  app.post('/api/ads/banner/reward', authRequired, citizenRequired, r(async (req, res) => {
+    const { token } = req.body || {};
+    if (!token || typeof token !== 'string') return res.status(400).json({ error: 'Token banner tidak valid.' });
+    const now = Date.now();
+    const result = await tx(async (t) => {
+      const row = await t.one(forUpdate('SELECT * FROM ad_tokens WHERE token = ?'), [token]);
+      if (!row || Number(row.citizen_id) !== req.citizen.id) throw Object.assign(new Error('Token banner tidak valid.'), { status: 400 });
+      if (row.kind !== 'banner') throw Object.assign(new Error('Token ini bukan token banner.'), { status: 400 });
+      if (row.used_at) throw Object.assign(new Error('Token sudah dipakai.'), { status: 400 });
+      if (Number(row.expires_at) <= now) throw Object.assign(new Error('Token sudah kedaluwarsa. Lihat banner lagi.'), { status: 400 });
+      // Banner harus terlihat minimal BANNER_VIEW_MS sejak token diterbitkan.
+      // Waktu terbit = expires_at − TTL (tidak ada kolom created_at).
+      const issuedAt = Number(row.expires_at) - AD_TOKEN_TTL_MS;
+      if (now - issuedAt < BANNER_VIEW_MS) throw Object.assign(new Error('Banner belum cukup lama terlihat. Tunggu sebentar lagi.'), { status: 400 });
+      // Jeda minimum antar grant (semua jenis iklan): 30 detik sejak grant
+      // terakhir — sama seperti video.
+      const last = await t.one('SELECT granted_at FROM ad_rewards WHERE citizen_id = ? ORDER BY granted_at DESC LIMIT 1', [req.citizen.id]);
+      if (last && now - Number(last.granted_at) < AD_MIN_INTERVAL_MS) throw Object.assign(new Error('Terlalu cepat. Tunggu sebentar sebelum klaim lagi.'), { status: 400 });
+      // Batas harian banner: maks BANNER_DAILY_CAP grant/hari (UTC).
+      const dayStart = Date.parse(todayStr() + 'T00:00:00Z');
+      const today = await t.one('SELECT COUNT(*) AS n FROM ad_rewards WHERE citizen_id = ? AND kind = ? AND granted_at >= ?', [req.citizen.id, 'banner', dayStart]);
+      if (Number(today?.n || 0) >= BANNER_DAILY_CAP) throw Object.assign(new Error(`Batas harian banner tercapai (${BANNER_DAILY_CAP}×/hari). Kembali besok.`), { status: 400 });
+      // Tandai token terpakai + beri emas + catat audit — atomik (pola yang
+      // sama dengan reward video: UPDATE bersyarat + cek changes).
+      const upd = await t.run('UPDATE ad_tokens SET used_at = ? WHERE token = ? AND used_at IS NULL', [now, token]);
+      if (!upd.changes) throw Object.assign(new Error('Token sudah dipakai.'), { status: 400 });
+      await t.run('UPDATE citizens SET gold = gold + ? WHERE id = ?', [BANNER_REWARD_GOLD, req.citizen.id]);
+      await t.run("INSERT INTO ad_rewards (citizen_id, gold, granted_at, kind) VALUES (?,?,?,'banner')", [req.citizen.id, BANNER_REWARD_GOLD, now]);
+      return { gold: BANNER_REWARD_GOLD, remainingToday: BANNER_DAILY_CAP - Number(today?.n || 0) - 1 };
+    });
+    res.json({ ok: true, reward: { gold: result.gold }, remainingToday: result.remainingToday });
   }));
 
   // ---------- LINK SHARE HARIAN (v4.6.0, perintah pemilik 28 Nov 2026) ----------
@@ -1569,6 +1633,12 @@ export function registerCore(app) {
     if (results.length === 0) {
       return res.status(400).json({ error: 'Energi habis (0). Makan roti dulu.' });
     }
+    // Conversion tracking Google Ads (v5.3.0): tandai shift pertama warga
+    // — UPDATE bersyarat (first_shift_done = 0) + cek changes membuat dua
+    // request paralel hanya satu yang mendapat firstShift = true. Klien
+    // memakai ini untuk fire event 'mulai_bermain' tepat sekali.
+    const firstUpd = await run('UPDATE citizens SET first_shift_done = 1 WHERE id = ? AND first_shift_done = 0', [req.citizen.id]);
+    const firstShift = firstUpd.changes > 0;
     const total = (f) => results.reduce((s, r) => s + (Number(r[f]) || 0), 0);
     const energyUsed = total('energyUsed');
     const goodsQty = results.reduce((s, r) => s + (Number(r.goodsQty) || 0), 0);
@@ -1580,6 +1650,7 @@ export function registerCore(app) {
     res.json({
       ok: true,
       shifts: results.length,
+      firstShift,
       energyUsed,
       energyPct: Math.round(energyUsed / (100 * results.length) * 100),
       gross: total('gross'), net: total('net'), tax: total('tax'),
