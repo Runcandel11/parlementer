@@ -219,6 +219,8 @@ TIDAK jadi admin; kode bootstrap benar jadi admin)** → ban (login akun banned
 tetap bisa, ditandai `banned:true`, untuk banding) + banding (ajukan/balas/
 terima/tolak) + avatar + hadiah/pembelian + hadiah massal + inbox admin.
 
+Hasil terakhir (28 Nov 2026, v5.7.3 "Diagram Hemicycle Parlemen", Lane 5 — poles berkelanjutan): **parliament-hemicycle-dom 29/29 lolos, e2e 1302/1302 lolos (cek baru [28c]: partySeats NUSA 40 + MUDA 20 = 60 terisi), pg-test 46/46 lolos, pg-verify 287/287 lolos, pg-concurrency 38/38 lolos, modal-dom 155/155 lolos, chat-dom 82/82 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, tutorial-dom 43/43 lolos, landing-glass-dom 79/79 lolos, ads-dom 44/44 lolos, conversion-dom 20/20 lolos, password-reset-dom 23/23 lolos, party-dom 32/32 lolos, profile-admin-dom 58/58 lolos** — 15/31 suite hijau lokal, 0 gagal; full suite lengkap jalan di GitHub Actions setelah push (parent yang memantau run-nya). Halaman #/parliament: 60 titik grid datar diganti diagram hemicycle SVG (4 baris 8+13+17+22, warna per partai dari GET /api/parliament `partySeats`, garis mayoritas 31, legenda + chip Kosong, animasi muncul stagger 9ms, hormat prefers-reduced-motion); murni tampilan, tanpa migrasi skema, tanpa perubahan aturan main. CATATAN: nomor versi 5.7.3 di branch ini bertabrakan dengan v5.7.3 "Kronik" yang sudah live di master (d9aa023) — parent menomori ulang saat merge.
+
 Hasil terakhir (28 Nov 2026, v5.6.0 "Manajemen Partai"): **e2e 1201/1201 lolos,
 pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 270/270 lolos,
 pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, tutorial-dom 43/43 lolos,
