@@ -65,7 +65,10 @@
 // Update kecil v4.3.2 = hilangkan USD di Perang & Militer, tampil Rupiah
 // (tiket LIO, 28 Nov 2026): dashboard + halaman militer + notifikasi
 // desersi + pesan error rekrut.
-export const VERSION = '4.3.2';
+// Update kecil v4.3.3 = hitung penerima Hadiah Massal di atas 100 pemain
+// (laporan Khalid, 28 Nov 2026): GET /api/admin/players kini membawa
+// total + eligible (COUNT tanpa LIMIT), panel pakai angka itu.
+export const VERSION = '4.3.3';
 
 // --- Satuan waktu dasar (Tahap 7) ---
 // Satu sumber kebenaran untuk "sehari" dalam milidetik — semua konstanta

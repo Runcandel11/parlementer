@@ -910,6 +910,47 @@ async function main() {
   r = await ADM.post('/api/admin/unban', { user_id: 6 });
   check('Admin: unban Y kembali', r.status === 200 && r.data.ok);
 
+  console.log('\n[17b] Hadiah massal: hitung penerima di atas 100 pemain');
+  // Bug Khalid 28 Nov 2026: panel Hadiah Massal menampilkan "99 dari 100"
+  // padahal populasi 216 — GET /api/admin/players LIMIT 100 tanpa COUNT,
+  // jadi angka tampilan hanya menghitung 100 pemain pertama. Server
+  // gift-all sendiri sudah benar (tanpa LIMIT); yang diperbaiki hanya
+  // angka total/eligible di respons + tampilan panel.
+  r = await ADM.get('/api/admin/players');
+  check('GET /api/admin/players membawa total + eligible', typeof r.data.total === 'number' && typeof r.data.eligible === 'number', `total=${r.data.total} eligible=${r.data.eligible}`);
+  const totalBefore = r.data.total;
+  const eligBefore = r.data.eligible;
+  check('Total = jumlah pemain saat masih di bawah 100', r.data.total === r.data.players.length, `total=${r.data.total} len=${r.data.players.length}`);
+  // Daftarkan 100 pemain lagi → total melewati 100, daftar tetap terpotong.
+  // Batas daftar 20/IP/24 jam — sebar 100 pemain ke 5 IP berbeda lewat
+  // X-Forwarded-For (pola yang sama seperti [23b]/[28]/[5b]).
+  let bulkOk = 0;
+  for (let i = 1; i <= 100; i++) {
+    const C = new Client();
+    C.extraHeaders = { 'X-Forwarded-For': `127.0.0.${101 + Math.floor((i - 1) / 20)}` };
+    const rr = await C.post('/api/auth/register', { email: `bulk${i}@test.local`, password: 'rahasia123', username: `pemain_bulk${i}` });
+    if (rr.status === 200 && rr.data.ok) bulkOk++;
+  }
+  check('100 pemain bulk terdaftar', bulkOk === 100, `terdaftar=${bulkOk}`);
+  r = await ADM.get('/api/admin/players');
+  check('Daftar pemain tetap dibatasi 100 baris', r.data.players.length === 100, `len=${r.data.players.length}`);
+  check('Total menghitung semua pemain (bukan 100)', r.data.total === totalBefore + 100, `total=${r.data.total} sebelum=${totalBefore}`);
+  check('Eligible menghitung semua yang tidak di-ban', r.data.eligible === eligBefore + 100, `eligible=${r.data.eligible} sebelum=${eligBefore}`);
+  // Ban satu pemain bulk → eligible turun 1, total tetap.
+  const bulkOne = r.data.players.find((p) => p.username === 'pemain_bulk1');
+  check('Pemain bulk1 ada di daftar 100 pertama', !!bulkOne, bulkOne?.username || '');
+  r = await ADM.post('/api/admin/ban', { user_id: bulkOne.id, reason: 'Tes hitung penerima' });
+  check('Admin: ban pemain bulk1', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await ADM.get('/api/admin/players');
+  check('Total tetap setelah ban', r.data.total === totalBefore + 100, `total=${r.data.total}`);
+  check('Eligible turun 1 setelah ban', r.data.eligible === eligBefore + 99, `eligible=${r.data.eligible}`);
+  r = await ADM.post('/api/admin/unban', { user_id: bulkOne.id });
+  check('Admin: unban pemain bulk1 kembali', r.status === 200 && r.data.ok);
+  // Filter pencarian ikut dihitung: total/eligible mengikuti filter q.
+  r = await ADM.get('/api/admin/players?q=pemain_bulk');
+  check('Pencarian bulk: total 100 pemain bulk', r.data.total === 100, `total=${r.data.total}`);
+  check('Pencarian bulk: eligible 100 (tidak ada yang di-ban)', r.data.eligible === 100, `eligible=${r.data.eligible}`);
+
   console.log('\n[18] Inbox admin: tiket Meja Bantuan + laporan chat');
   r = await A.post('/api/support', { type: 'Saran', topic: 'Ekonomi & Pasar', details: 'Saran tes inbox admin ini cukup panjang.' });
   check('A mengirim tiket saran ke Meja Bantuan', r.status === 200 && r.data.ok, r.data.error || '');

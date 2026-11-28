@@ -100,7 +100,20 @@ export function registerAdmin(app) {
        FROM users u JOIN citizens c ON c.user_id = u.id
        WHERE ${where} ORDER BY u.id ASC LIMIT 100`,
       params);
+    // Hitung total di atas LIMIT 100 (bug Khalid 28 Nov 2026: panel Hadiah
+    // Massal menampilkan "99 dari 100" padahal populasi 216 — daftar
+    // terpotong 100 baris, tapi total/eligible harus menghitung SEMUA
+    // pemain yang cocok filter). COUNT(*) di Postgres mengembalikan
+    // string → Number() seperti di tempat lain.
+    const totalRow = await one(
+      `SELECT COUNT(*) AS n FROM users u JOIN citizens c ON c.user_id = u.id WHERE ${where}`,
+      params);
+    const eligRow = await one(
+      `SELECT COUNT(*) AS n FROM users u JOIN citizens c ON c.user_id = u.id WHERE ${where} AND u.is_banned = 0`,
+      params);
     res.json({
+      total: Number(totalRow.n),
+      eligible: Number(eligRow.n),
       players: rows.map((p) => ({
         ...p,
         publicId: publicId(p.id),

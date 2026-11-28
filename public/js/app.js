@@ -1825,6 +1825,12 @@ async function renderAdminGiftAll() {
   const [list, appeals] = await Promise.all([api('/api/admin/players'), api('/api/admin/appeals')]);
   const pending = appeals.appeals.filter((a) => a.status === 'menunggu').length;
   const recipients = list.players.filter((p) => !p.is_banned);
+  // Jumlah penerima/total dari COUNT server, BUKAN panjang daftar yang
+  // terpotong LIMIT 100 (bug Khalid 28 Nov 2026: panel menampilkan
+  // "99 dari 100" padahal populasi 216). Fallback ke panjang daftar bila
+  // server lama belum mengirim total/eligible.
+  const totalPlayers = typeof list.total === 'number' ? list.total : list.players.length;
+  const recipientCount = typeof list.eligible === 'number' ? list.eligible : recipients.length;
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Hadiah untuk semua pemain sekaligus.', `
   <div class="tabs">
     <button class="tab" data-goto="#/admin">👥 Pemain</button>
@@ -1833,7 +1839,7 @@ async function renderAdminGiftAll() {
     <button class="tab" data-goto="#/admin/inbox">📥 Laporan &amp; Saran</button>
   </div>
   <div class="panel"><h3>🎁 HADIAH UNTUK SEMUA PEMAIN</h3>
-    <p class="muted small">Hadiah dikirim ke <b>${recipients.length} pemain</b> yang tidak di-ban (dari ${list.players.length} pemain total). Akun yang di-ban tidak menerima apa-apa. Semua penerima mendapat notifikasi "Hadiah dari admin".</p>
+    <p class="muted small">Hadiah dikirim ke <b>${recipientCount} pemain</b> yang tidak di-ban (dari ${totalPlayers} pemain total). Akun yang di-ban tidak menerima apa-apa. Semua penerima mendapat notifikasi "Hadiah dari admin".</p>
     <label>JENIS HADIAH<select id="ga-kind">
       <option value="gold">🪙 Emas</option><option value="usd">💵 Rupiah</option>
       <option value="item">📦 Barang</option><option value="premium">💎 Hari Premium</option>
@@ -1845,7 +1851,7 @@ async function renderAdminGiftAll() {
     </div>
     <div id="ga-amount-wrap"><label id="ga-amount-label">JUMLAH EMAS<input id="ga-amount" type="number" min="1" value="50"></label></div>
     <label>PESAN OPSIONAL (tampil di notifikasi)<input id="ga-message" maxlength="200" placeholder="cth: Terima kasih sudah bermain!"></label>
-    <button class="btn-gold" id="btn-gift-all">🎁 KIRIM KE ${recipients.length} PEMAIN</button>
+    <button class="btn-gold" id="btn-gift-all">🎁 KIRIM KE ${recipientCount} PEMAIN</button>
   </div>`);
   const kindSel = $('#ga-kind');
   const syncKind = () => {
@@ -1861,7 +1867,7 @@ async function renderAdminGiftAll() {
     const body = { kind: k, amount: Number($('#ga-amount').value) || 0, message: $('#ga-message').value.trim() };
     if (k === 'item') { body.commodity = $('#ga-commodity').value; body.tier = Number($('#ga-tier').value); }
     const label = k === 'gold' ? `${body.amount} emas` : k === 'usd' ? `${fmtRp(body.amount)}` : k === 'item' ? `${body.amount}× ${body.commodity} T${body.tier}` : k === 'premium' ? `Premium ${body.amount} hari` : 'isi energi penuh';
-    if (!confirm(`Kirim hadiah ${label} ke ${recipients.length} pemain?`)) return;
+    if (!confirm(`Kirim hadiah ${label} ke ${recipientCount} pemain?`)) return;
     // Hadiah Rupiah: yang diketik admin adalah Rupiah — konversi ke USD
     // (satuan server) sebelum dikirim; presisi penuh, pulih tepat saat
     // ditampilkan lagi sebagai Rupiah.
