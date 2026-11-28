@@ -29,7 +29,8 @@
 //
 // Batas: stride port per lane = 100 (blok port satu full suite = 3456–3475,
 // 20 port). TEST_LANE maks 99 supaya port tetap < 65535 (3456 + 99×100 +
-// 19 = 13375). Database Postgres per lane HARUS sudah dibuat dulu (sekali,
+// 19 = 13375). Port turunan yang masuk daftar "forbidden port" WHATWG
+// (mis. 3659 = chat-dom lane 2) digeser +20 oleh testPort() — lihat di bawah. Database Postgres per lane HARUS sudah dibuat dulu (sekali,
 // sebagai superuser — lihat docs/ARSITEKTUR.md § Tes Paralel):
 //   CREATE DATABASE parlementer_test_lane1 OWNER parlementer_test;
 //   CREATE DATABASE parlementer_test_lane2 OWNER parlementer_test;

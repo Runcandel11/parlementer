@@ -201,12 +201,31 @@ async function main() {
   check('Halaman Negara menampilkan aturan pembentukan (Level 10 + 100 emas)', r.data.formationRules?.minLevel === 10 && r.data.formationRules?.costGold === 100, JSON.stringify(r.data.formationRules));
   check('Halaman Negara menampilkan 4 ideologi + 4 sistem pemerintahan', (r.data.ideologies || []).length === 4 && (r.data.systems || []).length === 4, `ideologi=${(r.data.ideologies || []).length} sistem=${(r.data.systems || []).length}`);
   r = await A.get('/api/parliament');
-  check('Parlemen terkunci (belum 28 Nov 2026 20:00 WIB)', r.data.parliamentOpen === false && r.data.parliamentOpensAt === 1795870800000, `open=${r.data.parliamentOpen} opensAt=${r.data.parliamentOpensAt}`);
+  // Parlemen dibuka 28 Nov 2026 20:00 WIB (epoch 1795870800000): sebelum
+  // dibuka terkunci + usul ditolak 403; sesudah dibuka gate kunci hilang
+  // (usul UU/anggaran lanjut ke validasi berikut: A belum bernegara → 400).
+  // Asersi sadar-jam (v5.7.4) supaya e2e tetap hijau sesudah pembukaan.
+  // Catatan: bila v5.7.10 (usul MP-only) menyisipkan cek sebelum cek negara,
+  // sesuaikan dua ekspektasi 400 di bawah.
+  const parOpen = Date.now() >= 1795870800000;
+  if (!parOpen) {
+    check('Parlemen terkunci (belum 28 Nov 2026 20:00 WIB)', r.data.parliamentOpen === false && r.data.parliamentOpensAt === 1795870800000, `open=${r.data.parliamentOpen} opensAt=${r.data.parliamentOpensAt}`);
+  } else {
+    check('Parlemen sudah dibuka (lewat 28 Nov 2026 20:00 WIB)', r.data.parliamentOpen === true && r.data.parliamentOpensAt === 1795870800000, `open=${r.data.parliamentOpen} opensAt=${r.data.parliamentOpensAt}`);
+  }
   check('Tanpa negara: pajak 0%, upah ×1, perjalanan 1 tiket', r.data.effects?.taxIncome === 0 && r.data.effects?.adminPayMult === 1 && r.data.effects?.travelTickets === 1, JSON.stringify(r.data.effects));
   r = await A.post('/api/parliament/law', { title: 'UU Tes Terkunci', content: 'Isi undang-undang tes.', kind: 'general' });
-  check('Usul UU sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  if (!parOpen) {
+    check('Usul UU sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  } else {
+    check('Usul UU sesudah parlemen dibuka lolos gate kunci (400 belum bernegara)', r.status === 400 && (r.data.error || '').includes('belum bernegara'), `status=${r.status} ${r.data.error || ''}`);
+  }
   r = await A.post('/api/country/budget', { kind: 'claim', amount: 100 });
-  check('Usul anggaran sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  if (!parOpen) {
+    check('Usul anggaran sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  } else {
+    check('Usul anggaran sesudah parlemen dibuka lolos gate kunci (400 belum bernegara)', r.status === 400 && (r.data.error || '').includes('belum bernegara'), `status=${r.status} ${r.data.error || ''}`);
+  }
   // Negatif pembentukan negara (A Level 1, emas ~54).
   r = await A.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
   check('Dirikan negara di Level 1 ditolak (butuh Level 10)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
