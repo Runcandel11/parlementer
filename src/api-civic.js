@@ -1,7 +1,7 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
 import { sql, one, run, tx, forUpdate, convoyBuildings, getParliamentOpensAt, getWorldDay, missionValue, setMissionValue, markChronicleDone } from './db.js';
 import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl, requireCredit, fmtRp } from './util.js';
-import { warDamage, warDamageWithBonus, unitDamageMult, worldEventFor, MILITARY_UNITS, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, PARLIAMENT_MAJORITY, WAR_MOTION_VOTE_DAYS, NAME_MOTION_VOTE_DAYS, PARLIAMENT_PETITION_PER_REGION, COUNTRY_NAME_PLACEHOLDER, COUNTRY_NAME_MIN, COUNTRY_NAME_MAX, MOTION_COST_GOLD, WAR_ATTACK_ENERGY_MIN, WAR_ATTACK_ENERGY_MAX, WAR_HOME_BONUS_MULT, WAR_DURATION_MS, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR, IMPORT_TAX, DAY_MS, ELECTION_VOTE_MS, ELECTION_VOTE_MIN_AGE_MS, CHAT_COOLDOWN_MS, CHAT_COUNT_WINDOW_MS, CHAT_COUNT_MIN_WORDS } from './game.js';
+import { warDamage, warDamageWithBonus, unitDamageMult, worldEventFor, MILITARY_UNITS, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, PARLIAMENT_MAJORITY, WAR_MOTION_VOTE_DAYS, NAME_MOTION_VOTE_DAYS, PARLIAMENT_PETITION_PER_REGION, COUNTRY_NAME_PLACEHOLDER, COUNTRY_NAME_MIN, COUNTRY_NAME_MAX, MOTION_COST_GOLD, WAR_ATTACK_ENERGY_MIN, WAR_ATTACK_ENERGY_MAX, WAR_HOME_BONUS_MULT, WAR_DURATION_MS, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR, IMPORT_TAX, DAY_MS, ELECTION_VOTE_MS, ELECTION_VOTE_MIN_AGE_MS, CHAT_COOLDOWN_MS, CHAT_COUNT_WINDOW_MS, CHAT_COUNT_MIN_WORDS } from './game.js';
 
 // Ruang chat publik yang selalu ada. Ruang wilayah (region_<id>) bersifat
 // dinamis — divalidasi terpisah di validateRoom (hanya wilayah sendiri).
@@ -271,6 +271,13 @@ export function registerCivic(app) {
       ? await sql('SELECT join_id, vote FROM country_join_votes WHERE citizen_id = ? AND join_id IN (' + openJoins.map(() => '?').join(',') + ')', [req.citizen.id, ...openJoins.map((j) => j.id)])
       : [];
     const par = await parliamentStatus();
+    // Pemilu berikutnya (v5.7.4): satu sumber jadwal — baris scheduled/open
+    // paling awal dari tabel elections negara pemanggil (dipakai halaman
+    // Negara "Pemilu Berikutnya" + halaman Parlemen; halaman Pemilu sudah
+    // menampilkan opens_at tiap pemilu + panel petisi).
+    const nextElection = country ? await one(
+      "SELECT id, type, status, opens_at FROM elections WHERE country_id = ? AND status IN ('scheduled','open') ORDER BY opens_at ASC LIMIT 1",
+      [country.id]) : null;
     // Barang yang bisa disumbangkan (v4.6.0): inventaris tier 1 pemanggil
     // (nama + jumlah) — dipakai dropdown sumbangan bahan di halaman Negara.
     const myDonateItems = await sql(
@@ -305,6 +312,7 @@ export function registerCivic(app) {
       mobilizationUntil: Number(country?.mobilization_until) || 0,
       holidayAt: Number(country?.holiday_at) || 0,
       parliamentOpen: par.open, parliamentOpensAt: par.opensAt,
+      nextElection: nextElection ? { id: nextElection.id, type: nextElection.type, status: nextElection.status, opensAt: Number(nextElection.opens_at) } : null,
       // Aturan pembentukan negara + unifikasi (ditampilkan di halaman
       // Negara — pemilik yang menetapkan, bisa diubah).
       formationRules: {
@@ -402,8 +410,8 @@ export function registerCivic(app) {
   // sistem dipilih saat mendirikan. Pendiri BUKAN otomatis presiden —
   // presiden dipilih lewat pemilu (nominasi kepala partai). Pemilu pertama
   // dijadwalkan otomatis: presiden 7 hari setelah didirikan; parlemen
-  // paling cepat saat parlemen dibuka (28 Nov 2026 20:00 WIB) atau 3 hari
-  // setelah didirikan (bila didirikan sesudah parlemen dibuka).
+  // paling cepat saat parlemen dibuka (28 Nov 2026 20:00 WIB) atau langsung
+  // saat didirikan (bila didirikan sesudah parlemen dibuka) — v5.7.4.
   app.post('/api/countries', authRequired, citizenRequired, r(async (req, res) => {
     const { ideology, system } = req.body || {};
     const c = req.citizen;
@@ -429,11 +437,14 @@ export function registerCivic(app) {
       const upd = await t.run('UPDATE citizens SET gold = gold - ? WHERE id = ? AND gold >= ?', [COUNTRY_FORM_COST_GOLD, c.id, COUNTRY_FORM_COST_GOLD]);
       if (!upd.changes) throw Object.assign(new Error(`Mendirikan negara butuh ${COUNTRY_FORM_COST_GOLD} emas.`), { status: 400 });
       await t.run("UPDATE regions SET country_id = ?, controller = 'negara', controller_id = ? WHERE id = ?", [ins.id, ins.id, reg.id]);
-      // Jadwalkan pemilu pertama negara ini.
+      // Jadwalkan pemilu pertama negara ini. Presiden +7 hari (by design).
+      // Parlemen pertama v5.7.4: langsung max(parOpensAt, now) — bukan
+      // +3 hari lagi — supaya pemilu parlemen pertama bisa dibuka begitu
+      // parlemen buka + petisi terpenuhi (aturan pemilik 28 Nov 2026).
       const presOpens = now + PRESIDENT_ELECTION_DELAY_DAYS * DAY_MS;
       await t.run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('president','scheduled',?,?,?,?) RETURNING id",
         [presOpens, presOpens + ELECTION_VOTE_MS, ins.id, now]);
-      const parOpens = Math.max(await getParliamentOpensAt(), now + PARLIAMENT_ELECTION_DELAY_DAYS * DAY_MS);
+      const parOpens = Math.max(await getParliamentOpensAt(), now);
       await t.run("INSERT INTO elections (type, status, opens_at, closes_at, country_id, created_at) VALUES ('parliament','scheduled',?,?,?,?) RETURNING id",
         [parOpens, parOpens + ELECTION_VOTE_MS, ins.id, now]);
       return ins.id;
@@ -576,6 +587,11 @@ export function registerCivic(app) {
     const country = await getMyCountry({ one }, req.citizen);
     if (!country) return res.status(400).json({ error: 'Kamu belum bernegara.' });
     if (ministerRole(country, req.citizen.id) !== 'economy') return res.status(403).json({ error: 'Hanya Menteri Ekonomi yang bisa mengusulkan anggaran.' });
+    // v5.7.4 (aturan pemilik 28 Nov 2026, audit pengusulan): anggaran
+    // divoting parlemen, jadi pengusulnya pun harus anggota parlemen —
+    // Menteri Ekonomi yang bukan MP tidak bisa mengusulkan (presiden bisa
+    // mengangkat MP jadi Menteri Ekonomi bila ingin mengusulkan anggaran).
+    if (!await isMpCitizen(req.citizen)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa mengusulkan anggaran. Partaimu belum punya kursi.' });
     if (!BUDGET_KINDS[kind]) return res.status(400).json({ error: 'Jenis anggaran tidak dikenal.' });
     const amt = Math.floor(Number(amount));
     if (!Number.isFinite(amt) || amt < 50 || amt > 500) return res.status(400).json({ error: 'Jumlah anggaran 50–500 emas.' });
@@ -980,6 +996,11 @@ export function registerCivic(app) {
     const countryId = country?.id || -1;
     const seats = await one('SELECT COALESCE(SUM(seats),0) AS n FROM party_seats WHERE country_id = ?', [countryId]);
     const isMp = await isMpCitizen(c);
+    // Pemilu berikutnya (v5.7.4): sumber yang sama dengan /api/country.
+    const nextElectionRow = country ? await one(
+      "SELECT id, type, status, opens_at FROM elections WHERE country_id = ? AND status IN ('scheduled','open') ORDER BY opens_at ASC LIMIT 1",
+      [country.id]) : null;
+    const nextElection = nextElectionRow ? { id: nextElectionRow.id, type: nextElectionRow.type, status: nextElectionRow.status, opensAt: Number(nextElectionRow.opens_at) } : null;
     const laws = await sql(
       `SELECT l.*, u.username AS proposer_name FROM laws l
        JOIN citizens cc ON cc.id = l.proposer_id JOIN users u ON u.id = cc.user_id
@@ -1021,6 +1042,7 @@ export function registerCivic(app) {
     res.json({
       totalSeats: 60, filledSeats: Number(seats.n), majority: 31, isMp,
       parliamentOpen: par.open, parliamentOpensAt: par.opensAt,
+      nextElection,
       country: countrySummary(country),
       laws, myVotes: Object.fromEntries(myVotes.map((v) => [v.law_id, v.vote])),
       budgets, myBudgetVotes: Object.fromEntries(myBudgetVotes.map((v) => [v.budget_id, v.vote])),
@@ -1044,6 +1066,9 @@ export function registerCivic(app) {
     if (!par.open) return res.status(403).json({ error: parliamentLockedError(par.opensAt) });
     const country = await getMyCountry({ one }, c);
     if (!country) return res.status(400).json({ error: 'Kamu belum bernegara — dirikan negara atau gabung lewat unifikasi dulu.' });
+    // v5.7.4 (aturan pemilik 28 Nov 2026): HANYA anggota parlemen yang
+    // bisa mengusulkan UU — warga biasa (Level 5+) tidak lagi bisa.
+    if (!await isMpCitizen(c)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa mengusulkan UU. Partaimu belum punya kursi.' });
     if (c.level < 5) return res.status(400).json({ error: 'Mengusulkan UU butuh Level 5.' });
     if (!title || title.length < 5 || title.length > 120) return res.status(400).json({ error: 'Judul UU 5–120 karakter.' });
     if (!content || content.length < 10) return res.status(400).json({ error: 'Isi UU minimal 10 karakter.' });
@@ -1118,6 +1143,9 @@ export function registerCivic(app) {
     const c = req.citizen;
     const country = await getMyCountry({ one }, c);
     if (!country) return res.status(400).json({ error: 'Kamu belum bernegara — dirikan negara atau gabung lewat unifikasi dulu.' });
+    // v5.7.4 (aturan pemilik 28 Nov 2026): HANYA anggota parlemen yang
+    // bisa mengusulkan mosi perang.
+    if (!await isMpCitizen(c)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa mengusulkan mosi perang. Partaimu belum punya kursi.' });
     if (c.level < 5) return res.status(400).json({ error: 'Mengusulkan mosi perang butuh Level 5.' });
     const region = await one('SELECT * FROM regions WHERE id = ?', [region_id]);
     if (!region) return res.status(404).json({ error: 'Wilayah tidak ditemukan.' });
@@ -1174,6 +1202,9 @@ export function registerCivic(app) {
     const c = req.citizen;
     const country = await getMyCountry({ one }, c);
     if (!country) return res.status(400).json({ error: 'Kamu belum bernegara — dirikan negara atau gabung lewat unifikasi dulu.' });
+    // v5.7.4 (aturan pemilik 28 Nov 2026): HANYA anggota parlemen yang
+    // bisa mengusulkan nama negara.
+    if (!await isMpCitizen(c)) return res.status(403).json({ error: 'Hanya anggota parlemen yang bisa mengusulkan nama negara. Partaimu belum punya kursi.' });
     if (c.level < 5) return res.status(400).json({ error: 'Mengusulkan nama negara butuh Level 5.' });
     const cleanName = String(name || '').trim();
     if (!cleanName || cleanName.length < COUNTRY_NAME_MIN || cleanName.length > COUNTRY_NAME_MAX) return res.status(400).json({ error: `Nama negara ${COUNTRY_NAME_MIN}–${COUNTRY_NAME_MAX} karakter.` });

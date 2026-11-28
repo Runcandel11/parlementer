@@ -2435,7 +2435,7 @@ export function registerCore(app) {
   app.get('/api/regions', authRequired, citizenRequired, r(async (req, res) => {
     const rows = await sql(
       `SELECT r.*, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name,
-        (SELECT COUNT(*) FROM citizens WHERE region_id = r.id) AS population,
+        (SELECT COUNT(*) FROM citizens WHERE home_region_id = r.id) AS population,
         (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
         (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion,
         (SELECT u.username FROM citizens ci JOIN users u ON u.id = ci.user_id WHERE ci.id = r.controller_id) AS controller_name,
@@ -2457,7 +2457,7 @@ export function registerCore(app) {
   app.get('/api/regions/:id', authRequired, citizenRequired, r(async (req, res) => {
     const reg = await one(
       `SELECT r.*, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name,
-        (SELECT COUNT(*) FROM citizens WHERE region_id = r.id) AS population,
+        (SELECT COUNT(*) FROM citizens WHERE home_region_id = r.id) AS population,
         (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
         (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion,
         (SELECT u.username FROM citizens ci JOIN users u ON u.id = ci.user_id WHERE ci.id = r.controller_id) AS controller_name,
@@ -2782,7 +2782,7 @@ export function registerCore(app) {
     // Kartu wilayahku (dashboard): skor kota, peringkat, infrastruktur,
     // kapasitas, bonus sumber daya, dukungan pemberontakan aktif.
     const myRegion = await one(`SELECT r.*, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name,
-      (SELECT COUNT(*) FROM citizens WHERE region_id = r.id) AS population,
+      (SELECT COUNT(*) FROM citizens WHERE home_region_id = r.id) AS population,
       (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
       (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion
       FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?`, [req.citizen.region_id]);

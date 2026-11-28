@@ -13,10 +13,13 @@ function todayStr(d = new Date()) { return d.toISOString().slice(0, 10); }
 // - Presiden: pemilu otomatis tiap 7 hari HANYA untuk sistem presidensial /
 //   parlementer. Imperial/diktator TIDAK punya pemilu otomatis — pemilu
 //   pengisi kekosongan dijadwalkan sekali bila jabatan presiden kosong.
-// - Parlemen: tiap 30 hari; pemilu pertama paling cepat saat parlemen
-//   dibuka (28 Nov 2026 20:00 WIB — dari db_meta, bukan hardcode tanggal).
-// Negara baru sudah membawa jadwal pemilu pertamanya dari pendirian
-// (POST /api/countries) — fungsi ini hanya mengisi bila belum ada.
+// - Parlemen: pemilu PERTAMA paling cepat saat parlemen dibuka
+//   (28 Nov 2026 20:00 WIB — dari db_meta, bukan hardcode tanggal):
+//   opens_at = max(parOpensAt, now). Siklus 30 hari HANYA untuk pemilu
+//   parlemen BERIKUTNYA (setelah satu pemilu parlemen negara itu berstatus
+//   closed) — v5.7.4 (aturan pemilik 28 Nov 2026: "kenapa pemilu belum
+//   dimulai?"). Negara baru sudah membawa jadwal pemilu pertamanya dari
+//   pendirian (POST /api/countries) — fungsi ini hanya mengisi bila belum ada.
 //
 // (Tahap 8) INSERT ATOMIK: dulu SELECT lalu INSERT — dua panggilan
 // bersamaan (cold start serverless ganda, ensureReady + tick di request
@@ -49,7 +52,14 @@ export async function ensureElections() {
     }
     const parl = await one("SELECT * FROM elections WHERE country_id = ? AND type = 'parliament' AND status IN ('scheduled','open') ORDER BY opens_at ASC", [country.id]);
     if (!parl) {
-      await insertElection(country, 'parliament', Math.max(parOpensAt, now + PARLIAMENT_ELECTION_CYCLE_DAYS * DAY_MS));
+      // v5.7.4: pemilu parlemen PERTAMA (belum pernah ada yang closed)
+      // dibuka langsung saat parlemen buka; siklus 30 hari hanya untuk
+      // pemilu BERIKUTNYA (setelah satu pemilu parlemen selesai/closed).
+      // Petisi ≥5/wilayah TETAP menjadi gate pembukaan (tick §3) — jadwal
+      // yang dimajukan tidak melonggarkan petisi.
+      const hadClosed = await one("SELECT id FROM elections WHERE country_id = ? AND type = 'parliament' AND status = 'closed' LIMIT 1", [country.id]);
+      const opens = hadClosed ? now + PARLIAMENT_ELECTION_CYCLE_DAYS * DAY_MS : Math.max(parOpensAt, now);
+      await insertElection(country, 'parliament', opens);
     }
   }
 }

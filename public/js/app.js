@@ -3258,6 +3258,8 @@ ROUTES.country = async () => {
     <div class="kv"><span class="k">Menteri Luar Negeri</span><span class="v">${esc(d.ministers.foreign)}</span></div>
     <div class="kv"><span class="k">Menteri Dalam Negeri</span><span class="v">${esc(d.ministers.home)}</span></div>
     <div class="kv"><span class="k">Menteri Pertahanan</span><span class="v">${esc(d.ministers.defense)}</span></div>
+    <div class="kv"><span class="k">Pemilu Berikutnya</span><span class="v">${d.nextElection ? `${d.nextElection.type === 'president' ? 'Presiden' : 'Parlemen'} — ${fmtDate(d.nextElection.opensAt)}${d.nextElection.status === 'open' ? ' (sedang berlangsung)' : ''}` : 'Belum ada jadwal'}</span></div>
+    <p class="muted small"><a href="#/elections" style="color:var(--gold)">Lihat halaman Pemilu →</a></p>
     ${d.isPresident ? `
     <h3 style="margin-top:12px">⚖️ WEWENANG PRESIDEN</h3>
     <label>IDEOLOGI NEGARA<select id="country-ideology">
@@ -3717,7 +3719,7 @@ ROUTES.parliament = async () => {
     <div class="stat-cell"><div class="stat-label">🏛️ Negaramu</div><div class="stat-num" style="font-size:20px">${countryName}</div></div>
     <div class="stat-cell"><div class="stat-label">👑 ${d.country ? esc(d.country.system === 'imperial' ? 'Kaisar' : d.country.system === 'diktator' ? 'Diktator' : 'Presiden') : 'Presiden'}</div><div class="stat-num" style="font-size:20px">Lihat Negara</div></div>
     <div class="stat-cell"><div class="stat-label">💺 Kursi Terisi</div><div class="stat-num gold">${d.filledSeats}<span style="font-size:18px;color:var(--muted)">/60</span></div><div class="stat-sub">${d.filledSeats >= 60 ? 'parlemen penuh' : 'kursi kosong menunggu pemilu'}</div></div>
-    <div class="stat-cell"><div class="stat-label">🗳️ Pemilu</div><div class="stat-num" style="font-size:20px">Lihat Pemilu</div></div>
+    <div class="stat-cell"><div class="stat-label">🗳️ Pemilu Berikutnya</div><div class="stat-num" style="font-size:20px">${d.nextElection ? fmtDate(d.nextElection.opensAt) : '—'}</div><div class="stat-sub">${d.nextElection ? (d.nextElection.type === 'president' ? 'Presiden' : 'Parlemen') + (d.nextElection.status === 'open' ? ' · sedang berlangsung' : ' · terjadwal') : 'belum ada jadwal'}</div></div>
   </div>
   <div class="panel"><h3>🏛️ DEWAN <span class="muted small">${d.filledSeats} dari 60 kursi terisi</span></h3>
     <div class="seat-chart">${dots.join('')}</div>
@@ -3733,7 +3735,7 @@ ROUTES.parliament = async () => {
     <p class="muted small">Angka-angka ini diubah oleh UU yang disahkan parlemen — bukan angka tetap.</p>
   </div>
   <div class="panel"><h3>📜 USULKAN UNDANG-UNDANG</h3>
-    <p class="muted small">Butuh Level 5 · biaya notaris 5 emas (gratis untuk Menteri Ekonomi) · voting 7 hari.</p>
+    <p class="muted small">Hanya anggota parlemen (Level 5) · biaya notaris 5 emas (gratis untuk Menteri Ekonomi) · voting 7 hari.</p>
     <label>JUDUL UU<input id="law-title" placeholder="cth: Ambang batas parlemen 3%"></label>
     <label>ISI UU<textarea id="law-content" rows="3" placeholder="Tulis isi undang-undang..."></textarea></label>
     <label>JENIS UU<select id="law-kind">
@@ -3767,7 +3769,7 @@ ROUTES.parliament = async () => {
     }).join('') : '<p class="muted">Belum ada undang-undang. Jadilah pengusul pertama!</p>'}
   </div>
   <div class="panel"><h3>⚔️ MOSI PERANG</h3>
-    <p class="muted small">Usulkan perang antar-negara ke wilayah negara lain. Voting parlemen 3 hari · lolos bila YA ≥ 31 · biaya 5 emas. Tidak bisa menyerang negara sekutu. Menang perang = wilayah target DIJAJAH.</p>
+    <p class="muted small">Hanya anggota parlemen yang bisa mengusulkan. Usulkan perang antar-negara ke wilayah negara lain. Voting parlemen 3 hari · lolos bila YA ≥ 31 · biaya 5 emas. Tidak bisa menyerang negara sekutu. Menang perang = wilayah target DIJAJAH.</p>
     <label>SERANG WILAYAH<select id="war-motion-region">
       ${(regionsData.regions || []).filter((r) => r.country_id && d.country && r.country_id !== d.country.id && !r.occupied_by).map((r) => `<option value="${r.id}">${esc(r.name)} — ${esc(r.country_name)}</option>`).join('')}
     </select></label>
@@ -3782,7 +3784,7 @@ ROUTES.parliament = async () => {
     }).join('') : '<p class="muted">Belum ada mosi perang.</p>'}
   </div>
   <div class="panel"><h3>📛 PENETAPAN NAMA NEGARA</h3>
-    <p class="muted small">Nama negara DITENTUKAN parlemen. Nama saat ini: <b>${d.country ? esc(d.country.name) : '—'}</b>${d.country?.nameUnset ? ' (belum dinamai)' : ''}. Voting 7 hari · lolos bila YA ≥ 31 · biaya 5 emas (gratis untuk Menteri Ekonomi).</p>
+    <p class="muted small">Nama negara DITENTUKAN parlemen — hanya anggota parlemen yang bisa mengusulkan nama. Nama saat ini: <b>${d.country ? esc(d.country.name) : '—'}</b>${d.country?.nameUnset ? ' (belum dinamai)' : ''}. Voting 7 hari · lolos bila YA ≥ 31 · biaya 5 emas (gratis untuk Menteri Ekonomi).</p>
     <label>NAMA YANG DIUSULKAN<input id="name-motion-name" placeholder="cth: Federasi Nusantara" maxlength="40"></label>
     <button class="btn-gold" id="btn-name-motion">USULKAN NAMA · 5 EMAS</button>
     ${d.nameMotions?.length ? d.nameMotions.map((m) => {
@@ -3795,7 +3797,7 @@ ROUTES.parliament = async () => {
     }).join('') : '<p class="muted">Belum ada mosi nama.</p>'}
   </div>
   <div class="panel"><h3>💰 ANGGARAN NEGARA</h3>
-    <p class="muted small">Diisulkan Menteri Ekonomi · voting parlemen 3 hari · dibayar kas negara · efek 7 hari.</p>
+    <p class="muted small">Diisulkan Menteri Ekonomi yang juga anggota parlemen · voting parlemen 3 hari · dibayar kas negara · efek 7 hari.</p>
     ${d.budgets?.length ? d.budgets.map((b) => {
       const myVote = d.myBudgetVotes[b.id];
       return `<div class="card"><h4>${BUDGET_LABEL[b.kind] || esc(b.kind)}</h4>

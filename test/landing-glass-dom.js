@@ -27,7 +27,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3462;
 const DB_PATH = '/tmp/parlementer-landing-glass-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.7.3';
+const EXPECTED_VERSION = '5.7.4';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -101,7 +101,7 @@ async function main() {
     check('landing: 3 badge bawah ada', html.includes('GRATIS DIMAINKAN') && html.includes('DIMAINKAN DI BROWSER') && html.includes('SEMUA BISA DIDAPAT DENGAN BERMAIN'));
     check('landing: label OPEN BETA tampil (status game saat ini)', html.includes('OPEN BETA'));
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.3 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.7.4 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // --- v5.1.0: kartu preview link (OG) + favicon/logo ---
     check('OG: og:title judul baru (Dunia yang Berjalan oleh Para Pemain)', html.includes('og:title" content="Parlementer — Dunia yang Berjalan oleh Para Pemain'));

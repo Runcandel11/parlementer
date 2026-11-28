@@ -199,13 +199,21 @@ async function main() {
   check('A belum bernegara (country null)', r.data.country === null, JSON.stringify(r.data.country));
   check('Halaman Negara menampilkan aturan pembentukan (Level 10 + 100 emas)', r.data.formationRules?.minLevel === 10 && r.data.formationRules?.costGold === 100, JSON.stringify(r.data.formationRules));
   check('Halaman Negara menampilkan 4 ideologi + 4 sistem pemerintahan', (r.data.ideologies || []).length === 4 && (r.data.systems || []).length === 4, `ideologi=${(r.data.ideologies || []).length} sistem=${(r.data.systems || []).length}`);
+  // v5.7.4: 28 Nov 2026 20:00 WIB sudah lewat di waktu nyata — skenario
+  // "parlemen terkunci" dibuat deterministik dengan menggeser
+  // parliament_opens_at ke 1 jam ke depan, lalu dikembalikan (pola [28e]).
+  const dbLock = new DatabaseSync(DB_PATH);
+  const lockedOpensAt = Date.now() + 3600000;
+  dbLock.prepare("UPDATE db_meta SET value = ? WHERE key = 'parliament_opens_at'").run(String(lockedOpensAt));
   r = await A.get('/api/parliament');
-  check('Parlemen terkunci (belum 28 Nov 2026 20:00 WIB)', r.data.parliamentOpen === false && r.data.parliamentOpensAt === 1795870800000, `open=${r.data.parliamentOpen} opensAt=${r.data.parliamentOpensAt}`);
+  check('Parlemen terkunci (dibuka 1 jam lagi)', r.data.parliamentOpen === false && r.data.parliamentOpensAt === lockedOpensAt, `open=${r.data.parliamentOpen} opensAt=${r.data.parliamentOpensAt}`);
   check('Tanpa negara: pajak 0%, upah ×1, perjalanan 1 tiket', r.data.effects?.taxIncome === 0 && r.data.effects?.adminPayMult === 1 && r.data.effects?.travelTickets === 1, JSON.stringify(r.data.effects));
   r = await A.post('/api/parliament/law', { title: 'UU Tes Terkunci', content: 'Isi undang-undang tes.', kind: 'general' });
   check('Usul UU sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
   r = await A.post('/api/country/budget', { kind: 'claim', amount: 100 });
   check('Usul anggaran sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  dbLock.prepare("UPDATE db_meta SET value = ? WHERE key = 'parliament_opens_at'").run('1795870800000');
+  dbLock.close();
   // Negatif pembentukan negara (A Level 1, emas ~54).
   r = await A.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
   check('Dirikan negara di Level 1 ditolak (butuh Level 10)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
@@ -1828,8 +1836,14 @@ async function main() {
   check('Pemain lama tidak pindah wilayah', (await A.get('/api/me')).data.citizen.region_id === aRegion0, `region A=${aRegion0}`);
 
   console.log('  [23c] UU berjenis: pajak penghasilan 2% → 4% (BUG-9)');
+  // v5.7.10: hanya MP yang bisa mengusulkan UU — D (presiden, bukan MP)
+  // dijadikan MP sementara lewat DB (pola [23g]), lalu dikembalikan.
+  db5.prepare('UPDATE citizens SET party_id = ? WHERE id = ?').run(party5Id, dId);
+  db5.prepare('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?)').run(party5Id, dId, 'member', Date.now());
   r = await D.post('/api/parliament/law', { title: 'UU Umum Tes', content: 'Isi undang-undang umum untuk tes.', kind: 'general' });
-  check('D (bukan menteri) mengusulkan UU umum: bayar 5 emas', r.status === 200 && (await D.get('/api/me')).data.citizen.gold === 495, `status=${r.status} emas=${(await D.get('/api/me')).data.citizen.gold}`);
+  check('D (MP, bukan Menteri Ekonomi) mengusulkan UU umum: bayar 5 emas', r.status === 200 && (await D.get('/api/me')).data.citizen.gold === 495, `status=${r.status} emas=${(await D.get('/api/me')).data.citizen.gold}`);
+  db5.prepare('UPDATE citizens SET party_id = NULL WHERE id = ?').run(dId);
+  db5.prepare('DELETE FROM party_members WHERE party_id = ? AND citizen_id = ?').run(party5Id, dId);
   r = await C.post('/api/parliament/law', { title: 'UU Pajak 4 Persen', content: 'Pajak penghasilan menjadi 4 persen untuk mengisi kas negara.', kind: 'tax_income', value: 9 });
   check('UU pajak nilai 9 ditolak (batas 1–5)', r.status === 400, `status=${r.status}`);
   r = await C.post('/api/parliament/law', { title: 'UU Perjalanan 3', content: 'Perjalanan butuh 3 tiket.', kind: 'travel', value: 3 });
@@ -4155,12 +4169,13 @@ async function main() {
   check('Pemberontak menang: wilayah dibebaskan ke negara asal', freed.occupied_by === null && freed.occupied_from === null && freed.country_id === targetCountryId, JSON.stringify(freed));
 
   // --- (e) Mosi nama: parlemen menetapkan nama negara.
-  r = await D.post('/api/parliament/name', { name: 'Nusantara' });
+  // v5.7.10: hanya MP yang bisa mengusulkan (dulu D presiden bisa) — C yang MP.
+  r = await C.post('/api/parliament/name', { name: 'Nusantara' });
   check('Mosi nama dengan nama yang sudah dipakai ditolak (400)', r.status === 400, `status=${r.status}`);
-  r = await D.post('/api/parliament/name', { name: 'Nusantara Baru' });
-  check('Mosi nama diusulkan (200, 5 emas)', r.status === 200 && !!r.data.motionId, `status=${r.status} ${r.data.error || ''}`);
+  r = await C.post('/api/parliament/name', { name: 'Nusantara Baru' });
+  check('Mosi nama diusulkan (200, gratis — C Menteri Ekonomi)', r.status === 200 && !!r.data.motionId, `status=${r.status} ${r.data.error || ''}`);
   const nameMotionId = r.data.motionId;
-  r = await D.post('/api/parliament/name', { name: 'Nama Lain' });
+  r = await C.post('/api/parliament/name', { name: 'Nama Lain' });
   check('Mosi nama kedua saat masih aktif ditolak (400)', r.status === 400, `status=${r.status}`);
   r = await E.post(`/api/parliament/name/${nameMotionId}/vote`, { vote: 'yes' });
   check('Bukan anggota parlemen tidak bisa vote mosi (403)', r.status === 403, `status=${r.status}`);
@@ -4175,13 +4190,14 @@ async function main() {
   const c1name = db40.prepare('SELECT name FROM country WHERE id = 1').get();
   check('Mosi nama lolos (31 YA): status passed + nama negara berubah', nm.status === 'passed' && c1name.name === 'Nusantara Baru', JSON.stringify({ status: nm.status, name: c1name.name }));
   r = await M6.post('/api/parliament/name', { name: 'Nusantara Baru' });
-  check('Mosi nama duplikat (nama negara lain) ditolak (400)', r.status === 400, `status=${r.status}`);
+  check('M6 (bukan MP) tidak bisa mengusulkan mosi nama (403)', r.status === 403, `status=${r.status}`);
 
   // --- (f) Mosi perang: parlemen bisa mendeklarasikan perang.
-  r = await D.post('/api/parliament/war-motion', { region_id: targetRegionId });
+  // v5.7.10: hanya MP yang bisa mengusulkan (dulu D presiden bisa) — C yang MP.
+  r = await C.post('/api/parliament/war-motion', { region_id: targetRegionId });
   check('Mosi perang diusulkan (200, 5 emas)', r.status === 200 && !!r.data.motionId, `status=${r.status} ${r.data.error || ''}`);
   const warMotionId = r.data.motionId;
-  r = await D.post('/api/parliament/war-motion', { region_id: targetRegionId });
+  r = await C.post('/api/parliament/war-motion', { region_id: targetRegionId });
   check('Mosi perang kedua saat masih aktif ditolak (400)', r.status === 400, `status=${r.status}`);
   r = await E.post(`/api/parliament/war-motion/${warMotionId}/vote`, { vote: 'yes' });
   check('Bukan anggota parlemen tidak bisa vote mosi perang (403)', r.status === 403, `status=${r.status}`);
@@ -4550,6 +4566,127 @@ async function main() {
   check('Emas bertambah tepat +25 dari klaim Babak III', Math.abs(goldAfter - goldBefore - 25) < 0.01, `before=${goldBefore} after=${goldAfter}`);
   r = await LV.post('/api/chronicle/claim', { chapter: 3 });
   check('Klaim Babak III 2× ditolak 400', r.status === 400, `status=${r.status}`);
+
+  console.log('\n[45] v5.7.10 — Usulan parlemen hanya MP + pemilu parlemen pertama dibuka sekarang');
+  const db45 = new DatabaseSync(DB_PATH);
+  // Parlemen sudah terbuka sejak [28e] (db_meta dibuka). Negara 1 =
+  // Nusantara Baru; C = MP (PTL 31 kursi di negara 1) + Menteri Ekonomi;
+  // D = presiden tapi BUKAN MP. MP45 = warga negara 1 yang jadi MP lewat
+  // DB; NM45 = warga negara 1 Level 5+ yang bukan MP.
+  const parOpensAt45 = Number(db45.prepare("SELECT value FROM db_meta WHERE key = 'parliament_opens_at'").get()?.value || 0);
+  const c1Home45 = db45.prepare('SELECT home_region_id FROM citizens WHERE id = ?').get(cId).home_region_id;
+  const mk45 = async (email, username, ip) => {
+    const cl = new Client();
+    cl.extraHeaders = { 'X-Forwarded-For': ip };
+    const rr = await cl.post('/api/auth/register', { email, password: 'rahasia123', username });
+    check(`${username} terdaftar`, rr.status === 200 && rr.data.ok, `status=${rr.status}`);
+    const id = (await cl.get('/api/me')).data.citizen.id;
+    db45.prepare('UPDATE citizens SET level = 5, gold = 500, region_id = ?, home_region_id = ? WHERE id = ?').run(c1Home45, c1Home45, id);
+    return { cl, id };
+  };
+  const NM45 = await mk45('nm45@test.local', 'nm45', '127.0.0.63');
+  const MP45 = await mk45('mp45@test.local', 'mp45', '127.0.0.64');
+
+  // --- (a) Bukan MP: 403 di keempat jalur usulan.
+  r = await NM45.cl.post('/api/parliament/law', { title: 'UU NM45', content: 'Isi UU tes NM45.', kind: 'general' });
+  check('NM45 (bukan MP) tidak bisa mengusulkan UU (403)', r.status === 403 && /anggota parlemen/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  r = await NM45.cl.post('/api/parliament/name', { name: 'Negara NM45' });
+  check('NM45 (bukan MP) tidak bisa mengusulkan mosi nama (403)', r.status === 403 && /anggota parlemen/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  // Target perang: wilayah negara lain yang sah (bersihkan sisa perang/
+  // jajahan/aliansi + mosi aktif negara 1 supaya target valid).
+  const warTarget45 = db45.prepare('SELECT id, country_id FROM regions WHERE country_id IS NOT NULL AND country_id != 1 ORDER BY id LIMIT 1').get();
+  db45.prepare("UPDATE wars SET status = 'ended' WHERE region_id = ? AND status = 'active'").run(warTarget45.id);
+  db45.prepare('UPDATE regions SET occupied_by = NULL, occupied_from = NULL WHERE id = ?').run(warTarget45.id);
+  db45.prepare("DELETE FROM country_alliances WHERE status = 'active' AND ((country_a_id = 1 AND country_b_id = ?) OR (country_a_id = ? AND country_b_id = 1))").run(warTarget45.country_id, warTarget45.country_id);
+  db45.prepare("DELETE FROM war_motions WHERE country_id = 1 AND status = 'voting'").run();
+  r = await NM45.cl.post('/api/parliament/war-motion', { region_id: warTarget45.id });
+  check('NM45 (bukan MP) tidak bisa mengusulkan mosi perang (403)', r.status === 403 && /anggota parlemen/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  // Anggaran: NM45 diangkat Menteri Ekonomi dulu — tetap 403 karena bukan MP.
+  db45.prepare('UPDATE country SET minister_economy = ? WHERE id = 1').run(NM45.id);
+  r = await NM45.cl.post('/api/country/budget', { kind: 'claim', amount: 100 });
+  check('NM45 (Menteri Ekonomi, bukan MP) tidak bisa mengusulkan anggaran (403)', r.status === 403 && /anggota parlemen/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+
+  // --- (b) MP45 jadi MP lewat DB (partai 1 kursi di negara 1), lalu sukses.
+  db45.prepare("INSERT INTO parties (name, tag, ideology, leader_id, type, seats, created_at) VALUES ('Partai MP45','MP5','Konservatif',?,'open',0,?)").run(MP45.id, Date.now());
+  const mp45PartyId = db45.prepare("SELECT id FROM parties WHERE tag = 'MP5'").get().id;
+  db45.prepare('INSERT INTO party_seats (party_id, country_id, seats) VALUES (?,?,1)').run(mp45PartyId, 1);
+  db45.prepare('UPDATE citizens SET party_id = ? WHERE id = ?').run(mp45PartyId, MP45.id);
+  db45.prepare('INSERT INTO party_members (party_id, citizen_id, role, joined_at) VALUES (?,?,?,?)').run(mp45PartyId, MP45.id, 'leader', Date.now());
+  r = await MP45.cl.post('/api/parliament/law', { title: 'UU MP45 Tes', content: 'Isi UU tes MP45.', kind: 'general' });
+  check('MP45 mengusulkan UU umum (200, bayar 5 emas)', r.status === 200 && !!r.data.lawId && (await MP45.cl.get('/api/me')).data.citizen.gold === 495, `status=${r.status} emas=${(await MP45.cl.get('/api/me')).data.citizen.gold}`);
+  // Nama duplikat (nama negara 1 saat ini) ditolak dulu, baru nama baru lolos.
+  r = await MP45.cl.post('/api/parliament/name', { name: 'Nusantara Baru' });
+  check('MP45: mosi nama duplikat (nama negara sendiri) ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await MP45.cl.post('/api/parliament/name', { name: 'Negara MP45' });
+  check('MP45 mengusulkan mosi nama (200)', r.status === 200 && !!r.data.motionId, `status=${r.status} ${r.data.error || ''}`);
+  r = await MP45.cl.post('/api/parliament/war-motion', { region_id: warTarget45.id });
+  check('MP45 mengusulkan mosi perang (200)', r.status === 200 && !!r.data.motionId, `status=${r.status} ${r.data.error || ''}`);
+  // Anggaran: MP45 diangkat Menteri Ekonomi — kini bisa mengusulkan.
+  db45.prepare("DELETE FROM budgets WHERE country_id = 1 AND status = 'voting'").run();
+  db45.prepare('UPDATE country SET minister_economy = ? WHERE id = 1').run(MP45.id);
+  r = await MP45.cl.post('/api/country/budget', { kind: 'claim', amount: 100 });
+  check('MP45 (Menteri Ekonomi + MP) mengusulkan anggaran (200)', r.status === 200 && !!r.data.budgetId, `status=${r.status} ${r.data.error || ''}`);
+  db45.prepare('UPDATE country SET minister_economy = ? WHERE id = 1').run(cId);
+
+  // --- (c) Pendirian negara baru: pemilu parlemen pertama langsung
+  // max(parOpensAt, now); presiden tetap +7 hari.
+  const NE45 = await mk45('ne45@test.local', 'ne45', '127.0.0.65');
+  db45.prepare('UPDATE citizens SET level = 10 WHERE id = ?').run(NE45.id);
+  let freeRegion45 = db45.prepare('SELECT id FROM regions WHERE country_id IS NULL LIMIT 1').get();
+  if (!freeRegion45) {
+    // Semua wilayah bernegara (setup [23] memasukkan semua ke negara 1) —
+    // bebaskan satu wilayah negara lain lewat DB.
+    freeRegion45 = db45.prepare('SELECT id FROM regions WHERE country_id IS NOT NULL AND country_id != 1 ORDER BY id DESC LIMIT 1').get();
+    db45.prepare('UPDATE regions SET country_id = NULL, occupied_by = NULL, occupied_from = NULL WHERE id = ?').run(freeRegion45.id);
+  }
+  db45.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(freeRegion45.id, freeRegion45.id, NE45.id);
+  const beforeFound45 = Date.now();
+  r = await NE45.cl.post('/api/countries', { name: 'Negara NE45', ideology: 'Konservatisme', system: 'presidensial' });
+  check('NE45 mendirikan negara di wilayah merdeka (200)', r.status === 200 && !!r.data.countryId, `status=${r.status} ${r.data.error || ''}`);
+  const newCountry45 = r.data.countryId;
+  const newName45 = db45.prepare('SELECT name FROM country WHERE id = ?').get(newCountry45);
+  check('Negara baru tanpa nama (NULL = Belum Dinamai)', newName45?.name == null, `name=${newName45?.name}`);
+  const newParEl45 = db45.prepare("SELECT * FROM elections WHERE country_id = ? AND type = 'parliament' AND status = 'scheduled'").get(newCountry45);
+  check('Pemilu parlemen pertama negara baru dibuka langsung (opens_at ≈ sekarang, bukan +3 hari)',
+    !!newParEl45 && newParEl45.opens_at >= parOpensAt45 && Math.abs(newParEl45.opens_at - beforeFound45) < 120000 && newParEl45.closes_at - newParEl45.opens_at === 3 * 86400000,
+    JSON.stringify({ opens_at: newParEl45?.opens_at, closes_at: newParEl45?.closes_at, parOpensAt: parOpensAt45 }));
+  const newPresEl45 = db45.prepare("SELECT * FROM elections WHERE country_id = ? AND type = 'president' AND status = 'scheduled'").get(newCountry45);
+  check('Pemilu presiden negara baru tetap +7 hari (tidak berubah)',
+    !!newPresEl45 && Math.abs(newPresEl45.opens_at - (beforeFound45 + 7 * 86400000)) < 120000 && newPresEl45.closes_at - newPresEl45.opens_at === 3 * 86400000,
+    JSON.stringify({ opens_at: newPresEl45?.opens_at }));
+
+  // --- (d) Pemilu parlemen BERIKUTNYA tetap siklus 30 hari.
+  db45.prepare("UPDATE elections SET status = 'closed', closes_at = ? WHERE country_id = 1 AND type = 'parliament' AND status IN ('scheduled','open')").run(Date.now() - 1000);
+  const beforeTick45 = Date.now();
+  await forceTick(C);
+  const nextParEl45 = db45.prepare("SELECT * FROM elections WHERE country_id = 1 AND type = 'parliament' AND status = 'scheduled' ORDER BY opens_at ASC").all();
+  check('Setelah pemilu pertama ditutup, pemilu parlemen berikutnya dijadwalkan +30 hari (tepat 1, tanpa duplikat)',
+    nextParEl45.length === 1 && Math.abs(nextParEl45[0].opens_at - (beforeTick45 + 30 * 86400000)) < 5 * 60000 && nextParEl45[0].closes_at - nextParEl45[0].opens_at === 3 * 86400000,
+    JSON.stringify(nextParEl45.map((x) => ({ opens_at: x.opens_at, closes_at: x.closes_at }))));
+
+  // --- (e) Jadwal pemilu tampil di halaman Negara + Parlemen.
+  const nextEl45 = db45.prepare("SELECT * FROM elections WHERE country_id = 1 AND status IN ('scheduled','open') ORDER BY opens_at ASC LIMIT 1").get();
+  r = await C.get('/api/country');
+  check('GET /api/country membawa nextElection sesuai baris pemilu di DB',
+    r.data.nextElection?.opensAt === nextEl45?.opens_at && r.data.nextElection?.type === nextEl45?.type,
+    JSON.stringify(r.data.nextElection));
+  r = await C.get('/api/parliament');
+  check('GET /api/parliament membawa nextElection sesuai baris pemilu di DB',
+    r.data.nextElection?.opensAt === nextEl45?.opens_at && r.data.nextElection?.type === nextEl45?.type,
+    JSON.stringify(r.data.nextElection));
+
+  // --- (f) Populasi wilayah dihitung dari kewarganegaraan (home_region_id).
+  const otherRegion45 = db45.prepare('SELECT id FROM regions WHERE id != ? LIMIT 1').get(c1Home45).id;
+  db45.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(otherRegion45, NM45.id);
+  const homeCount45 = (rid) => db45.prepare('SELECT COUNT(*) AS n FROM citizens WHERE home_region_id = ?').get(rid).n;
+  r = await C.get('/api/regions');
+  const regHome45 = (r.data.regions || []).find((x) => x.id === c1Home45);
+  const regOther45 = (r.data.regions || []).find((x) => x.id === otherRegion45);
+  check('Populasi wilayah asal NM45 tetap menghitungnya meski ia sedang berkunjung di wilayah lain',
+    regHome45?.population === homeCount45(c1Home45), `api=${regHome45?.population} db=${homeCount45(c1Home45)}`);
+  check('Populasi wilayah kunjungan TIDAK menghitung NM45 (bukan warga domisili)',
+    regOther45?.population === homeCount45(otherRegion45), `api=${regOther45?.population} db=${homeCount45(otherRegion45)}`);
+  db45.close();
 
   setDayO(1);
 

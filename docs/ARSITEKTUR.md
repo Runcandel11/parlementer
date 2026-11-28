@@ -496,6 +496,66 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   klaim Babak III +25 emas, 2× ditolak) + pg-verify [33] (migrasi 31→32:
   lv11+lv5 di-backfill, lv4+lv1 tidak, lv7 yang sudah ditandai tidak
   didobel, penanda + ringkasan JSON, idempotensi).
+- **Usulan parlemen hanya MP + pemilu parlemen pertama dibuka sekarang
+  (v5.7.4, 28 Nov 2026, perintah pemilik 20:01 WIB — PRIORITAS).**
+  `POST /api/parliament/law`, `/war-motion`, `/name` kini menolak 403 bila
+  pengusul bukan anggota parlemen (`isMpCitizen`: partai pengusul punya
+  kursi di negara asal warga lewat `party_seats`); voting SUDAH MP-only
+  sebelumnya, pemakzulan SUDAH MP-only. **Anggaran
+  (`POST /api/country/budget`) ikut dibatasi MP** — Menteri Ekonomi yang
+  bukan MP tidak bisa mengusulkan (presiden bisa mengangkat MP jadi Menteri
+  Ekonomi); aliansi tetap presiden-saja (tidak divoting parlemen, tidak
+  diubah); deklarasi perang LANGSUNG oleh Kemenhan TETAP (desain eksplisit
+  v5.7.0 — hanya pengusulan mosi yang dibatasi). **Konsekuensi: sampai
+  pemilu parlemen pertama selesai + kursi dialokasikan, TIDAK ADA yang bisa
+  mengusulkan** (masa kosong) — pemilu pertama dipercepat untuk
+  mempersingkatnya. **Pemilu parlemen pertama:** `opens_at =
+  max(parOpensAt, now)` — di `POST /api/countries` (dulu `now + 3 hari`) +
+  di `ensureElections` (dulu `max(parOpensAt, now + 30 hari)`); siklus 30
+  hari HANYA untuk pemilu berikutnya (ada pemilu parlemen tertutup
+  sebelumnya). Petisi ≥5 pendukung/wilayah TETAP berlaku (gate pembukaan di
+  tick §3, bukan penjadwalan). Pemilu presiden tetap +7 hari (by design,
+  JANGAN diubah). **Migrasi skema 32→33**
+  `migrateV5710ParliamentFirstElection` (penanda
+  `parliament_first_election_now_2026_11_28`, idempotent): memajukan pemilu
+  parlemen `scheduled` yang `opens_at`-nya masih di masa depan ke
+  `max(parOpensAt, now)` (closes = opens + 3 hari) HANYA untuk negara yang
+  belum pernah punya pemilu parlemen tertutup; negara yang sudah tertutup
+  dilewati. Migrasi sengaja TANPA subquery berkorelasi (2 query sederhana +
+  saring di JS) karena pg-mem di test/pg-test.js tidak bisa menyelesaikan
+  referensi `elections.country_id` dari subquery (crash ColumnNotFound —
+  di Postgres/SQLite asli query itu jalan). Efek live: pemilu parlemen "Belum Dinamai" (Kepri) pindah dari
+  02 Des 2026 ke ~saat deploy, lalu dibuka tick berikutnya begitu petisinya
+  5/5 (saat deploy masih 0/5). **Tampilan jadwal:** `GET /api/country` +
+  `GET /api/parliament` kini mengembalikan `nextElection` (pemilu
+  scheduled/open terdekat negara pemanggil); halaman Negara menampilkan
+  baris "Pemilu Berikutnya" (mis. "Parlemen — 29 Nov 2026") + tautan ke
+  Pemilu; halaman Parlemen menampilkan tanggal di kartu "Pemilu
+  Berikutnya"; halaman Pemilu SUDAH menampilkan `opens_at` + panel petisi
+  per wilayah (n/5) + tombol Dukung — diverifikasi, tidak diduplikasi.
+  **Anomali Diktator (DICATAT, bukan bug):** halaman Pemilu bilang sistem
+  Diktator "tidak punya pemilu presiden otomatis" tapi ada pemilu presiden
+  SCHEDULED 05–08 Des — baris itu sah: `POST /api/countries` menjadwalkan
+  pemilu presiden SEKALI saat pendirian untuk mengisi jabatan yang kosong
+  (presiden belum ada), sementara teks halaman soal pemilu OTOMATIS berkala
+  (`systemDef.autoPresidentElection = false`); baris TIDAK dihapus.
+  **Populasi wilayah (perbaikan definisi):** `GET /api/regions`,
+  `GET /api/regions/:id`, dan dashboard `myRegion` menghitung `population`
+  dari `home_region_id` (kewarganegaraan), bukan `region_id` (lokasi saat
+  ini) — sebelumnya peta menampilkan 42 (semua yang sedang berada di Kepri)
+  sementara halaman Negara 37 (warga domisili); definisi domisili yang
+  benar adalah home-based (konsisten dengan demografi detail wilayah "warga
+  yang berdomisili"). **Catatan laporan browser 28 Nov 18:28 WIB:** string
+  "Belum dijadwalkan" TIDAK ADA di kode — halaman Negara dulu memang tidak
+  menampilkan jadwal pemilu sama sekali (bukan teks itu). Dicek e2e [45]
+  (bukan-MP 403 di 4 jalur usulan; MP sukses + bayar 5 emas UU; nama
+  duplikat 400; pendirian negara baru → parlemen ≈ sekarang + presiden +7
+  hari; pemilu berikutnya +30 hari tepat 1; nextElection di /api/country +
+  /api/parliament; populasi home-based) + pg-verify [34] (migrasi 32→33:
+  pemilu pertama dimajukan, negara yang sudah tertutup dilewati, penanda +
+  ringkasan JSON, idempotensi) + mp-elections-dom.js (Negara: Pemilu
+  Berikutnya + tautan; Parlemen: petunjuk MP-only + kartu pemilu; Pemilu:
+  panel petisi 0/5 + Dukung → 1/5).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

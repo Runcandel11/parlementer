@@ -8,7 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { ACHIEVEMENTS, ADMIN_JOB_SEATS, PARLIAMENT_OPENS_AT_DEFAULT } from './game.js';
+import { ACHIEVEMENTS, ADMIN_JOB_SEATS, PARLIAMENT_OPENS_AT_DEFAULT, ELECTION_VOTE_MS } from './game.js';
 
 // Email yang menjadi admin otomatis (satu-satunya admin; tidak ada endpoint
 // promosi admin). Dibandingkan case-insensitive (email selalu disimpan lowercase).
@@ -1397,6 +1397,7 @@ export async function initDb() {
     await migrateV570Columns(t);
     await migrateV571Columns(t);
     await migrateV576ChronicleLevel5(t);
+    await migrateV5710ParliamentFirstElection(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1475,7 +1476,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 32;
+const SCHEMA_VERSION = 33;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -2296,6 +2297,63 @@ export async function migrateV576ChronicleLevel5(t) {
   if (existing) await t.run('UPDATE db_meta SET value = ? WHERE key = ?', [JSON.stringify(summary), CHRONICLE_LEVEL5_BACKFILL_KEY]);
   else await t.run('INSERT INTO db_meta (key, value) VALUES (?, ?)', [CHRONICLE_LEVEL5_BACKFILL_KEY, JSON.stringify(summary)]);
   console.log(`[migrasi chronicle-level5] warga level>=5 dicek=${summary.citizensChecked} di-backfill=${summary.citizensBackfilled} sudah-selesai=${summary.citizensAlreadyDone} level<5=${summary.citizensBelowLevel}`);
+  return summary;
+}
+
+const PARLIAMENT_FIRST_ELECTION_NOW_KEY = 'parliament_first_election_now_2026_11_28';
+
+// v5.7.4 (skema 32 → 33) — Majukan pemilu parlemen PERTAMA yang sudah
+// terjadwal (aturan pemilik 28 Nov 2026: "kenapa pemilu belum dimulai?").
+// Negara yang didirikan sebelum v5.7.4 membawa jadwal parlemen +3 hari
+// (POST /api/countries lama: max(parOpensAt, now + 3 hari)) — mis. negara
+// "Belum Dinamai" (Kepulauan Riau) yang live-nya terjadwal buka 02 Des
+// 2026. Baris `scheduled` PERTAMA (negara itu belum pernah punya pemilu
+// parlemen berstatus closed) dimajukan ke max(parOpensAt, now) supaya bisa
+// dibuka begitu petisi ≥5/wilayah terpenuhi — gate petisi TIDAK dilonggarkan
+// (tick tetap menegakkannya). Pemilu parlemen BERIKUTNYA (sudah pernah ada
+// yang closed — siklus 30 hari) TIDAK disentuh. Hanya UPDATE opens_at /
+// closes_at baris yang sudah ada — tidak membuat pemilu ganda
+// (ensureElections juga mendedupe scheduled/open). Idempotent via penanda
+// db_meta; baris yang opens_at-nya sudah <= target dibiarkan.
+export async function migrateV5710ParliamentFirstElection(t) {
+  const done = await t.one('SELECT value FROM db_meta WHERE key = ?', [PARLIAMENT_FIRST_ELECTION_NOW_KEY]);
+  if (done) {
+    console.log('[migrasi parliament-first-now] sudah pernah jalan — dilewati.');
+    return { skipped: true };
+  }
+  const parRow = await t.one("SELECT value FROM db_meta WHERE key = 'parliament_opens_at'");
+  const parOpensAt = parRow && Number.isFinite(Number(parRow.value)) && Number(parRow.value) > 0
+    ? Number(parRow.value) : PARLIAMENT_OPENS_AT_DEFAULT;
+  const now = Date.now();
+  const target = Math.max(parOpensAt, now);
+  // Tanpa subquery berkorelasi (pg-mem di test/pg-test.js tidak bisa
+  // menyelesaikan referensi `elections.country_id` dari subquery — lihat
+  // pg-test crash 28 Nov 2026): ambil daftar negara yang sudah punya
+  // pemilu parlemen tertutup + semua pemilu parlemen terjadwal, lalu
+  // saring di JS. Semantik sama: hanya pemilu PERTAMA (negara tanpa
+  // pemilu tertutup) yang dimajukan.
+  const closedRows = await t.sql(
+    `SELECT DISTINCT country_id FROM elections WHERE type = 'parliament' AND status = 'closed'`);
+  const closedSet = new Set(closedRows.map((r) => Number(r.country_id)));
+  const schedRows = await t.sql(
+    `SELECT id, country_id, opens_at FROM elections WHERE type = 'parliament' AND status = 'scheduled' ORDER BY id`);
+  const rows = schedRows.filter((r) => Number(r.opens_at) > target && !closedSet.has(Number(r.country_id)));
+  const skippedClosed = schedRows.filter((r) => closedSet.has(Number(r.country_id))).length;
+  const alreadyNow = schedRows.filter((r) => Number(r.opens_at) <= target && !closedSet.has(Number(r.country_id))).length;
+  const summary = {
+    target, moved: [],
+    movedCount: 0, skippedHasClosed: skippedClosed, alreadyNow,
+  };
+  for (const row of rows) {
+    await t.run('UPDATE elections SET opens_at = ?, closes_at = ? WHERE id = ?',
+      [target, target + ELECTION_VOTE_MS, row.id]);
+    summary.moved.push({ electionId: row.id, countryId: row.country_id, opensAtBefore: row.opens_at, opensAtAfter: target });
+  }
+  summary.movedCount = summary.moved.length;
+  const existing = await t.one('SELECT value FROM db_meta WHERE key = ?', [PARLIAMENT_FIRST_ELECTION_NOW_KEY]);
+  if (existing) await t.run('UPDATE db_meta SET value = ? WHERE key = ?', [JSON.stringify(summary), PARLIAMENT_FIRST_ELECTION_NOW_KEY]);
+  else await t.run('INSERT INTO db_meta (key, value) VALUES (?, ?)', [PARLIAMENT_FIRST_ELECTION_NOW_KEY, JSON.stringify(summary)]);
+  console.log(`[migrasi parliament-first-now] dimajukan=${summary.movedCount} sudah-sekarang=${summary.alreadyNow} dilewati-punya-closed=${summary.skippedHasClosed} target=${new Date(target).toISOString()}`);
   return summary;
 }
 
