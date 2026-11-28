@@ -219,6 +219,8 @@ TIDAK jadi admin; kode bootstrap benar jadi admin)** → ban (login akun banned
 tetap bisa, ditandai `banned:true`, untuk banding) + banding (ajukan/balas/
 terima/tolak) + avatar + hadiah/pembelian + hadiah massal + inbox admin.
 
+Hasil terakhir (28 Nov 2026, v5.7.3 "Peta hidup" — Lane 4, poles berkelanjutan): **map-dom 55/55 lolos (8 cek baru: cincin denyut penanda KAMU, zoom halus 0,45 detik, transisi wilayah, denyut titik ubin dashboard, prefers-reduced-motion)** — dan 16 suite lain hijau di VM lokal (e2e 1301/1301, pg-test 46/46, modal 155/155, chat-dom 82/82, market-dom 14/14, ui-batch2-dom 53/53, landing-glass-dom 79/79, photo-upload-dom 32/32, profile-admin-dom 58/58, xp-rollback 49/49, ssl 6/6, jobs-region-dom 27/27, ui-icons-dom 18/18, company-dom 25/25, credit-dom 22/22, ticket-dom 56/56; total lokal 2078/2078, 0 gagal). Full suite dialihkan ke GitHub Actions per aturan MAKSIMALKAN 28 Nov 20:36 WIB — gate merge menunggu run Actions di branch ini hijau semua. Catatan: nomor versi 5.7.3 sudah dipakai master (Kronik, d9aa023) — parent menomori ulang + rebase saat merge.
+
 Hasil terakhir (28 Nov 2026, v5.6.0 "Manajemen Partai"): **e2e 1201/1201 lolos,
 pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 270/270 lolos,
 pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, tutorial-dom 43/43 lolos,
