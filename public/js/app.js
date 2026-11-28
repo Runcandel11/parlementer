@@ -1884,13 +1884,21 @@ ROUTES.admin = async (q) => {
     return renderAdminInbox(params.get('status') || '');
   }
   const query = q ? decodeURIComponent(q) : '';
-  const [list, logs, appeals, status] = await Promise.all([
+  const [list, logs, appeals, status, ov] = await Promise.all([
     api('/api/admin/players' + (query ? '?q=' + encodeURIComponent(query) : '')),
     api('/api/admin/actions'),
     api('/api/admin/appeals'),
     api('/api/admin/status'),
+    api('/api/admin/overview'),
   ]);
   const pendingAppeals = appeals.appeals.filter((a) => a.status === 'menunggu').length;
+  // Ringkasan analitik (v5.7.5): kartu KPI di atas + satu grafik batang
+  // "pemain per wilayah" — batang mulai dari nol, skala sama (lebar relatif
+  // terhadap wilayah teramai), label langsung di tiap baris.
+  const maxRegion = Math.max(0, ...ov.byRegion.map((x) => x.players));
+  const regionRows = ov.byRegion.map((x) => `
+    <div class="region-bar-row"><div class="region-bar-head"><span>${esc(x.name)}</span><b>${fmt(x.players)}</b></div>
+    <div class="bar gold"><i style="width:${maxRegion ? Math.max(x.players > 0 ? 2 : 0, Math.round((x.players / maxRegion) * 100)) : 0}%"></i></div></div>`).join('');
   $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Hanya akun admin yang bisa melihat halaman ini.', `
   <div class="tabs">
     <button class="tab active">👥 Pemain</button>
@@ -1900,6 +1908,19 @@ ROUTES.admin = async (q) => {
     <button class="tab" data-goto="#/admin/announcements">📣 Pengumuman</button>
     <button class="tab" data-goto="#/admin/flags">🚩 Tanda Pasar</button>
     <button class="tab" data-goto="#/admin/share">🔗 Share Link</button>
+  </div>
+  <div class="panel" id="admin-overview"><h3>📊 RINGKASAN</h3>
+    <p class="muted small">Data ${esc(ov.day)} — dihitung dari tabel yang sama dengan daftar pemain di bawah.</p>
+    <div class="stat-grid">
+      <div class="stat-cell"><span class="stat-label">Total Pemain</span><div class="stat-num" data-kpi="total">${fmt(ov.totalPlayers)}</div></div>
+      <div class="stat-cell"><span class="stat-label">Baru Hari Ini</span><div class="stat-num" data-kpi="new">${fmt(ov.newToday)}</div></div>
+      <div class="stat-cell"><span class="stat-label">Premium Aktif</span><div class="stat-num gold" data-kpi="premium">${fmt(ov.premiumActive)}</div></div>
+      <div class="stat-cell"><span class="stat-label">Banned</span><div class="stat-num" data-kpi="banned">${fmt(ov.banned)}</div></div>
+      <div class="stat-cell"><span class="stat-label">Total Emas Beredar</span><div class="stat-num gold" data-kpi="gold">${fmt(ov.totalGold)}</div></div>
+      <div class="stat-cell"><span class="stat-label">Total Rupiah Beredar</span><div class="stat-num gold" data-kpi="usd">${fmtRp(ov.totalUsd)}</div></div>
+    </div>
+    <h4 style="margin: 4px 0 10px; color: var(--gold-bright); font-size: 15px;">Pemain per wilayah</h4>
+    ${regionRows}
   </div>
   <div class="panel"><h3>🔍 CARI PEMAIN</h3>
     <p class="muted small">Jalan darurat admin (kode bootstrap): <b>${status?.bootstrapActive ? 'AKTIF — registrasi dengan kode yang benar bisa membuat admin' : 'TIDAK AKTIF — tidak ada jalan membuat admin lewat registrasi (aman)'}</b></p>

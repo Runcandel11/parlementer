@@ -209,6 +209,11 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), #14b8a6); }
 .bar.gold > i { background: linear-gradient(90deg, var(--gold-bright), var(--gold)); }
 .bar.red > i { background: linear-gradient(90deg, #e5484d, #b91c1c); }
+/* ---------- ringkasan analitik panel admin (v5.7.5) ---------- */
+.region-bar-row { margin-bottom: 8px; }
+.region-bar-row .region-bar-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; margin-bottom: 3px; }
+.region-bar-row .bar > i { transition: width .6s ease; }
+@media (prefers-reduced-motion: reduce) { .region-bar-row .bar > i { transition: none; } }
 .kv { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid #16213a; }
 .kv:last-child { border-bottom: none; }
 .kv .k { color: var(--muted); font-family: 'Oswald', sans-serif; letter-spacing: .06em; text-transform: uppercase; font-size: 13px; }

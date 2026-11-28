@@ -26,7 +26,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3476;
 const DB_PATH = '/tmp/parlementer-backgrounds-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.7.4';
+const EXPECTED_VERSION = '5.7.5';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -123,7 +123,7 @@ async function main() {
     let r = await api(jarA, '/api/auth/register', { email: 'domBg@test.local', password: 'rahasia123', username: 'warga_bg' });
     check('Daftar pemain (API)', r.status === 200 && r.data.ok, `status=${r.status}`);
     r = await api(jarA, '/api/world');
-    check('API /api/world: versi 5.7.4', r.data.version === EXPECTED_VERSION, `version=${r.data.version}`);
+    check('API /api/world: versi 5.7.5', r.data.version === EXPECTED_VERSION, `version=${r.data.version}`);
 
     // --- (5) Semua gambar bisa diambil server ---
     for (const f of files) {

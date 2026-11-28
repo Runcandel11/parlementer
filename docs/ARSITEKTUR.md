@@ -499,6 +499,33 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   begitu jam buka parlemen (28 Nov 2026 20:00 WIB) lewat dan sempat
   menggagalkan e2e 20:09 WIB (1298/1301); sesudah dibuka, cek yang sama
   memastikan usul UU/anggaran TIDAK ditolak 403.
+- **Ringkasan Analitik Panel Admin v5.7.5 (28 Nov 2026, Lane 15 — poles
+  berkelanjutan, antrean kosong):** Panel Admin selama ini langsung daftar
+  pemain + log — tidak ada gambaran sekilas. Kini ada panel 📊 RINGKASAN di
+  atas daftar: 6 kartu KPI (Total Pemain, Baru Hari Ini, Premium Aktif,
+  Banned, Total Emas Beredar, Total Rupiah Beredar — pakai `.stat-grid` /
+  `.stat-cell` yang sudah ada) + satu grafik batang "Pemain per wilayah"
+  (17 baris, batang mulai dari nol, skala sama = lebar relatif terhadap
+  wilayah teramai, label nama + jumlah langsung di tiap baris, transisi
+  lebar 0,6 dtk + `prefers-reduced-motion`). Referensi desain: KPI cards di
+  atas + satu chart perbandingan (bar, sumbu mulai nol, skala bersama) —
+  https://learn.benibix.com/learn/design-data-viz/dashboard-design-basics
+  dan https://thevarsity.in/analytics-dashboard-design. Data dari endpoint
+  baru HANYA-BACA `GET /api/admin/overview` (adminOnly; non-admin 403,
+  tanpa login 401): total = COUNT(users); baru hari ini = created_at >=
+  awal hari UTC (definisi hari yang sama dengan statistik share:
+  `todayStr()`); premium aktif = premium_until > sekarang; banned =
+  is_banned = 1; total emas/Rupiah = SUM(citizens.gold/usd); pemain per
+  wilayah = COUNT(citizens) per regions.name lewat region_id SAAT INI
+  (LEFT JOIN supaya wilayah kosong tetap tampil 0). Semua angka dari tabel
+  yang SAMA dengan sumbernya di tempat lain — tidak ada definisi kedua,
+  tidak ada aksi ubah, tanpa migrasi skema (tetap 32). Dicek e2e [14] (7
+  cek baru: 403/401, total 12 + baru 12 + banned 0, premium ≥ 1, emas/Rupiah
+  > 0, jumlah per wilayah = 12, total emas naik tepat +25 setelah grant)
+  + `test/admin-overview-dom.js` baru (23 cek: API overview + 6 kartu KPI +
+  17 baris batang + batang teramai 100% + non-admin tidak melihat panel).
+  Suite terdampak hijau lokal: e2e 1330/1330, admin-overview-dom 23/23,
+  profile-admin-dom 58/58; full suite menyusul di GitHub Actions.
 - **Kronik yatim `level5` + `market` v5.7.3 (28 Nov 2026, laporan Vincent
   di Discord #bugs):** Vincent level 11 stuck Babak III 3/4 — "Capai
   Level 5" tidak pernah selesai. Akar: dua kunci Kronik TIDAK PUNYA situs

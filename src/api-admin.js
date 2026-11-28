@@ -86,6 +86,42 @@ export function registerAdmin(app) {
     res.json({ bootstrapActive: bootstrapActive() });
   }));
 
+  // ---------- RINGKASAN ANALITIK (v5.7.5) ----------
+  // Angka-angka Panel Admin dalam satu panggilan, HANYA BACA (tidak ada
+  // aksi ubah dari statistik ini). Semua angka dihitung dari tabel yang
+  // SAMA dengan sumbernya di tempat lain, dengan definisi yang SAMA:
+  // total pemain = COUNT(users); baru hari ini = created_at >= awal hari
+  // ini (UTC, definisi hari yang sama dengan statistik share: todayStr);
+  // premium aktif = premium_until > sekarang; banned = is_banned = 1;
+  // total emas/Rupiah = SUM(citizens.gold/usd); pemain per wilayah =
+  // COUNT(citizens) per regions.name lewat region_id SAAT INI (LEFT JOIN
+  // supaya wilayah kosong tetap tampil 0 — grafik batang butuh semua
+  // wilayah dengan skala yang sama). COUNT/SUM Postgres mengembalikan
+  // string → Number() seperti di tempat lain.
+  app.get('/api/admin/overview', authRequired, admin, r(async (req, res) => {
+    const now = Date.now();
+    const dayStart = Date.parse(todayStr() + 'T00:00:00.000Z');
+    const totalRow = await one('SELECT COUNT(*) AS n FROM users');
+    const newRow = await one('SELECT COUNT(*) AS n FROM users WHERE created_at >= ?', [dayStart]);
+    const bannedRow = await one('SELECT COUNT(*) AS n FROM users WHERE is_banned = 1');
+    const premRow = await one('SELECT COUNT(*) AS n FROM users WHERE premium_until > ?', [now]);
+    const sums = await one('SELECT COALESCE(SUM(gold), 0) AS gold, COALESCE(SUM(usd), 0) AS usd FROM citizens');
+    const byRegion = await sql(
+      `SELECT r.name AS name, COUNT(c.id) AS players
+       FROM regions r LEFT JOIN citizens c ON c.region_id = r.id
+       GROUP BY r.id, r.name ORDER BY players DESC, r.name ASC`);
+    res.json({
+      day: todayStr(),
+      totalPlayers: Number(totalRow.n),
+      newToday: Number(newRow.n),
+      banned: Number(bannedRow.n),
+      premiumActive: Number(premRow.n),
+      totalGold: Number(sums.gold),
+      totalUsd: Number(sums.usd),
+      byRegion: byRegion.map((x) => ({ name: x.name, players: Number(x.players) })),
+    });
+  }));
+
   // ---------- DAFTAR PEMAIN ----------
   app.get('/api/admin/players', authRequired, admin, r(async (req, res) => {
     const q = (req.query.q || '').trim();

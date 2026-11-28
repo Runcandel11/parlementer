@@ -655,10 +655,26 @@ async function main() {
   r = await ADM.get('/api/admin/players');
   check('Admin: daftar pemain tampil (12 pemain)', r.status === 200 && r.data.players.length === 12, `jumlah=${r.data.players?.length}`);
   check('Daftar pemain menampilkan ID publik PL-000002', r.data.players.some((p) => p.publicId === 'PL-000002' && p.username === 'warga_dua'));
+
+  // --- Ringkasan analitik admin (v5.7.5) ---
+  r = await B.get('/api/admin/overview');
+  check('Non-admin: GET /api/admin/overview ditolak 403', r.status === 403);
+  const ANON = new Client();
+  r = await ANON.get('/api/admin/overview');
+  check('Tanpa login: GET /api/admin/overview ditolak 401', r.status === 401);
+  r = await ADM.get('/api/admin/overview');
+  const ov1 = r.data;
+  check('Admin: overview tampil (12 pemain, 12 baru hari ini, 0 banned)', r.status === 200 && ov1.totalPlayers === 12 && ov1.newToday === 12 && ov1.banned === 0, `total=${ov1.totalPlayers} baru=${ov1.newToday} banned=${ov1.banned}`);
+  check('Overview: ada premium aktif (bonus referral)', ov1.premiumActive >= 1, `premium=${ov1.premiumActive}`);
+  check('Overview: total emas & Rupiah > 0', ov1.totalGold > 0 && ov1.totalUsd >= 0, `emas=${ov1.totalGold} usd=${ov1.totalUsd}`);
+  check('Overview: pemain per wilayah berjumlah 12 & tiap baris bernama', Array.isArray(ov1.byRegion) && ov1.byRegion.reduce((s, x) => s + x.players, 0) === 12 && ov1.byRegion.every((x) => x.name && Number.isInteger(x.players)), `wilayah=${ov1.byRegion?.length}`);
+
   r = await ADM.post('/api/admin/gold', { user_id: 2, amount: 25 });
   check('Admin: beri +25 emas ke B', r.status === 200 && r.data.ok);
   r = await B.get('/api/me');
   check('Emas B: 50 → 75', r.data.citizen.gold === 75, `emas=${r.data.citizen.gold}`);
+  r = await ADM.get('/api/admin/overview');
+  check('Overview: total emas naik 25 setelah grant (+25 ke B)', r.data.totalGold === ov1.totalGold + 25, `emas=${r.data.totalGold} (sebelum ${ov1.totalGold})`);
   r = await ADM.post('/api/admin/premium', { user_id: 2, months: 3 });
   check('Admin: beri Premium 3 bulan ke B', r.status === 200 && r.data.ok);
   r = await B.get('/api/me');
