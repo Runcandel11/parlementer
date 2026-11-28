@@ -16,10 +16,10 @@
 // BUKAN bagian dari test:all — butuh server Postgres lokal.
 import { spawn } from 'node:child_process';
 import pg from 'pg';
+import { testPort, pgDatabaseUrl } from './test-env.js';
 
-const DATABASE_URL = process.env.DATABASE_URL
-  || 'postgres://parlementer_test:parlementer_test@127.0.0.1:5432/parlementer_test';
-const PORT = 3458;
+const DATABASE_URL = pgDatabaseUrl();
+const PORT = testPort(3458);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -23,11 +23,12 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import pkg from 'jsdom';
+import { testPort, testDbPath } from './test-env.js';
 const { JSDOM } = pkg;
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 3464;
-const DB_PATH = '/tmp/parlementer-photo-upload-dom.db';
+const PORT = testPort(3464);
+const DB_PATH = testDbPath('/tmp/parlementer-photo-upload-dom.db');
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

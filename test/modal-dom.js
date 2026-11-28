@@ -6,11 +6,12 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import pkg from 'jsdom';
+import { testPort, testDbPath } from './test-env.js';
 const { JSDOM } = pkg;
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 3457;
-const DB_PATH = '/tmp/parlementer-modal.db';
+const PORT = testPort(3457);
+const DB_PATH = testDbPath('/tmp/parlementer-modal.db');
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

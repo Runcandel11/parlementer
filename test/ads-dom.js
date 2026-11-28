@@ -10,7 +10,7 @@
 //   (4) TIDAK ada skrip AdinPlay yang dimuat saat ID kosong;
 //   (5) POST /api/ads/start ditolak 503 saat iklan belum aktif;
 //   (6) /api/me melaporkan ads.enabled=false + rewardGold 30;
-//   (7) VERSI: /api/world melaporkan 5.7.3;
+//   (7) VERSI: /api/world melaporkan 5.7.4;
 //   (8) Banner (slot kosong): /api/me melaporkan banner.enabled=false +
 //       rewardGold 15 + dailyCap 10 + viewMs 10000; halaman #/ads
 //       menampilkan panel banner + placeholder "belum tersedia" + TIDAK
@@ -29,13 +29,14 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import pkg from 'jsdom';
+import { testPort, testDbPath } from './test-env.js';
 const { JSDOM } = pkg;
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 3471;
-const DB_PATH = '/tmp/parlementer-ads-dom.db';
+const PORT = testPort(3471);
+const DB_PATH = testDbPath('/tmp/parlementer-ads-dom.db');
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.7.3';
+const EXPECTED_VERSION = '5.7.4';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -102,7 +103,7 @@ async function main() {
 
     // (7) Versi dulu (tanpa login).
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.3', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.7.4', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     const jar = makeJar(BASE);
     const r = await api(jar, '/api/auth/register', { email: 'domAds@test.local', password: 'rahasia123', username: 'warga_ads' });
@@ -188,7 +189,7 @@ async function main() {
   // --- (9) Server kedua: slot banner terisi (ADINPLAY tetap kosong) ---
   const PORT2 = PORT + 1;
   const BASE2 = `http://127.0.0.1:${PORT2}`;
-  const DB2 = '/tmp/parlementer-ads-dom2.db';
+  const DB2 = testDbPath('/tmp/parlementer-ads-dom2.db');
   for (const suffix of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB2 + suffix); } catch {} }
   console.log('[ads-dom] Menyalakan server kedua di port ' + PORT2 + ' (ADSENSE_BANNER_SLOT terisi) ...');
   server = spawn('node', ['server.js'], {

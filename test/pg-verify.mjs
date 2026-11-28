@@ -17,11 +17,11 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { testPort, testDbPath, pgDatabaseUrl } from './test-env.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-const DATABASE_URL = process.env.DATABASE_URL
-  || 'postgres://parlementer_test:parlementer_test@127.0.0.1:5432/parlementer_test';
+const DATABASE_URL = pgDatabaseUrl();
 process.env.DATABASE_URL = DATABASE_URL;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -141,7 +141,7 @@ async function main() {
   const failClosed = await new Promise((resolve) => {
     const p = spawn('node', ['server.js'], {
       cwd: new URL('..', import.meta.url).pathname,
-      env: { ...process.env, NODE_ENV: 'production', DATABASE_PATH: '/tmp/parlementer-failclosed.db' },
+      env: { ...process.env, NODE_ENV: 'production', DATABASE_PATH: testDbPath('/tmp/parlementer-failclosed.db') },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -314,7 +314,7 @@ async function main() {
   // + alias subquery `seats`). SQLite tidak menangkap ini — hanya Postgres
   // sungguhan yang menolak. Tes ini memanggil endpoint HTTP sungguhan
   // (server di-spawn seperti pg-concurrency).
-  const P_PORT = 3466;
+  const P_PORT = testPort(3466);
   const P_BASE = `http://127.0.0.1:${P_PORT}`;
   class PClient {
     constructor() { this.cookie = ''; }
@@ -472,7 +472,7 @@ async function main() {
   check('Durasi Jakarta → Papua dipangkas ke 30 menit', travelMinutesFor('Jakarta', 'Papua') === 30, `mnt=${travelMinutesFor('Jakarta', 'Papua')}`);
   check('Durasi wilayah tak dikenal fallback 10 menit', travelMinutesFor('Jakarta', 'Atlantis') === 10, `mnt=${travelMinutesFor('Jakarta', 'Atlantis')}`);
   // Endpoint travel + move lewat HTTP (server tes kedua, Postgres sungguhan).
-  const T_PORT = 3467;
+  const T_PORT = testPort(3467);
   const T_BASE = `http://127.0.0.1:${T_PORT}`;
   class TClient {
     constructor() { this.cookie = ''; }
@@ -1015,7 +1015,7 @@ async function main() {
   // statistik TOTAL). Tes e2e lolos karena jalan di SQLite (dinamis, tak
   // peduli tipe param). Regresi ini memanggil endpoint HTTP sungguhan
   // melawan Postgres — termasuk pemanggilan total (day NULL).
-  const S_PORT = 3467;
+  const S_PORT = testPort(3467);
   const S_BASE = `http://127.0.0.1:${S_PORT}`;
   const sServer = spawn('node', ['server.js'], {
     cwd: new URL('..', import.meta.url).pathname,

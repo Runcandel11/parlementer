@@ -21,13 +21,14 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import pkg from 'jsdom';
 import { DatabaseSync } from 'node:sqlite';
+import { testPort, testDbPath } from './test-env.js';
 const { JSDOM } = pkg;
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 3462;
-const DB_PATH = '/tmp/parlementer-landing-glass-dom.db';
+const PORT = testPort(3462);
+const DB_PATH = testDbPath('/tmp/parlementer-landing-glass-dom.db');
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.7.3';
+const EXPECTED_VERSION = '5.7.4';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -101,7 +102,7 @@ async function main() {
     check('landing: 3 badge bawah ada', html.includes('GRATIS DIMAINKAN') && html.includes('DIMAINKAN DI BROWSER') && html.includes('SEMUA BISA DIDAPAT DENGAN BERMAIN'));
     check('landing: label OPEN BETA tampil (status game saat ini)', html.includes('OPEN BETA'));
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.3 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.7.4 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // --- v5.1.0: kartu preview link (OG) + favicon/logo ---
     check('OG: og:title judul baru (Dunia yang Berjalan oleh Para Pemain)', html.includes('og:title" content="Parlementer — Dunia yang Berjalan oleh Para Pemain'));
@@ -166,7 +167,7 @@ async function main() {
     check('tamu: #auth-view tampil, #app tersembunyi', !document.querySelector('#auth-view').hidden && document.querySelector('#app').hidden === true);
     check('tamu: hero landing tampil', !document.querySelector('#landing-hero').hidden);
     check('tamu: kartu login/daftar tersembunyi di awal', document.querySelector('#auth-card-wrap').hidden === true);
-    check('tamu: footer landing menampilkan Parlemen v5.7.3', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
+    check('tamu: footer landing menampilkan Parlemen v5.7.4', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
     const landingCredits = document.querySelector('#landing-credits')?.textContent || '';
     check('tamu: footer landing menampilkan kredit pembuat (Khalid + Angelica)', landingCredits.includes('Khalid Talal Muhammad Zain Al-Ghunaim') && landingCredits.includes('Angelica'), landingCredits);
     check('tamu: kredit landing menyebut Khalid CEO & Pengembang', landingCredits.includes('CEO & Pengembang'), landingCredits);
@@ -210,7 +211,7 @@ async function main() {
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await sleep(2500);
     check('daftar dari landing: aplikasi tampil (#app), landing tidak menghadang', document.querySelector('#app').hidden === false && document.querySelector('#auth-view').hidden === true);
-    check('login: footer drawer menampilkan Parlemen v5.7.3', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
+    check('login: footer drawer menampilkan Parlemen v5.7.4', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
     const drawerCredits = document.querySelector('#drawer-credits')?.textContent || '';
     check('login: footer drawer menampilkan kredit pembuat (Khalid + Angelica)', drawerCredits.includes('Khalid Talal Muhammad Zain Al-Ghunaim') && drawerCredits.includes('Angelica'), drawerCredits);
     check('login: kredit drawer menyebut Khalid CEO & Pengembang', drawerCredits.includes('CEO & Pengembang'), drawerCredits);

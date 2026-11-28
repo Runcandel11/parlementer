@@ -16,11 +16,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import pkg from 'jsdom';
 import { DatabaseSync } from 'node:sqlite';
+import { testPort, testDbPath } from './test-env.js';
 const { JSDOM } = pkg;
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 3471;
-const DB_PATH = '/tmp/parlementer-party-dom.db';
+const PORT = testPort(3471);
+const DB_PATH = testDbPath('/tmp/parlementer-party-dom.db');
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -99,7 +100,7 @@ async function main() {
     check('server menyala dan /api/world merespons', up);
     if (!up) { process.exitCode = 1; return; }
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.3', world.version === '5.7.3', `version=${world.version}`);
+    check('API /api/world: versi 5.7.4', world.version === '5.7.4', `version=${world.version}`);
 
     const jarL = makeJar(); const jarM = makeJar(); const jarA = makeJar();
     let r = await api(jarL, '/api/auth/register', { email: 'ketua-dom@test.local', password: 'rahasia123', username: 'ketua_dom' });

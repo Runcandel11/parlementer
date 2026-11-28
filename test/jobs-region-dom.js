@@ -24,11 +24,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import pkg from 'jsdom';
+import { testPort, testDbPath } from './test-env.js';
 const { JSDOM } = pkg;
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 3465;
-const DB_PATH = '/tmp/parlementer-jobs-region-dom.db';
+const PORT = testPort(3465);
+const DB_PATH = testDbPath('/tmp/parlementer-jobs-region-dom.db');
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

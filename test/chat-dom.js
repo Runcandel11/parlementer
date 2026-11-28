@@ -12,11 +12,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import pkg from 'jsdom';
 import { DatabaseSync } from 'node:sqlite';
+import { testPort, testDbPath } from './test-env.js';
 const { JSDOM } = pkg;
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 3459;
-const DB_PATH = '/tmp/parlementer-chat-dom.db';
+const PORT = testPort(3459);
+const DB_PATH = testDbPath('/tmp/parlementer-chat-dom.db');
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

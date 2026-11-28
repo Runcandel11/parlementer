@@ -587,3 +587,40 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   benar, wilayah pindah ke pemberontak, efek UU diterapkan, kas
   berkurang tepat). **Alur pemain baru** end-to-end (daftar → klaim →
   lamar ADMIN → shift → jual → beli → chat) lolos tanpa hambatan.
+
+## 9. Tes paralel per lane (v5.7.4, 28 Nov 2026 — atasi bottleneck lock tes)
+
+- **Masalah:** semua perintah tes memakai resource TETAP yang sama (e2e
+  port 3456 + `/tmp/parlementer-e2e.db`; pg-verify/pg-concurrency database
+  `parlementer_test` + port 3466/3467; beberapa suite DOM berbagi port
+  3471/3472), sehingga full suite (~2700 tes, ~16 menit) harus antre
+  satu-satu lewat `flock /tmp/parl-test.lock`. Dengan 8 lane + agen langsung
+  + verifikasi parent, antrean mencapai 10–30 menit.
+- **Solusi:** semua resource tes bisa diatur lewat env — helper
+  `test/test-env.js` (satu-satunya tempat logika env berada; file tes hanya
+  memanggil `testPort(base)` / `testDbPath(path)` / `pgDatabaseUrl()`).
+  `TEST_LANE=N` (0–99) menurunkan: offset port = N×100 (stride 100; blok
+  port satu full suite = 3456–3475), suffix path SQLite = `-laneN`, database
+  Postgres = `parlementer_test_laneN`. Default (tanpa env) = nilai lama
+  persis (backward compatible). Override eksplisit (menang atas turunan):
+  `TEST_PORT_OFFSET`, `TEST_DB_SUFFIX`, `TEST_PG_DB`, `TEST_E2E_PORT`,
+  `TEST_E2E_DB`, `DATABASE_URL` (sudah ada, menang untuk pg).
+- **Setup sekali (superuser Postgres lokal):**
+  `CREATE DATABASE parlementer_test_lane1 OWNER parlementer_test;`
+  (dan lane2, dst.). Tanpa DB lane, pg-verify/pg-concurrency lane itu gagal
+  connect — sengaja, supaya tidak diam-diam memakai DB default.
+- **Batas yang dicatat jujur:** CPU VM parent cuma ~1,5 core — target
+  realistis **2–3 full suite barengan**, bukan 8. Dua full suite paralel
+  terbukti hijau (proof v5.7.9, lihat bawah). `pg-test` (pg-mem),
+  `xp-rollback` (pg-mem) dan `ssl-warning` (URL dummy tak terjangkau) tidak
+  memakai resource bersama — tidak diubah. `scripts/loadtest.mjs` dan
+  `scripts/recovery-test.mjs` bukan bagian full suite — tidak diubah.
+- **Aturan lock tetap berlaku sampai parent mengubah body cron lane:**
+  suite yang memakai resource DEFAULT tetap harus dibungkus
+  `flock /tmp/parl-test.lock`. Tanpa flock hanya untuk run dengan TEST_LANE
+  berbeda (resource disjoint by construction) — pengecualian ini dipakai
+  pertama kali untuk proof v5.7.9. JANGAN menjalankan dua run dengan
+  TEST_LANE yang sama tanpa flock (port + DB + path SQLite-nya sama persis).
+- **Proof v5.7.9** (script `hidden_files/v579-fullsuite-lane.sh`, log
+  `/tmp/v579-lane{0,1,2}.log` — log /tmp tidak permanen, angka ringkas di
+  sini): _diisi setelah proof selesai_.

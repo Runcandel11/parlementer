@@ -23,11 +23,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import pkg from 'jsdom';
 import { DatabaseSync } from 'node:sqlite';
+import { testPort, testDbPath } from './test-env.js';
 const { JSDOM } = pkg;
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 3468;
-const DB_PATH = '/tmp/parlementer-company-dom.db';
+const PORT = testPort(3468);
+const DB_PATH = testDbPath('/tmp/parlementer-company-dom.db');
 const BASE = `http://127.0.0.1:${PORT}`;
 
 // JPEG mungil yang valid (magic bytes FF D8 FF) — dipakai sebagai hasil

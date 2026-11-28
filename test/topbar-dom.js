@@ -23,13 +23,14 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import pkg from 'jsdom';
+import { testPort, testDbPath } from './test-env.js';
 const { JSDOM } = pkg;
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 3473;
-const DB_PATH = '/tmp/parlementer-topbar-dom.db';
+const PORT = testPort(3473);
+const DB_PATH = testDbPath('/tmp/parlementer-topbar-dom.db');
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.7.3';
+const EXPECTED_VERSION = '5.7.4';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -94,7 +95,7 @@ async function main() {
     await sleep(1200);
 
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.3', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.7.4', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // --- CSS disajikan + aturan top bar v4.6.1 ada di dalamnya.
     const cssRes = await fetch(BASE + '/css/style.css');

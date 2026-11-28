@@ -8,11 +8,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { ONLINE_WINDOW_MS, isOnline, formatLastSeenId, onlineStatus } from '../src/game.js';
+import { testPort, testDbPath, explicitPort } from './test-env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
-const PORT = 3456;
-const DB_PATH = '/tmp/parlementer-e2e.db';
+const PORT = explicitPort('TEST_E2E_PORT') ?? testPort(3456);
+const DB_PATH = process.env.TEST_E2E_DB || testDbPath('/tmp/parlementer-e2e.db');
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
