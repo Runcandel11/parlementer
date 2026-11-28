@@ -185,7 +185,12 @@ async function main() {
     check('HUD: saldo tampil sebagai Rupiah Rp9.150.000 (500 USD)', (document.querySelector('#hud-usd')?.textContent || '').includes('Rp9.150.000'), document.querySelector('#hud-usd')?.textContent);
     check('HUD: emas 50', document.querySelector('#hud-gold')?.textContent === '50', document.querySelector('#hud-gold')?.textContent);
     const pcd = document.querySelector('#parliament-countdown');
-    check('HUD: countdown parlemen tetap tampil', !!pcd && !pcd.hidden && pcd.textContent.includes('Parlemen dibuka'), pcd?.textContent.slice(0, 60));
+    // Sadar-waktu (parlemen dibuka 28 Nov 2026 20:00 WIB, epoch 1795870800000):
+    // sebelum dibuka countdown tampil; sesudah dibuka countdown disembunyikan.
+    const parlOpen = Date.now() >= 1795870800000;
+    check(parlOpen ? 'HUD: countdown parlemen tersembunyi setelah dibuka' : 'HUD: countdown parlemen tetap tampil',
+      !!pcd && (parlOpen ? pcd.hidden === true : (!pcd.hidden && pcd.textContent.includes('Parlemen dibuka'))),
+      pcd?.textContent.slice(0, 60));
 
     // --- DASHBOARD (ref 06 + 07) ---
     const tiles = [...document.querySelectorAll('.map-tile')];
