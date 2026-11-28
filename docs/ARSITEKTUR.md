@@ -468,6 +468,37 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **Background kontekstual per halaman v5.7.4 (28 Nov 2026):** tiap halaman
+  diberi gambar latar sesuai konteksnya (perintah pemilik 17:48 WIB —
+  halaman Perang di screenshot pemilik terpotong-potong pita-pita + area
+  hitam). Mekanisme: lapisan `#page-bg` fixed full-bleed (`position:
+  fixed; inset: 0; background-size: cover`, z-index 0 — di bawah HUD 40 /
+  drawer 60 / modal 80) + overlay gelap `::after` (gradient rgba(7,11,20))
+  supaya teks terbaca; `#page` `position: relative` TANPA z-index (elemen
+  fixed di dalamnya — modal/popover — tidak terjebak stacking context).
+  `route()` memanggil `applyPageBg(slug)` tiap pindah halaman (peta
+  `PAGE_BG` di `public/js/app.js`, 40 route → 12 gambar; route tak dikenal
+  jatuh ke `city`); helper `page()` merender banner `.page-hero` (gambar
+  yang sama, judul + sub di atasnya). 12 gambar lokal di
+  `public/img/backgrounds/` (total ~1,7 MB, tiap file ≤ ~220 KB; sumber +
+  lisensi di `SOURCES.md` — 11 Wikimedia Commons bebas + 1 foto gratis
+  Vecteezy): city (skyline Jakarta) → dashboard/notifikasi/aktivitas/
+  statistik/admin/bagikan/negara; war (reruntuhan Louvain 1914) → perang/
+  dunia perang/militer; market (pasar apung) → pasar/global/FX; factory
+  (pabrik garmen) → pekerjaan/perusahaan; parliament (sidang Parlemen
+  Eropa) → parlemen/pemilu/partai; map (peta Dunn 1794) → peta/wilayah;
+  press (mesin cetak 1961) → pers/koran; night (Dotonbori malam) → chat/
+  pesan; shop (koin emas) → toko/iklan; book (buku tua) → panduan/bantuan/
+  kronik/kontak; profile (Monas) → profil/pengaturan/pencapaian/inventaris;
+  convoy (konvoi truk) → konvoi/kontrak/organisasi. Tanpa migrasi skema
+  (tetap 31). Dicek `test/backgrounds-dom.js` (53 cek: semua route terpetakan
+  + semua file ada + semua gambar 200 image/jpeg + latar & hero berganti
+  per halaman + fallback city + CSS fixed/cover/overlay). **Perbaikan tes
+  (v5.7.4):** 3 cek e2e [6b] soal parlemen terkunci kini sadar-waktu
+  (`Date.now() >= 1795870800000`) — cek hardcode "terkunci" kedaluwarsa
+  begitu jam buka parlemen (28 Nov 2026 20:00 WIB) lewat dan sempat
+  menggagalkan e2e 20:09 WIB (1298/1301); sesudah dibuka, cek yang sama
+  memastikan usul UU/anggaran TIDAK ditolak 403.
 - **Kronik yatim `level5` + `market` v5.7.3 (28 Nov 2026, laporan Vincent
   di Discord #bugs):** Vincent level 11 stuck Babak III 3/4 — "Capai
   Level 5" tidak pernah selesai. Akar: dua kunci Kronik TIDAK PUNYA situs

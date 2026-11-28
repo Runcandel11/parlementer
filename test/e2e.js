@@ -199,13 +199,18 @@ async function main() {
   check('A belum bernegara (country null)', r.data.country === null, JSON.stringify(r.data.country));
   check('Halaman Negara menampilkan aturan pembentukan (Level 10 + 100 emas)', r.data.formationRules?.minLevel === 10 && r.data.formationRules?.costGold === 100, JSON.stringify(r.data.formationRules));
   check('Halaman Negara menampilkan 4 ideologi + 4 sistem pemerintahan', (r.data.ideologies || []).length === 4 && (r.data.systems || []).length === 4, `ideologi=${(r.data.ideologies || []).length} sistem=${(r.data.systems || []).length}`);
+  // Gate parlemen sadar-waktu (v5.7.4): sebelum 28 Nov 2026 20:00 WIB
+  // parlemen terkunci (403 untuk usul); sesudah dibuka, usul masuk
+  // validasi (bukan 403). Cek hardcode "terkunci" kedaluwarsa begitu
+  // jam buka lewat — 3 cek ini gagal total 28 Nov 2026 20:09 WIB.
+  const parlOpen = Date.now() >= 1795870800000;
   r = await A.get('/api/parliament');
-  check('Parlemen terkunci (belum 28 Nov 2026 20:00 WIB)', r.data.parliamentOpen === false && r.data.parliamentOpensAt === 1795870800000, `open=${r.data.parliamentOpen} opensAt=${r.data.parliamentOpensAt}`);
+  check(parlOpen ? 'Parlemen sudah dibuka (lewat 28 Nov 2026 20:00 WIB)' : 'Parlemen terkunci (belum 28 Nov 2026 20:00 WIB)', r.data.parliamentOpen === parlOpen && r.data.parliamentOpensAt === 1795870800000, `open=${r.data.parliamentOpen} opensAt=${r.data.parliamentOpensAt}`);
   check('Tanpa negara: pajak 0%, upah ×1, perjalanan 1 tiket', r.data.effects?.taxIncome === 0 && r.data.effects?.adminPayMult === 1 && r.data.effects?.travelTickets === 1, JSON.stringify(r.data.effects));
   r = await A.post('/api/parliament/law', { title: 'UU Tes Terkunci', content: 'Isi undang-undang tes.', kind: 'general' });
-  check('Usul UU sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  check(parlOpen ? 'Usul UU setelah parlemen dibuka TIDAK ditolak 403 (masuk validasi)' : 'Usul UU sebelum parlemen dibuka ditolak 403', parlOpen ? r.status !== 403 : r.status === 403, `status=${r.status}`);
   r = await A.post('/api/country/budget', { kind: 'claim', amount: 100 });
-  check('Usul anggaran sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  check(parlOpen ? 'Usul anggaran setelah parlemen dibuka TIDAK ditolak 403 (masuk validasi)' : 'Usul anggaran sebelum parlemen dibuka ditolak 403', parlOpen ? r.status !== 403 : r.status === 403, `status=${r.status}`);
   // Negatif pembentukan negara (A Level 1, emas ~54).
   r = await A.post('/api/countries', { name: 'Nusantara', ideology: 'Konservatisme', system: 'presidensial' });
   check('Dirikan negara di Level 1 ditolak (butuh Level 10)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
