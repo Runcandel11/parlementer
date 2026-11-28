@@ -22,6 +22,17 @@
   --danger: #e5484d;
   --green: #3fb96b;
   --radius: 12px;
+  /* Tempo gerak bersama (v5.7.3): satu skala durasi untuk semua animasi &
+     transisi UI, supaya produk terasa satu tempo — referensi:
+     motion-and-hover-polish (awesomeskills.dev, lisensi MIT):
+     tap 100ms, pop 150ms, hover 200ms, card 300ms; masuk dengan
+     ease-out cubic-bezier(0.22,1,0.36,1). Durasi lama yang dipetakan
+     ke token berubah < 20ms, jadi perilaku gerak nyaris tidak berubah. */
+  --motion-tap: 100ms;
+  --motion-pop: 150ms;
+  --motion-hover: 200ms;
+  --motion-card: 300ms;
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { -webkit-text-size-adjust: 100%; scroll-padding-bottom: 100px; }
@@ -85,8 +96,14 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
 .btn-sm { padding: 7px 12px; font-size: 13px; }
 
 /* ---------- halaman login ---------- */
-.auth-view { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
+.auth-view { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; position: relative; overflow: hidden;
   background: radial-gradient(1200px 600px at 50% -10%, #16233d 0%, var(--bg) 60%); }
+/* Latar hidup (v5.7.3): cahaya emas samar melayang pelan di atas gradasi
+   layar masuk, supaya layar login terasa hidup — hanya gerak posisi,
+   warna & identitas tidak berubah. Mati bila reduced motion. */
+.auth-view::before { content: ''; position: absolute; inset: -10% -20%; background: radial-gradient(520px 260px at 30% 0%, rgba(217,164,65,.14), transparent 70%); animation: authDrift 14s ease-in-out infinite alternate; pointer-events: none; }
+.auth-view > * { position: relative; z-index: 1; }
+@keyframes authDrift { from { transform: translateX(-4%); } to { transform: translateX(4%); } }
 .auth-card { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 28px 24px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
 .auth-logo { width: 56px; height: 56px; border-radius: 12px; display: block; margin: 0 auto; }
 .auth-title { text-align: center; font-size: 38px; letter-spacing: .12em; color: #fff; }
@@ -206,7 +223,10 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .stat-num.gold { color: var(--gold-bright); }
 .stat-sub { color: var(--muted); font-size: 13px; }
 .bar { height: 10px; background: #0a0f1c; border-radius: 999px; overflow: hidden; border: 1px solid var(--line); }
-.bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), #14b8a6); }
+/* Isi bar (energi/XP/dll, v5.7.3): lebar berubah dengan transisi halus,
+   jadi perubahan energi setelah shift/makan terlihat mengalir, bukan
+   meloncat. */
+.bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), #14b8a6); transition: width var(--motion-card) var(--motion-ease-out); }
 .bar.gold > i { background: linear-gradient(90deg, var(--gold-bright), var(--gold)); }
 .bar.red > i { background: linear-gradient(90deg, #e5484d, #b91c1c); }
 .kv { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid #16213a; }
@@ -303,7 +323,7 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .energy-sep { width: 1px; height: 24px; background: var(--line); }
 .energy-icon { color: var(--teal); font-size: 18px; }
 .energy-segs { display: flex; gap: 2px; }
-.energy-segs i { width: 7px; height: 20px; background: #1b2740; border-radius: 2px; }
+.energy-segs i { width: 7px; height: 20px; background: #1b2740; border-radius: 2px; transition: background-color var(--motion-hover) ease; }
 .energy-segs i.on { background: var(--teal); }
 .energy-num { font-weight: 700; font-size: 14px; }
 
@@ -367,21 +387,25 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .panel-head h3 .avatar-img,
 .panel-head h3 .avatar-initial { vertical-align: middle; margin-right: 2px; }
 
-/* ---------- polish UI/UX (Tahap 4) ----------
+/* ---------- polish UI/UX (Tahap 4; tempo gerak bersama v5.7.3) ----------
    Halaman masuk dengan fade/slide ringan (diterapkan ke anak langsung
    #page karena #page-nya sendiri tidak pernah diganti — kontennya yang
    diganti tiap route); tombol memberi umpan balik tekan (scale) + hover
-   jelas di desktop; transisi halus di elemen interaktif. Identitas dan
+   jelas di desktop; transisi halus di elemen interaktif. Kartu (.card /
+   .offer-card) terangkat tipis saat hover di desktop — isyarat "bisa
+   diketuk" tanpa mengubah warna dasar. Semua durasi memakai token
+   --motion-* di :root (satu tempo untuk seluruh UI). Identitas dan
    warna dasar tidak berubah. Semua animasi dimatikan bila pengguna
    memilih reduced motion. */
-.page > * { animation: pageIn .22s ease; }
+.page > * { animation: pageIn var(--motion-hover) ease; }
 @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } }
-.modal-card { animation: popIn .18s ease; }
+.modal-card { animation: popIn var(--motion-pop) var(--motion-ease-out); }
 @keyframes popIn { from { opacity: 0; transform: scale(.97); } }
-.btn-gold, .btn-ghost, .btn-danger, .hud-icon, .nav-item, .tab { transition: transform .12s ease, background-color .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.btn-gold, .btn-ghost, .btn-danger, .hud-icon, .nav-item, .tab { transition: transform var(--motion-tap) ease, background-color var(--motion-pop) ease, border-color var(--motion-pop) ease, box-shadow var(--motion-pop) ease; }
 .btn-gold:active, .btn-ghost:active, .btn-danger:active, .hud-icon:active, .nav-item:active, .tab:active { transform: scale(.96); }
+.card, .offer-card { transition: transform var(--motion-card) var(--motion-ease-out), border-color var(--motion-hover) ease, box-shadow var(--motion-card) var(--motion-ease-out); }
 :focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
-.toast { animation: toastIn .2s ease; }
+.toast { animation: toastIn var(--motion-hover) ease; }
 @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 8px); } }
 @media (hover: hover) {
   .btn-gold:hover { box-shadow: 0 4px 18px rgba(217,164,65,.35); }
@@ -389,10 +413,11 @@ a.btn-gold { display: inline-block; text-decoration: none; }
   .hud-icon:hover { border-color: var(--gold-dim); color: var(--gold-bright); }
   .nav-item:hover { background: #141f33; }
   .tab:hover { color: var(--text); }
+  .card:not(.selected):hover, .offer-card:hover { transform: translateY(-2px); border-color: var(--gold-dim); box-shadow: 0 8px 24px rgba(0,0,0,.35); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .page > *, .modal-card, .toast { animation: none; }
-  .btn-gold, .btn-ghost, .btn-danger, .hud-icon, .nav-item, .tab { transition: none; }
+  .page > *, .modal-card, .toast, .auth-view::before { animation: none; }
+  .btn-gold, .btn-ghost, .btn-danger, .hud-icon, .nav-item, .tab, .card, .offer-card, .bar > i, .energy-segs i { transition: none; }
 }
 
 /* ---------- rombak UI gaya Parlamentum: papan pasar, kartu penawaran,
@@ -551,7 +576,7 @@ button.stat-block-btn { display: block; width: 100%; background: none; border: n
 
 /* Popover penjelasan (energi / kelelahan): kartu tengah, klik backdrop menutup. */
 .popover-backdrop { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.65); display: flex; align-items: center; justify-content: center; padding: 20px; }
-.popover-card { background: #0c1220; border: 1px solid var(--gold-dim); border-radius: 14px; padding: 20px; width: 100%; max-width: 380px; max-height: calc(100vh - 40px); overflow-y: auto; animation: popIn .18s ease; }
+.popover-card { background: #0c1220; border: 1px solid var(--gold-dim); border-radius: 14px; padding: 20px; width: 100%; max-width: 380px; max-height: calc(100vh - 40px); overflow-y: auto; animation: popIn var(--motion-pop) var(--motion-ease-out); }
 .popover-card h3 { color: var(--gold-bright); font-size: 16px; letter-spacing: .1em; margin-bottom: 2px; }
 .popover-big { font-family: 'Oswald', sans-serif; font-size: 34px; font-weight: 700; color: #fff; line-height: 1.15; }
 .popover-close { float: right; background: none; border: none; color: var(--muted); font-size: 20px; padding: 0 2px; }

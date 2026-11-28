@@ -468,6 +468,23 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **Tempo gerak bersama + micro-interactions v5.7.3 (28 Nov 2026, poles
+  berkelanjutan Lane 3 — antrean kosong; perintah pemilik 18:12 WIB
+  "terus poles game"):** CSS saja, tanpa perubahan aturan main. Token
+  `--motion-*` di `:root` (`tap 100ms, pop 150ms, hover 200ms,
+  card 300ms, ease-out cubic-bezier(0.22,1,0.36,1)` — skala dari skill
+  motion-and-hover-polish, awesomeskills.dev, MIT) menggantikan angka
+  durasi acak di blok polish Tahap 4 (pageIn/popIn/toastIn, transisi
+  tombol, popover). `.card` / `.offer-card` terangkat tipis saat hover
+  di desktop (`translateY(-2px)` + border emas redup + bayangan;
+  `.card.selected` dikecualikan supaya cincin emasnya tidak tertimpa).
+  Isi bar (`.bar > i`, energi/XP/dll) dan segmen energi (`.energy-segs i`)
+  berubah dengan transisi halus. Layar login punya latar hidup:
+  lapisan cahaya emas `::before` di `.auth-view` melayang pelan
+  (`authDrift` 14s alternate). Semua animasi/transisi baru dimatikan
+  oleh `prefers-reduced-motion`. Dicek motion-dom (26) — token,
+  pemakaian token, hover kartu, transisi bar/segmen, keyframes
+  authDrift, reduced-motion; tanpa migrasi skema (tetap 31).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;
