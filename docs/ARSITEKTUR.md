@@ -621,6 +621,36 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   berbeda (resource disjoint by construction) — pengecualian ini dipakai
   pertama kali untuk proof v5.7.9. JANGAN menjalankan dua run dengan
   TEST_LANE yang sama tanpa flock (port + DB + path SQLite-nya sama persis).
-- **Proof v5.7.9** (script `hidden_files/v579-fullsuite-lane.sh`, log
-  `/tmp/v579-lane{0,1,2}.log` — log /tmp tidak permanen, angka ringkas di
-  sini): _diisi setelah proof selesai_.
+- **Proof v5.7.9** (28 Nov 2026, script
+  `hidden_files/v579-fullsuite-lane.sh`; log /tmp tidak permanen, angka
+  ringkas di sini): **3× full suite HIJAU pada kode final** — lane 1
+  (TEST_LANE=1, tanpa flock) **2756/2756, 10 mnt 20 dtk** (13:31:05–13:41:25
+  UTC); lane 2 (TEST_LANE=2, tanpa flock) **2757/2757, 10 mnt 14 dtk**
+  (13:31:05–13:41:19 UTC) — keduanya jalan BERSAMAAN (overlap penuh) tanpa
+  tabrakan; lane 0 (default, tanpa env, di bawah flock) **2756/2756, 9 mnt
+  43 dtk** (13:34:01–13:43:44 UTC). Rincian per suite (sama di ketiganya):
+  e2e 1323 (lane 2: 1324 — lihat catatan ±1 di bawah), pg-verify 296,
+  pg-test 46, pg-concurrency 38, DOM 998 (modal 155, chat 82, party 32,
+  ticket 56, offside 24, ui-batch2 53, dst.), xp-rollback 49, ssl 6.
+  **Total e2e 1323 vs 1324 BUKAN regresi:** satu check e2e [22q] hanya
+  jalan bila kas negara ≥50 emas sebelum tick (`if (budExpected ===
+  'passed')`, test/e2e.js:3148) — kas itu hasil pendapatan acak selama run,
+  jadi total e2e memang 1323–1324 (sudah begitu sebelum batch ini: lane 2c
+  1324 sebelum fix e2e).
+- **Tiga temuan selama proof (semua diperbaiki di batch ini, BUKAN di
+  luar brief):** (1) **Port 3659 terlarang fetch** — chat-dom lane 2
+  (3459+200) masuk daftar "forbidden port" WHATWG: server bisa listen,
+  tapi fetch()/browser menolak ("bad port"); testPort() kini menggeser
+  port turunan yang terlarang +20 (3659 → 3679, di celah setelah blok lane,
+  offset terjaga). (2) **Jendela tunggu start server 10 detik terlalu
+  ketat** saat dua suite start server bersamaan di 1,5 CPU — dilebarkan
+  ke 30 detik (120×250ms) di 11 suite DOM (bukan perubahan asersi).
+  (3) **Bom-waktu parlemen 28 Nov 20:00 WIB** — begitu parlemen dibuka,
+  6 checks yang menegaskan "parlemen masih terkunci / countdown tampil"
+  (e2e [6b] 3 checks, offside-dom 2, ui-batch2-dom 1) gagal permanen di
+  SEMUA run (serial maupun paralel). Kini sadar-jam: sebelum dibuka checks
+  lama; sesudah dibuka checks perilaku pasca-buka (parliamentOpen=true,
+  usul lolos gate kunci → 400 'belum bernegara', banner tersembunyi).
+  Jumlah checks tetap sama. **Catatan untuk v5.7.10 (usul MP-only):**
+  bila cek MP disisipkan SEBELUM cek negara di usul UU, dua ekspektasi
+  400 pasca-buka di e2e [6b] harus disesuaikan.
