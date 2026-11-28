@@ -8,6 +8,9 @@
 //   (4) Ketua bisa mengangkat anggota jadi Sekretaris lalu mencopotnya
 //       (tombol berubah Angkat ↔ Copot, label jabatan berubah);
 //   (5) Ketua bisa menolak lamaran dari halaman detail (tombol Tolak).
+//   (6) v5.7.2 — Ketua bisa mengeluarkan anggota (tombol Keluarkan) dan
+//       membubarkan partai (tombol Bubarkan Partai); anggota biasa tidak
+//       melihat kedua tombol itu.
 // Jalankan: node test/party-dom.js
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -96,7 +99,7 @@ async function main() {
     check('server menyala dan /api/world merespons', up);
     if (!up) { process.exitCode = 1; return; }
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.1', world.version === '5.7.1', `version=${world.version}`);
+    check('API /api/world: versi 5.7.2', world.version === '5.7.2', `version=${world.version}`);
 
     const jarL = makeJar(); const jarM = makeJar(); const jarA = makeJar();
     let r = await api(jarL, '/api/auth/register', { email: 'ketua-dom@test.local', password: 'rahasia123', username: 'ketua_dom' });
@@ -169,6 +172,27 @@ async function main() {
     document.querySelector('[data-reject="' + applicantId + '"]').click();
     await sleep(900);
     check('Setelah Tolak: panel lamaran menampilkan "Tidak ada lamaran menunggu"', txt().includes('Tidak ada lamaran menunggu'));
+
+    // --- (6) v5.7.2 — Keluarkan anggota + bubarkan partai ---
+    // Anggota biasa tidak melihat tombol Keluarkan / Bubarkan Partai.
+    const domM = await bootDom(BASE + '/#/parties/' + partyId, jarM);
+    const docM = domM.window.document;
+    check('Anggota biasa TIDAK melihat tombol Keluarkan', !docM.querySelector('[data-kick]'));
+    check('Anggota biasa TIDAK melihat tombol Bubarkan Partai', !docM.querySelector('#btn-dissolve-party'));
+    domM.window.close();
+    // Ketua melihat tombol Keluarkan untuk anggota + tombol Bubarkan.
+    const kickBtn = document.querySelector('[data-kick="' + memberId + '"]');
+    check('Detail: tombol "Keluarkan" tampil untuk anggota (ketua)', !!kickBtn);
+    check('Detail: tombol "Bubarkan Partai" tampil untuk ketua', !!document.querySelector('#btn-dissolve-party'));
+    kickBtn.click();
+    await sleep(900);
+    check('Setelah Keluarkan: anggota_dom hilang dari daftar member', !txt().includes('anggota_dom'));
+    check('Setelah Keluarkan: daftar member tinggal ketua', txt().includes('DAFTAR MEMBER (1)'));
+    // Bubarkan partai dari halaman detail → kembali ke daftar partai.
+    document.querySelector('#btn-dissolve-party').click();
+    await sleep(900);
+    check('Setelah Bubarkan: kembali ke daftar partai (#/parties)', window.location.hash === '#/parties', window.location.hash);
+    check('Setelah Bubarkan: Partai DOM hilang dari daftar', !txt().includes('Partai DOM'));
   } finally {
     if (dom) dom.window.close();
     stop();

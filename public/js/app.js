@@ -3610,11 +3610,16 @@ async function partyDetail(id) {
     <button class="btn-ghost btn-sm" id="btn-share-party" style="margin-top:6px">🔗 Bagikan ke Obrolan</button>
     <p class="muted small">Bagikan partaimu ke Obrolan Global — kartunya menampilkan nama partai + tombol gabung langsung.</p>
     ${(d.myRole === 'member' || d.myRole === 'secretary') ? `<button class="btn-ghost btn-sm" data-leave="${p.id}">Keluar dari Partai</button>` : ''}
+    ${d.myRole === 'leader' ? `<div style="margin-top:10px;border-top:1px solid #444;padding-top:10px">
+      <button class="btn-danger btn-sm" id="btn-dissolve-party">🗑️ Bubarkan Partai</button>
+      <p class="muted small">Hanya ketua. Semua anggota jadi tidak berpartai, lamaran pending dihapus, dan kursi parlemen partai ini hilang. Tidak bisa dibatalkan.</p>
+    </div>` : ''}
   </div>
   <div class="panel"><h3>👥 DAFTAR MEMBER (${d.members.length})</h3>
     ${d.members.length ? d.members.map((m) => `<div class="kv"><span class="k">${esc(m.username)}</span><span class="v">${PARTY_ROLE_LABEL[m.role] || m.role}
       ${d.myRole === 'leader' && m.role === 'member' ? `<button class="btn-gold btn-sm" data-appoint="${m.citizen_id}">Angkat jadi Sekretaris</button>` : ''}
       ${d.myRole === 'leader' && m.role === 'secretary' ? `<button class="btn-ghost btn-sm" data-remove-sec="${m.citizen_id}">Copot Sekretaris</button>` : ''}
+      ${d.myRole === 'leader' && m.role !== 'leader' ? `<button class="btn-danger btn-sm" data-kick="${m.citizen_id}" data-kick-name="${esc(m.username)}">Keluarkan</button>` : ''}
     </span></div>`).join('') : '<p class="muted">Belum ada member.</p>'}
   </div>
   ${canManage ? `<div class="panel"><h3>📥 LAMARAN MASUK</h3>
@@ -3655,6 +3660,18 @@ async function partyDetail(id) {
   $$('[data-remove-sec]').forEach((b) => b.onclick = async () => {
     if (!confirm('Copot jabatan sekretaris warga ini?')) return;
     try { await post(`/api/parties/${id}/secretary`, { citizen_id: Number(b.dataset.removeSec), action: 'remove' }); toast('Jabatan Sekretaris dicopot.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  // v5.7.2 — Keluarkan anggota (ketua saja, pakai konfirmasi) + bubarkan
+  // partai (ketua saja, dialog menjelaskan akibatnya).
+  $$('[data-kick]').forEach((b) => b.onclick = async () => {
+    if (!confirm(`Keluarkan ${b.dataset.kickName} dari partai ${p.name}? Ia kehilangan keanggotaan (dan jabatan bila ada).`)) return;
+    try { await post(`/api/parties/${id}/kick`, { citizen_id: Number(b.dataset.kick) }); toast('Anggota dikeluarkan dari partai.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-dissolve-party')?.addEventListener('click', async () => {
+    if (!confirm(`Bubarkan partai ${p.name}? Semua anggota jadi tidak berpartai, lamaran pending dihapus, dan kursi parlemen partai ini hilang. Tindakan ini TIDAK bisa dibatalkan.`)) return;
+    try { await post(`/api/parties/${id}/dissolve`, {}); toast('Partai dibubarkan.'); await refreshMe(); location.hash = '#/parties'; }
     catch (e) { toast(e.message); }
   });
 }

@@ -907,6 +907,67 @@ export function registerCivic(app) {
     res.json({ ok: true });
   }));
 
+  // Mengeluarkan anggota (v5.7.2) — HANYA ketua (server-enforced).
+  // Ketua tidak bisa mengeluarkan dirinya sendiri (pakai dissolve untuk
+  // itu — leave ketua tetap ditolak). Lamaran pending BUKAN anggota:
+  // pakai reject untuk menolak pelamar.
+  app.post('/api/parties/:id/kick', authRequired, citizenRequired, r(async (req, res) => {
+    const p = await one('SELECT * FROM parties WHERE id = ?', [req.params.id]);
+    if (!p) return res.status(404).json({ error: 'Partai tidak ditemukan.' });
+    if (p.leader_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya ketua partai yang bisa mengeluarkan anggota.' });
+    const { citizen_id } = req.body || {};
+    if (Number(citizen_id) === p.leader_id) return res.status(400).json({ error: 'Ketua tidak bisa mengeluarkan dirinya sendiri. Bubarkan partai atau serahkan kepemimpinan dulu.' });
+    const m = await one("SELECT * FROM party_members WHERE party_id = ? AND citizen_id = ? AND role IN ('leader','secretary','member')", [p.id, citizen_id]);
+    if (!m) return res.status(404).json({ error: 'Warga itu bukan anggota partai ini.' });
+    await tx(async (t) => {
+      await t.run('DELETE FROM party_members WHERE party_id = ? AND citizen_id = ?', [p.id, citizen_id]);
+      await t.run('UPDATE citizens SET party_id = NULL WHERE id = ? AND party_id = ?', [citizen_id, p.id]);
+    });
+    // Kursi parlemen TIDAK berubah: party_seats adalah alokasi PER PARTAI
+    // (dihitung ulang tiap pemilu parlemen ditutup, tick.js) — bukan per
+    // anggota. Status anggota parlemen yang di-kick ikut hilang otomatis
+    // karena isMpCitizen() mensyaratkan party_id yang punya kursi.
+    // Pencalonan presiden yang sudah berjalan TIDAK dibatalkan: pencalonan
+    // dinilai saat nominasi (calon harus anggota saat itu) dan suara yang
+    // sudah masuk tetap sah — lihat docs/ARSITEKTUR.md.
+    await notify(citizen_id, 'PARTAI', 'Kamu dikeluarkan dari partai', `Ketua mengeluarkanmu dari partai ${p.name}. Kamu kini tidak berpartai.`);
+    res.json({ ok: true });
+  }));
+
+  // Membubarkan partai (v5.7.2) — HANYA ketua (server-enforced).
+  // Atomik: baris partai + seluruh keanggotaan + lamaran pending +
+  // party_seats partai itu dihapus; semua (mantan) anggota jadi tidak
+  // berpartai. Kursi parlemen partai ikut HILANG sampai pemilu parlemen
+  // berikutnya (party_seats dihitung ulang tiap pemilu ditutup).
+  // DITOLAK bila partai punya kandidat di pemilu yang sedang BERJALAN
+  // ('open'): suara yang sudah masuk tidak boleh hangus, dan tick
+  // penutup pemilu parlemen akan mengalokasikan kursi ke partai yang
+  // sudah tidak ada (FK party_seats → parties). Tunggu pemilu selesai
+  // dulu — pencalonan hanya ada di pemilu 'open', jadi penolakan ini
+  // tidak pernah mengunci partai selamanya.
+  app.post('/api/parties/:id/dissolve', authRequired, citizenRequired, r(async (req, res) => {
+    const p = await one('SELECT * FROM parties WHERE id = ?', [req.params.id]);
+    if (!p) return res.status(404).json({ error: 'Partai tidak ditemukan.' });
+    if (p.leader_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya ketua partai yang bisa membubarkan partai.' });
+    const active = await one(
+      `SELECT ec.election_id FROM election_candidates ec JOIN elections e ON e.id = ec.election_id
+       WHERE ec.party_id = ? AND e.status = 'open' LIMIT 1`, [p.id]);
+    if (active) return res.status(400).json({ error: 'Partai ini sedang punya kandidat di pemilu yang sedang berjalan. Tunggu pemilu selesai dulu sebelum membubarkan partai.' });
+    const memberIds = await tx(async (t) => {
+      const members = await t.sql('SELECT citizen_id FROM party_members WHERE party_id = ?', [p.id]);
+      await t.run('DELETE FROM party_members WHERE party_id = ?', [p.id]);
+      await t.run('DELETE FROM party_seats WHERE party_id = ?', [p.id]);
+      await t.run('UPDATE citizens SET party_id = NULL WHERE party_id = ?', [p.id]);
+      await t.run('DELETE FROM parties WHERE id = ?', [p.id]);
+      return members.map((m) => m.citizen_id);
+    });
+    for (const id of memberIds) {
+      if (id === req.citizen.id) continue;
+      await notify(id, 'PARTAI', 'Partaimu dibubarkan', `Ketua membubarkan partai ${p.name}. Kamu kini tidak berpartai; kursi parlemen partai ini ikut hilang.`);
+    }
+    res.json({ ok: true });
+  }));
+
   // ---------- PARLEMEN ----------
   // Parlemen dibuka 28 Nov 2026 20:00 WIB (lihat parliamentStatus). Sebelum dibuka:
   // parliamentOpen=false + parliamentOpensAt — frontend menampilkan

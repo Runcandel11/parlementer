@@ -25,7 +25,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3473;
 const DB_PATH = '/tmp/parlementer-conversion-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.7.1';
+const EXPECTED_VERSION = '5.7.2';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -101,7 +101,7 @@ async function main() {
   try {
     await sleep(1200);
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.1', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.7.2', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // (1) Tag Google di HTML statis.
     const html = await (await fetch(BASE + '/')).text();

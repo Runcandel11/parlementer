@@ -56,18 +56,33 @@ Ditulis di Tahap 7 (v4.1.0, 28 Nov 2026). Perilaku game yang lengkap ada di
 - **Militer:** 3 unit (Infanteri / Drone Perang / Kendaraan Berat); batas
   pasukan 50 + 10×level; pengali kerusakan perang 1 + min(power,100)/200
   (maks ×1,5); perawatan harian di tick.
-- **Partai (v5.6.0):** halaman detail `#/parties/<id>` menampilkan isi +
+- **Partai (v5.6.0 + v5.7.2):** halaman detail `#/parties/<id>` menampilkan isi +
   daftar member dengan jabatan (publik — nama warga sudah tampil di chat /
   peringkat / daftar partai). Role: ketua (`leader`) | sekretaris
   (`secretary`) | anggota (`member`) | lamaran (`pending`). Hanya ketua
   yang bisa mengangkat/mencopot sekretaris; sekretaris membantu
-  menyetujui/menolak lamaran sama seperti ketua. **KOREKSI (28 Nov 2026):
-  mengeluarkan anggota / membubarkan partai BELUM ADA di kode**
-  (pengumuman #27 sempat mengklaimnya — salah); keduanya direncanakan
-  v5.7.2, ketua saja. Semua hak dicek di server
-  (`partyCanManage`), bukan cuma di client. Lamaran pending hanya terlihat
-  oleh ketua/sekretaris partai itu. Kolom `party_members.role` tidak punya
-  CHECK constraint, jadi role `secretary` tidak butuh migrasi skema.
+  menyetujui/menolak lamaran sama seperti ketua. **v5.7.2 — ketua bisa
+  mengeluarkan anggota (`POST /api/parties/:id/kick`, tombol "Keluarkan" di
+  daftar member) dan membubarkan partai (`POST /api/parties/:id/dissolve`,
+  tombol merah "Bubarkan Partai")** — keduanya server-enforced, ketua
+  saja; ketua tidak bisa kick dirinya sendiri. **Kick:** anggota kehilangan
+  `party_id`; kursi parlemen partai TIDAK berubah (party_seats adalah
+  alokasi per partai, dihitung ulang tiap pemilu ditutup) — status anggota
+  parlemen yang di-kick hilang otomatis karena `isMpCitizen()` mensyaratkan
+  party_id yang punya kursi; pencalonan presiden yang sudah berjalan TIDAK
+  dibatalkan (dinilai saat nominasi; suara yang sudah masuk tetap sah).
+  **Dissolve (atomik):** baris partai + seluruh `party_members` (termasuk
+  lamaran pending) + `party_seats` partai itu dihapus; semua mantan anggota
+  jadi tidak berpartai dan diberi notifikasi; **kursi parlemen partai ikut
+  hilang sampai pemilu parlemen berikutnya**. **Dissolve DITOLAK (400) bila
+  partai punya kandidat di pemilu yang sedang berjalan (`status='open'`)**
+  — suara yang sudah masuk tidak boleh hangus, dan tick penutup pemilu
+  parlemen akan mengalokasikan kursi ke partai yang sudah tidak ada (FK
+  `party_seats → parties`). "Serahkan kepemimpinan" BELUM ADA — susulan.
+  Semua hak dicek di server (`partyCanManage` + cek `leader_id`), bukan
+  cuma di client. Lamaran pending hanya terlihat oleh ketua/sekretaris
+  partai itu. Kolom `party_members.role` tidak punya CHECK constraint,
+  jadi role `secretary` tidak butuh migrasi skema.
 - **Event dunia mingguan:** rotasi 6 minggu deterministik dari nomor hari
   dunia (`worldEventFor(day)`): Panen Raya, Festival Rakyat, Badai Besar,
   Wabah Melanda, Pasar Bergairah, Darurat Militer.
@@ -432,6 +447,27 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   (checklist + CARA MAIN + baris parlemen; FAQ; kartu partai + tombol
   gabung; penjelasan Partai/Peta), profile-admin-dom (8) (shift ADMIN →
   profil tampil "Total upah bahan" + penjelasan).
+- **Kick + dissolve partai v5.7.2 (28 Nov 2026):** pengumuman #27 sempat
+  mengklaim ketua bisa mengeluarkan anggota / membubarkan partai padahal
+  belum ada di kode — batch ini membuatnya benar (perintah pemilik
+  16:19 WIB). `POST /api/parties/:id/kick` + `POST /api/parties/:id/dissolve`,
+  ketua saja (server-enforced, 403 bila bukan ketua); tombol "Keluarkan"
+  di daftar member + tombol merah "Bubarkan Partai" di halaman detail
+  (ketua saja, pakai konfirmasi). **Kick:** anggota kehilangan `party_id`;
+  kursi partai TIDAK berubah (alokasi per partai); status MP yang di-kick
+  hilang otomatis lewat `isMpCitizen()`; pencalonan presiden yang sudah
+  berjalan TIDAK dibatalkan (dinilai saat nominasi). **Dissolve (atomik):**
+  partai + `party_members` + `party_seats` dihapus, semua mantan anggota
+  jadi tidak berpartai + notifikasi; kursi parlemen partai hilang sampai
+  pemilu berikutnya. **Dissolve DITOLAK bila partai punya kandidat di
+  pemilu `status='open'`** (suara tidak boleh hangus; tick penutup pemilu
+  parlemen akan mengalokasikan kursi ke partai yang sudah tidak ada —
+  FK `party_seats → parties`). "Serahkan kepemimpinan" BELUM ADA.
+  Dicek e2e [43] (hak akses kick/dissolve, kick diri/luar/pending 400/404,
+  kursi tetap setelah kick, notifikasi, dissolve ditolak saat ada kandidat,
+  dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
+  anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
+  Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

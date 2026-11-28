@@ -4334,6 +4334,137 @@ async function main() {
   check('W42 gabung partai dari kartu ajakan (200, lamaran pending)', r.status === 200 && r.data.role === 'pending', `status=${r.status} role=${r.data.role}`);
   db42.close();
 
+  console.log('\n[43] v5.7.2 — Ketua partai: keluarkan anggota (kick) + bubarkan partai (dissolve)');
+  const KX = new Client(); const KY = new Client(); const KZ = new Client();
+  const KV = new Client(); const KW = new Client();
+  [KX, KY, KZ, KV, KW].forEach((c, i) => { c.extraHeaders = { 'X-Forwarded-For': '127.0.0.' + (51 + i) }; });
+  const kickUsers = [
+    [KX, 'ketua-kick@test.local', 'ketua_kick'], [KY, 'anggota-kick@test.local', 'anggota_kick'],
+    [KZ, 'anggota2-kick@test.local', 'anggota2_kick'], [KV, 'pelamar-kick@test.local', 'pelamar_kick'],
+    [KW, 'luar-kick@test.local', 'luar_kick'],
+  ];
+  const kickIds = {};
+  for (const [c, email, username] of kickUsers) {
+    r = await c.post('/api/auth/register', { email, password: 'rahasia123', username });
+    check(`Daftar ${username}`, r.status === 200 && r.data.ok, `status=${r.status}`);
+    kickIds[username] = (await c.get('/api/me')).data.citizen.id;
+  }
+  {
+    const dbP = new DatabaseSync(DB_PATH);
+    dbP.prepare('UPDATE citizens SET level = 10, gold = 200 WHERE id = ?').run(kickIds.ketua_kick);
+    dbP.close();
+  }
+  r = await KX.post('/api/parties', { name: 'Partai Kick', tag: 'KCK', ideology: 'Progresif', type: 'application' });
+  check('Ketua dirikan partai KCK (lamaran)', r.status === 200 && r.data.ok && r.data.partyId, `status=${r.status}`);
+  const kickPartyId = r.data.partyId;
+  r = await KY.post(`/api/parties/${kickPartyId}/join`, {});
+  check('Anggota lamar KCK (pending)', r.status === 200 && r.data.role === 'pending');
+  r = await KX.post(`/api/parties/${kickPartyId}/approve`, { citizen_id: kickIds.anggota_kick });
+  check('Ketua setujui anggota', r.status === 200 && r.data.ok);
+  r = await KZ.post(`/api/parties/${kickPartyId}/join`, {});
+  check('Anggota kedua lamar KCK (pending)', r.status === 200 && r.data.role === 'pending');
+  r = await KX.post(`/api/parties/${kickPartyId}/approve`, { citizen_id: kickIds.anggota2_kick });
+  check('Ketua setujui anggota kedua', r.status === 200 && r.data.ok);
+  r = await KV.post(`/api/parties/${kickPartyId}/join`, {});
+  check('Pelamar lamar KCK (pending, dibiarkan)', r.status === 200 && r.data.role === 'pending');
+  // Kursi partai di negara 1 (buatan, 10 kursi) — kick TIDAK boleh
+  // mengubahnya; dissolve HARUS menghapusnya.
+  {
+    const dbS = new DatabaseSync(DB_PATH);
+    dbS.prepare('INSERT INTO party_seats (party_id, country_id, seats) VALUES (?,?,10)').run(kickPartyId, 1);
+    dbS.close();
+  }
+  // --- (a) Kick: hak akses + validasi target ---
+  r = await KY.post(`/api/parties/${kickPartyId}/kick`, { citizen_id: kickIds.anggota2_kick });
+  check('Anggota biasa TIDAK bisa kick (403)', r.status === 403, `status=${r.status}`);
+  r = await KX.post(`/api/parties/${kickPartyId}/kick`, { citizen_id: kickIds.ketua_kick });
+  check('Ketua TIDAK bisa kick dirinya sendiri (400)', r.status === 400, `status=${r.status}`);
+  r = await KX.post(`/api/parties/${kickPartyId}/kick`, { citizen_id: kickIds.luar_kick });
+  check('Kick warga luar partai ditolak (404)', r.status === 404, `status=${r.status}`);
+  r = await KX.post(`/api/parties/${kickPartyId}/kick`, { citizen_id: kickIds.pelamar_kick });
+  check('Kick pelamar pending ditolak (404 — pakai reject)', r.status === 404, `status=${r.status}`);
+  r = await KW.post(`/api/parties/${kickPartyId}/dissolve`, {});
+  check('Orang luar TIDAK bisa bubarkan partai (403)', r.status === 403, `status=${r.status}`);
+  // --- (b) Kick berhasil: anggota keluar, kursi tetap ---
+  r = await KX.post(`/api/parties/${kickPartyId}/kick`, { citizen_id: kickIds.anggota2_kick });
+  check('Ketua kick anggota kedua (200)', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const meKZ = await KZ.get('/api/me');
+  check('Yang di-kick jadi tidak berpartai (party_id null)', meKZ.data.citizen.party_id === null, `party_id=${meKZ.data.citizen.party_id}`);
+  r = await KX.get(`/api/parties/${kickPartyId}`);
+  check('Detail partai: member tinggal 2 (ketua + anggota), yang di-kick hilang',
+    r.status === 200 && r.data.members.length === 2 && !r.data.members.some((m) => m.username === 'anggota2_kick'),
+    `members=${r.data.members.length}`);
+  {
+    const dbS = new DatabaseSync(DB_PATH);
+    const seats = dbS.prepare('SELECT seats FROM party_seats WHERE party_id = ? AND country_id = 1').get(kickPartyId);
+    dbS.close();
+    check('Kick TIDAK mengubah kursi partai (tetap 10)', seats && seats.seats === 10, JSON.stringify(seats));
+  }
+  r = await KZ.get('/api/notifications');
+  check('Yang di-kick dapat notifikasi dikeluarkan',
+    (r.data.notifications || []).some((n) => n.title === 'Kamu dikeluarkan dari partai' && (n.content || '').includes('Partai Kick')),
+    `notif=${(r.data.notifications || []).length}`);
+  r = await KX.post(`/api/parties/${kickPartyId}/kick`, { citizen_id: kickIds.anggota2_kick });
+  check('Kick warga yang sudah keluar ditolak (404)', r.status === 404, `status=${r.status}`);
+  // --- (c) Dissolve DITOLAK selama partai punya kandidat di pemilu berjalan ---
+  // Pemilu presiden negara 1 sudah ada (dibuat saat negara didirikan,
+  // UNIQUE country+type — tidak bisa INSERT pemilu kedua). Pakai baris
+  // itu: ubah status jadi 'open' + daftarkan kandidat KCK, lalu
+  // kembalikan status asal setelah uji.
+  let elPres1;
+  let elPres1OrigStatus;
+  {
+    const dbE = new DatabaseSync(DB_PATH);
+    // Pakai pemilu presiden negara 1 yang sudah 'open' bila ada ([28]
+    // membuat satu); kalau tidak ada, buka yang 'scheduled'. Hanya SATU
+    // baris scheduled/open per (country, type) yang boleh ada (partial
+    // unique index idx_elections_one_active) — jadi flip hanya aman bila
+    // tidak ada baris 'open' lain.
+    elPres1 = dbE.prepare("SELECT * FROM elections WHERE country_id = 1 AND type = 'president' AND status = 'open'").get()
+      || dbE.prepare("SELECT * FROM elections WHERE country_id = 1 AND type = 'president' AND status = 'scheduled'").get();
+    elPres1OrigStatus = elPres1.status;
+    if (elPres1OrigStatus !== 'open') dbE.prepare("UPDATE elections SET status = 'open' WHERE id = ?").run(elPres1.id);
+    dbE.prepare('INSERT INTO election_candidates (election_id, citizen_id, party_id, votes) VALUES (?,?,?,0)').run(elPres1.id, kickIds.anggota_kick, kickPartyId);
+    dbE.close();
+  }
+  r = await KX.post(`/api/parties/${kickPartyId}/dissolve`, {});
+  check('Dissolve DITOLAK saat partai punya kandidat di pemilu berjalan (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  {
+    const dbE = new DatabaseSync(DB_PATH);
+    dbE.prepare('DELETE FROM election_candidates WHERE election_id = ? AND party_id = ?').run(elPres1.id, kickPartyId);
+    dbE.prepare('UPDATE elections SET status = ? WHERE id = ?').run(elPres1OrigStatus, elPres1.id);
+    dbE.close();
+  }
+  // --- (d) Dissolve berhasil: partai hilang, anggota bebas, kursi hilang ---
+  r = await KX.post(`/api/parties/${kickPartyId}/dissolve`, {});
+  check('Ketua bubarkan partai (200)', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await KX.get(`/api/parties/${kickPartyId}`);
+  check('Detail partai yang dibubarkan ditolak (404)', r.status === 404, `status=${r.status}`);
+  r = await KX.get('/api/parties');
+  check('Daftar partai tidak lagi berisi KCK', !(r.data.parties || []).some((p) => p.tag === 'KCK'), `parties=${(r.data.parties || []).length}`);
+  const meKX = await KX.get('/api/me');
+  const meKY = await KY.get('/api/me');
+  check('Mantan ketua jadi tidak berpartai (party_id null)', meKX.data.citizen.party_id === null, `party_id=${meKX.data.citizen.party_id}`);
+  check('Mantan anggota jadi tidak berpartai (party_id null)', meKY.data.citizen.party_id === null, `party_id=${meKY.data.citizen.party_id}`);
+  {
+    const dbS = new DatabaseSync(DB_PATH);
+    const seats = dbS.prepare('SELECT COUNT(*) AS n FROM party_seats WHERE party_id = ?').get(kickPartyId);
+    const members = dbS.prepare('SELECT COUNT(*) AS n FROM party_members WHERE party_id = ?').get(kickPartyId);
+    dbS.close();
+    check('Dissolve menghapus party_seats partai itu (0 baris)', seats.n === 0, `n=${seats.n}`);
+    check('Dissolve menghapus semua keanggotaan + lamaran pending (0 baris)', members.n === 0, `n=${members.n}`);
+  }
+  r = await KY.get('/api/notifications');
+  check('Mantan anggota dapat notifikasi partai dibubarkan',
+    (r.data.notifications || []).some((n) => n.title === 'Partaimu dibubarkan' && (n.content || '').includes('Partai Kick')),
+    `notif=${(r.data.notifications || []).length}`);
+  r = await KV.get('/api/notifications');
+  check('Mantan pelamar pending juga dapat notifikasi dibubarkan',
+    (r.data.notifications || []).some((n) => n.title === 'Partaimu dibubarkan' && (n.content || '').includes('Partai Kick')),
+    `notif=${(r.data.notifications || []).length}`);
+  r = await KX.post(`/api/parties/${kickPartyId}/dissolve`, {});
+  check('Dissolve partai yang sudah dibubarkan ditolak (404)', r.status === 404, `status=${r.status}`);
+
   setDayO(1);
 
   dbS6.close();
