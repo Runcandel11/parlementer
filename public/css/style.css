@@ -403,6 +403,15 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 :focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
 .toast { animation: toastIn .2s ease; }
 @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 8px); } }
+/* (v5.7.5) Umpan balik perolehan emas di HUD: pil emas berdenyut + chip
+   "+N" melayang naik lalu menghilang saat saldo emas bertambah (klaim
+   hadiah, misi, penjualan). Hanya visual — angka emas tetap dari
+   renderHUD(). Dihormati prefers-reduced-motion. */
+.hud-pill-gold { position: relative; }
+.hud-pill-gold.hud-gold-pop { animation: goldPop .45s cubic-bezier(.34,1.56,.64,1); }
+@keyframes goldPop { 0% { transform: scale(1); } 35% { transform: scale(1.12); } 100% { transform: scale(1); } }
+.gold-float { position: absolute; left: 50%; top: -6px; transform: translate(-50%, 0); color: var(--gold-bright); font-size: 13px; font-weight: 800; text-shadow: 0 1px 6px rgba(0,0,0,.8); pointer-events: none; white-space: nowrap; z-index: 5; animation: goldFloat 1.1s ease-out forwards; }
+@keyframes goldFloat { 0% { opacity: 0; transform: translate(-50%, 6px) scale(.9); } 15% { opacity: 1; transform: translate(-50%, 0) scale(1); } 100% { opacity: 0; transform: translate(-50%, -26px) scale(1); } }
 @media (hover: hover) {
   .btn-gold:hover { box-shadow: 0 4px 18px rgba(217,164,65,.35); }
   .btn-ghost:hover, .btn-danger:hover { background: #131c2e; }
@@ -412,6 +421,8 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .page > *, .modal-card, .toast { animation: none; }
+  .hud-pill-gold.hud-gold-pop, .gold-float { animation: none; }
+  .gold-float { display: none; }
   .btn-gold, .btn-ghost, .btn-danger, .hud-icon, .nav-item, .tab { transition: none; }
 }
 

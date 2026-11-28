@@ -748,6 +748,27 @@ async function refreshMe() {
   } catch { /* sesi habis */ }
 }
 
+// (v5.7.5) Saldo emas terakhir yang tampil di HUD — pembanding untuk
+// animasi perolehan emas di renderHUD().
+let __prevGold = null;
+
+// (v5.7.5) Tampilkan chip "+N" melayang di atas pil emas HUD + denyutkan
+// pilnya. Chip dihapus sendiri setelah animasi (1,1 dtk); kelas pop
+// dilepas setelah 0,5 dtk supaya klaim beruntun bisa memicu ulang.
+function floatGoldGain(delta) {
+  const pill = document.querySelector('.hud-pill-gold');
+  if (!pill || !(delta > 0)) return;
+  pill.classList.remove('hud-gold-pop');
+  void pill.offsetWidth; // restart animasi bila klaim beruntun
+  pill.classList.add('hud-gold-pop');
+  const chip = document.createElement('span');
+  chip.className = 'gold-float';
+  chip.textContent = '+' + fmt(delta);
+  pill.appendChild(chip);
+  setTimeout(() => chip.remove(), 1150);
+  setTimeout(() => pill.classList.remove('hud-gold-pop'), 500);
+}
+
 function renderHUD() {
   if (!ME) return;
   // Versi game di footer drawer (dari /api/me → konstanta VERSION).
@@ -756,6 +777,12 @@ function renderHUD() {
   $('#hud-name').textContent = c.username + (c.isPremium ? ' ◆' : '');
   $('#hud-region').textContent = (ME.region?.name || '') + ' · ' + (ME.region?.country_name || ME.country?.name || 'Belum Bernegara');
   $('#hud-usd').textContent = fmtRp(c.usd);
+  // (v5.7.5) Umpan balik perolehan emas: bila saldo naik sejak render
+  // terakhir, pil emas berdenyut + chip "+N" melayang naik. Hanya visual;
+  // penurunan (belanja) tidak memicu animasi. Render pertama (prev null)
+  // tidak memicu apa-apa.
+  if (__prevGold !== null && c.gold > __prevGold) floatGoldGain(c.gold - __prevGold);
+  __prevGold = c.gold;
   $('#hud-gold').textContent = fmt(c.gold);
   // Perisai HUD (UI batch 2): angka BESAR di dalam perisai = LEVEL warga;
   // lencana kecil di bawahnya = progres XP. Avatar bulat di kiri (kolom

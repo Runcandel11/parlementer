@@ -499,6 +499,23 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   begitu jam buka parlemen (28 Nov 2026 20:00 WIB) lewat dan sempat
   menggagalkan e2e 20:09 WIB (1298/1301); sesudah dibuka, cek yang sama
   memastikan usul UU/anggaran TIDAK ditolak 403.
+- **Animasi perolehan emas di HUD v5.7.5 (28 Nov 2026, Lane 13 — poles
+  berkelanjutan, antrean Lane 13 kosong):** saat saldo emas naik, pil emas
+  HUD berdenyut (`goldPop` 0,45 dtk, overshoot cubic-bezier(.34,1.56,.64,1))
+  + chip "+N" melayang naik 26 px lalu menghilang (1,1 dtk, `goldFloat`,
+  `pointer-events: none`). Mekanisme: `renderHUD()` membandingkan
+  `c.gold` dengan `__prevGold` (modul-level, `null` di render pertama)
+  lalu memanggil `floatGoldGain(delta)` hanya bila naik; penurunan
+  (belanja) tidak memicu animasi; chip dihapus sendiri setelah 1.150 ms,
+  kelas pop dilepas setelah 500 ms (klaim beruntun me-restart animasi via
+  `void pill.offsetWidth`). Referensi: pola micro-interaction 100–250 ms,
+  animasi `transform`/`opacity` saja + guard `prefers-reduced-motion`
+  (https://skillmd.com/skills/impertio-studio/frontend-visual-micro-interactions
+  dan https://verified-skill.com/skills/iart-ai/web-animation-skills/micro-interaction).
+  Tanpa migrasi skema (tetap 32). Dicek `test/gold-float-dom.js` (28 cek:
+  CSS keyframes + guard reduced-motion + klaim pasokan harian +5 emas →
+  chip "+5" + denyut + angka HUD 50→55 + chip hilang sendiri + klaim
+  kedua ditolak tanpa chip).
 - **Kronik yatim `level5` + `market` v5.7.3 (28 Nov 2026, laporan Vincent
   di Discord #bugs):** Vincent level 11 stuck Babak III 3/4 — "Capai
   Level 5" tidak pernah selesai. Akar: dua kunci Kronik TIDAK PUNYA situs
