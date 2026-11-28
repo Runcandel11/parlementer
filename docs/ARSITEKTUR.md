@@ -468,6 +468,19 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **Latar ambient v5.7.3 (28 Nov 2026, poles Lane 8 — antrean kosong,
+  perintah pemilik 18:12 WIB "terus poles game"):** `body` memakai 3
+  lapis radial-gradient bernuansa palet game (emas rgba(217,164,65,.07),
+  teal rgba(45,212,191,.05), navy rgba(38,68,120,.10)) di atas `--bg`,
+  `background-size: 200% 200%` + animasi `ambient-drift` 28 dtk
+  ease-in-out infinite; keyframe 0% = 100% (loop tanpa sambungan),
+  50% bergeser. CSS murni, tanpa JS, tanpa ubah aturan main; alpha
+  ≤ 0,10 supaya teks tetap kontras (panel solid menutupi sebagian
+  besar layar). `prefers-reduced-motion: reduce` mematikan animasi
+  (latar kembali datar). Referensi: motion-background skill
+  (claudepluginhub.com/skills/iart-ai-motion-design-skills/motion-background).
+  Dicek ambient-bg-dom (11): versi 5.7.3, CSS disajikan, 3 lapis +
+  warna palet, loop mulus, alpha ≤ 0,10, reduced-motion.
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

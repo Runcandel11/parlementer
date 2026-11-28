@@ -26,13 +26,32 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { -webkit-text-size-adjust: 100%; scroll-padding-bottom: 100px; }
 body {
-  background: var(--bg);
+  /* Latar ambient v5.7.3 (poles Lane 8): tiga cahaya radial bernuansa
+     palet game (emas/teal/navy) yang bergeser sangat pelan di atas
+     --bg, loop 28 dtk tanpa sambungan terlihat (keyframe 0% = 100%).
+     Alpha sengaja kecil (≤0,10) supaya teks tetap kontras — panel
+     solid menutupi sebagian besar layar, cahaya hanya tampak di
+     celah/margin. Referensi: motion-background skill
+     (claudepluginhub.com/skills/iart-ai-motion-design-skills/motion-background).
+     Dihormati prefers-reduced-motion (animasi mati, latar datar). */
+  background:
+    radial-gradient(45% 55% at 18% 12%, rgba(217,164,65,.07), transparent 65%),
+    radial-gradient(50% 60% at 85% 18%, rgba(45,212,191,.05), transparent 65%),
+    radial-gradient(55% 65% at 50% 95%, rgba(38,68,120,.10), transparent 65%),
+    var(--bg);
+  background-size: 200% 200%;
+  animation: ambient-drift 28s ease-in-out infinite;
   color: var(--text);
   font-family: 'Barlow', system-ui, -apple-system, sans-serif;
   font-size: 15px;
   line-height: 1.5;
   min-height: 100vh;
 }
+@keyframes ambient-drift {
+  0%, 100% { background-position: 0% 0%, 100% 0%, 50% 100%; }
+  50% { background-position: 25% 15%, 75% 25%, 55% 70%; }
+}
+@media (prefers-reduced-motion: reduce) { body { animation: none; } }
 /* Skeleton loading (Tahap 3, §7): shimmer saat halaman dimuat, menggantikan
    "Memuat…" polos. Dihormati prefers-reduced-motion. */
 /* Judul halaman difokuskan secara programatik saat navigasi (a11y) — bukan

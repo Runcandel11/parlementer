@@ -46,6 +46,7 @@
     "test:topbar": "node test/topbar-dom.js",
     "test:share": "node test/share-dom.js",
     "test:tutorial": "node test/tutorial-dom.js",
+    "test:ambient-bg": "node test/ambient-bg-dom.js",
     "test:conversion": "node test/conversion-dom.js",
     "test:password-reset": "node test/password-reset-dom.js",
     "test:party": "node test/party-dom.js",
