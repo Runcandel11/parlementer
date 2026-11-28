@@ -12,8 +12,11 @@
 #   - pg-verify + pg-concurrency butuh Postgres 16 asli (service container);
 #     pg-test + xp-rollback memakai pg-mem (tanpa Postgres sungguhan).
 #   - Suite DOM berbagi port (3471 dipakai 3 suite, 3472 dipakai 2 suite),
-#     jadi di dalam satu runner harus BERURUTAN; matrix 3 shard membagi
-#     25 suite ke 3 runner terpisah supaya cepat tanpa tabrakan.
+#     jadi di dalam satu runner harus BERURUTAN; matrix 6 shard membagi
+#     25 suite ke 6 runner terpisah supaya cepat tanpa tabrakan.
+#     (Maksimalkan 28 Nov 2026 20:36 WIB — perintah pemilik "maksimalkan":
+#     shard 3 -> 6; total 9 job/run, masih di bawah batas 20 job bersamaan
+#     akun GitHub Free; npm cache sudah aktif di semua job via setup-node.)
 #   - ssl-warning hanya menguji logika konfigurasi SSL (URL dummy).
 #
 # Trigger: push ke semua branch + pull_request. Tanpa secrets.
@@ -89,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -102,10 +105,10 @@ jobs:
         shell: bash
         run: |
           files=(test/*-dom.js)
-          echo "Total suite DOM: ${#files[@]} (shard ${{ matrix.shard }} dari 3)"
+          echo "Total suite DOM: ${#files[@]} (shard ${{ matrix.shard }} dari 6)"
           i=0
           for f in "${files[@]}"; do
-            if (( i % 3 == ${{ matrix.shard }} )); then
+            if (( i % 6 == ${{ matrix.shard }} )); then
               echo "=== $f ==="
               node "$f" || exit 1
             fi
