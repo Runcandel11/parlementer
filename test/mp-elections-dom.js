@@ -1,4 +1,4 @@
-// Parlementer — tes DOM v5.7.4: usulan parlemen hanya MP + jadwal pemilu tampil.
+// Parlementer — tes DOM v5.7.5: usulan parlemen hanya MP + jadwal pemilu tampil.
 // Membuktikan di UI (bukan cuma API):
 //   (1) Halaman Negara (#/country): baris "Pemilu Berikutnya" menampilkan
 //       pemilu parlemen pertama yang sebenarnya terjadwal (bukan
@@ -97,7 +97,7 @@ async function main() {
     check('server menyala dan /api/world merespons', up);
     if (!up) { process.exitCode = 1; return; }
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.4', world.version === '5.7.4', `version=${world.version}`);
+    check('API /api/world: versi 5.7.5', world.version === '5.7.5', `version=${world.version}`);
 
     const jarF = makeJar();
     let r = await api(jarF, '/api/auth/register', { email: 'pendiri-mp@test.local', password: 'rahasia123', username: 'pendiri_mp' });

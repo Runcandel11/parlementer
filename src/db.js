@@ -2302,9 +2302,9 @@ export async function migrateV576ChronicleLevel5(t) {
 
 const PARLIAMENT_FIRST_ELECTION_NOW_KEY = 'parliament_first_election_now_2026_11_28';
 
-// v5.7.4 (skema 32 → 33) — Majukan pemilu parlemen PERTAMA yang sudah
+// v5.7.5 (skema 32 → 33) — Majukan pemilu parlemen PERTAMA yang sudah
 // terjadwal (aturan pemilik 28 Nov 2026: "kenapa pemilu belum dimulai?").
-// Negara yang didirikan sebelum v5.7.4 membawa jadwal parlemen +3 hari
+// Negara yang didirikan sebelum v5.7.5 membawa jadwal parlemen +3 hari
 // (POST /api/countries lama: max(parOpensAt, now + 3 hari)) — mis. negara
 // "Belum Dinamai" (Kepulauan Riau) yang live-nya terjadwal buka 02 Des
 // 2026. Baris `scheduled` PERTAMA (negara itu belum pernah punya pemilu

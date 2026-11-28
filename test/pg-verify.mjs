@@ -1481,7 +1481,7 @@ async function main() {
   await pool.query('DELETE FROM citizens WHERE id BETWEEN 999060 AND 999064');
   await pool.query('DELETE FROM users WHERE id BETWEEN 999060 AND 999064');
 
-  console.log('\n[34] v5.7.4 — Pemilu parlemen pertama dimajukan: migrasi skema 33');
+  console.log('\n[34] v5.7.5 — Pemilu parlemen pertama dimajukan: migrasi skema 33');
   // Skenario live 28 Nov 2026: negara "Belum Dinamai" (Kepri) sudah punya
   // pemilu parlemen SCHEDULED 02–05 Des (jalur pendirian, +3 hari) padahal
   // parlemen sudah buka 28 Nov 20:00 WIB. Migrasi memajukan pemilu

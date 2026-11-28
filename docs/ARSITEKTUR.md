@@ -494,11 +494,12 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   (tetap 31). Dicek `test/backgrounds-dom.js` (53 cek: semua route terpetakan
   + semua file ada + semua gambar 200 image/jpeg + latar & hero berganti
   per halaman + fallback city + CSS fixed/cover/overlay). **Perbaikan tes
-  (v5.7.4):** 3 cek e2e [6b] soal parlemen terkunci kini sadar-waktu
-  (`Date.now() >= 1795870800000`) — cek hardcode "terkunci" kedaluwarsa
+  (v5.7.5):** 3 cek e2e [6b] soal parlemen terkunci kini deterministik —
+  skenario menggeser `parliament_opens_at` ke 1 jam ke depan di DB, cek
+  parlemen terkunci + usul UU/anggaran ditolak 403, lalu kembalikan ke
+  1795870800000 (pola [28e]); cek hardcode "terkunci" sebelumnya kedaluwarsa
   begitu jam buka parlemen (28 Nov 2026 20:00 WIB) lewat dan sempat
-  menggagalkan e2e 20:09 WIB (1298/1301); sesudah dibuka, cek yang sama
-  memastikan usul UU/anggaran TIDAK ditolak 403.
+  menggagalkan e2e 20:09 WIB.
 - **Kronik yatim `level5` + `market` v5.7.3 (28 Nov 2026, laporan Vincent
   di Discord #bugs):** Vincent level 11 stuck Babak III 3/4 — "Capai
   Level 5" tidak pernah selesai. Akar: dua kunci Kronik TIDAK PUNYA situs

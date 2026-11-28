@@ -17,7 +17,7 @@ function todayStr(d = new Date()) { return d.toISOString().slice(0, 10); }
 //   (28 Nov 2026 20:00 WIB — dari db_meta, bukan hardcode tanggal):
 //   opens_at = max(parOpensAt, now). Siklus 30 hari HANYA untuk pemilu
 //   parlemen BERIKUTNYA (setelah satu pemilu parlemen negara itu berstatus
-//   closed) — v5.7.4 (aturan pemilik 28 Nov 2026: "kenapa pemilu belum
+//   closed) — v5.7.5 (aturan pemilik 28 Nov 2026: "kenapa pemilu belum
 //   dimulai?"). Negara baru sudah membawa jadwal pemilu pertamanya dari
 //   pendirian (POST /api/countries) — fungsi ini hanya mengisi bila belum ada.
 //
@@ -52,7 +52,7 @@ export async function ensureElections() {
     }
     const parl = await one("SELECT * FROM elections WHERE country_id = ? AND type = 'parliament' AND status IN ('scheduled','open') ORDER BY opens_at ASC", [country.id]);
     if (!parl) {
-      // v5.7.4: pemilu parlemen PERTAMA (belum pernah ada yang closed)
+      // v5.7.5: pemilu parlemen PERTAMA (belum pernah ada yang closed)
       // dibuka langsung saat parlemen buka; siklus 30 hari hanya untuk
       // pemilu BERIKUTNYA (setelah satu pemilu parlemen selesai/closed).
       // Petisi ≥5/wilayah TETAP menjadi gate pembukaan (tick §3) — jadwal
