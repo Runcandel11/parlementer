@@ -1,6 +1,7 @@
 {
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "compression": "^1.8.2",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1"
@@ -49,6 +50,7 @@
     "test:conversion": "node test/conversion-dom.js",
     "test:password-reset": "node test/password-reset-dom.js",
     "test:party": "node test/party-dom.js",
+    "test:compression": "node test/compression.js",
     "test:load": "node scripts/loadtest.mjs",
     "test:recovery": "node scripts/recovery-test.mjs"
   },

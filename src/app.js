@@ -5,6 +5,7 @@
 // Route, middleware, dan aturan main TIDAK berubah di antara keduanya.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import compression from 'compression';
 import express from 'express';
 import { initDb, isPg, one } from './db.js';
 import { registerCore } from './api-core.js';
@@ -26,6 +27,17 @@ export function createApp() {
   // Penting untuk rate limit auth: tanpa ini semua pengguna terlihat satu IP
   // (IP proxy) dan akan saling memblokir.
   app.set('trust proxy', 1);
+
+  // Kompresi gzip respons (v5.7.3, poles backend): JSON API + aset statis
+  // teks (HTML/CSS/JS) yang > 1 KB dikompres bila klien mengirim
+  // Accept-Encoding: gzip — hemat bandwidth 60–75% untuk payload besar
+  // (mis. /api/world, /api/me, app.js) dan mempercepat load di koneksi
+  // lambat. Threshold 1 KB (default paket compression): respons kecil
+  // tidak dikompres karena overhead-nya lebih besar dari hematnya.
+  // Gambar (PNG/JPG) tidak dikompres — sudah terkompres. Referensi:
+  // https://www.neeltech.me/blog/express-compression-middleware-gzip-bundle-speed
+  // https://www.lighthouse-aimetrics.com/blog/express-node-ssr-performance
+  app.use(compression({ threshold: 1024 }));
 
   // Pengalihan permanen: siapa pun yang masih membuka lewat Vercel
   // (parlementer.vercel.app) otomatis dipindah ke domain baru

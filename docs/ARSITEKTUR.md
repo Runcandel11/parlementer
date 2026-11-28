@@ -468,6 +468,25 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **Kompresi gzip respons v5.7.3 (28 Nov 2026, poles backend Lane 1):**
+  middleware `compression` (paket npm `compression` ^1.8.2, threshold
+  1 KB default) dipasang paling awal di `createApp()` (src/app.js) —
+  semua respons teks > 1 KB dikompres bila klien mengirim
+  `Accept-Encoding: gzip`: JSON API + HTML/CSS/JS statis. Gambar tidak
+  dikompres (sudah terkompres). Terukur di tes: `public/js/app.js`
+  354.064 → 97.572 byte (−72%). Tanpa `Accept-Encoding`, respons
+  dikirim apa adanya; header `Vary: Accept-Encoding` disetel agar cache
+  proxy tidak salah sajikan. Tidak ada perubahan aturan main, skema,
+  atau harga — murni penghematan bandwidth + load lebih cepat di
+  koneksi lambat. Dicek test/compression.js (9 cek: gzip JS + isi utuh
+  setelah gunzip, /api/world di bawah threshold tidak dikompres,
+  favicon tidak dikompres, Vary) + suite: pg-test 46/46 + e2e 1301/1301
+  hijau (28 Nov 2026); SISA (run 18:24 WIB): pg-verify + pg-concurrency
+  tertunda — Postgres lokal mati setelah restart runtime (ECONNREFUSED
+  127.0.0.1:5432, agen lane lain sedang install ulang postgresql-16 via
+  apt) — dan suite DOM + xp-rollback + ssl + compression tertunda antrean
+  flock /tmp/parl-test.lock (8 lane jalan bersamaan). Lanjutkan di run
+  berikutnya sebelum push.
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;
