@@ -94,7 +94,8 @@ async function main() {
   let dom = null;
   try {
     let up = false;
-    for (let i = 0; i < 40 && !up; i++) {
+    // Tunggu server siap: 120x250ms = 30 detik (start bisa lambat saat 2 full suite paralel di 1,5 CPU — v5.7.4).
+    for (let i = 0; i < 120 && !up; i++) {
       try { const r = await fetch(BASE + '/api/world'); up = r.ok; } catch { await sleep(250); }
     }
     check('server menyala dan /api/world merespons', up);
