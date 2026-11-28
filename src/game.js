@@ -74,7 +74,29 @@
 // terinflasi ×160.000 — pemain yang terkena berakhir di Level 10
 // (lantai), kecuali level legit-nya sudah >= 10; payout referral tidak
 // dibatalkan, klaim achievement level > 10 palsu dikembalikan.
-export const VERSION = '4.3.4';
+// Update sedang v4.4.0 = menu "Nonton Iklan" berhadiah (AdinPlay, perintah
+// pemilik 28 Nov 2026): tiap iklan video yang ditonton sampai selesai
+// memberi +30 emas, tanpa batas harian; token tontonan satu kali pakai
+// + jeda minimum antar grant sebagai anti-spam.
+export const VERSION = '4.4.0';
+
+// --- Iklan berhadiah AdinPlay (v4.4.0) ---
+// Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
+// aktif: menu menampilkan "segera hadir" dan TIDAK ada iklan yang
+// ditampilkan atau hadiah yang diberikan. Pemilik mengisi ID ini setelah
+// mendaftar di adinplay.com. ID ini BUKAN rahasia (tampil di sumber halaman
+// di semua integrasi AdinPlay) — tapi tetap jangan disebar ke mana-mana.
+// Tes boleh menyuntik lewat env ADINPLAY_PROPERTY_ID (lihat bawah).
+export const ADINPLAY_PROPERTY_ID = process.env.ADINPLAY_PROPERTY_ID || '';
+// Hadiah per iklan yang ditonton sampai selesai: +30 emas, TANPA batas
+// harian (perintah pemilik 28 Nov 2026 — jangan tambahkan cap harian).
+export const AD_REWARD_GOLD = 30;
+// Token tontonan: berlaku 5 menit sejak diterbitkan, satu kali pakai.
+export const AD_TOKEN_TTL_MS = 5 * 60 * 1000;
+// Jeda minimum antar grant iklan per pemain (anti-skrip): 30 detik sejak
+// grant terakhir. Bukan cap harian — pemain tetap bisa menonton tanpa
+// batas, hanya tidak bisa membanjiri server dengan panggilan beruntun.
+export const AD_MIN_INTERVAL_MS = 30 * 1000;
 
 // --- Satuan waktu dasar (Tahap 7) ---
 // Satu sumber kebenaran untuk "sehari" dalam milidetik — semua konstanta

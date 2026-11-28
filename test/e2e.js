@@ -56,7 +56,7 @@ async function main() {
   async function startServer() {
     server = spawn('node', ['server.js'], {
       cwd: ROOT,
-      env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret', ADMIN_BOOTSTRAP_CODE: 'e2e-bootstrap-code' },
+      env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret', ADMIN_BOOTSTRAP_CODE: 'e2e-bootstrap-code', ADINPLAY_PROPERTY_ID: 'e2e-test-property' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout.on('data', (d) => { serverLog += d; });
@@ -3123,6 +3123,64 @@ async function main() {
   check('Barang beli masuk inventaris NW (+10)', invNAfter === invNBefore + 10, `${invNBefore}→${invNAfter}`);
   r = await NW.post('/api/chat/global', { content: 'Halo, aku warga baru! Senang bergabung.' });
   check('NW mengirim pesan chat global', r.status === 200 && !!r.data.messageId, `status=${r.status} ${r.data.error || ''}`);
+
+  console.log('\n[30] Iklan berhadiah AdinPlay (v4.4.0) — token satu kali pakai, tanpa cap harian');
+  // Server e2e di-boot dengan ADINPLAY_PROPERTY_ID test (lihat startServer).
+  r = await A.get('/api/me');
+  const adsMe = r.data.ads || {};
+  check('Iklan aktif di /api/me (enabled + hadiah 30 emas)', adsMe.enabled === true && adsMe.rewardGold === 30, JSON.stringify(adsMe));
+  const adsId = r.data.citizen.id;
+  const gold0 = r.data.citizen.gold;
+  r = await A.post('/api/ads/start');
+  check('POST /api/ads/start memberi token 64 hex + berlaku 5 menit', r.status === 200 && typeof r.data.token === 'string' && r.data.token.length === 64 && r.data.expiresAt > Date.now() && r.data.expiresAt - Date.now() <= 5 * 60 * 1000, `status=${r.status}`);
+  const tok1 = r.data.token;
+  r = await A.post('/api/ads/reward', { token: tok1 });
+  check('Reward pertama: +30 emas', r.status === 200 && r.data.reward?.gold === 30, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.get('/api/me');
+  check('Saldo emas naik 30', r.data.citizen.gold === gold0 + 30, `${gold0}→${r.data.citizen.gold}`);
+  r = await A.post('/api/ads/reward', { token: tok1 });
+  check('Token yang sama dipakai 2× ditolak', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await A.post('/api/ads/reward', { token: 'token-palsu' });
+  check('Token palsu ditolak', r.status === 400, `status=${r.status}`);
+  r = await A.post('/api/ads/reward', {});
+  check('Reward tanpa token ditolak', r.status === 400, `status=${r.status}`);
+  // Token milik pemain lain tidak bisa dipakai A.
+  r = await B.post('/api/ads/start');
+  const tokB = r.data.token;
+  r = await A.post('/api/ads/reward', { token: tokB });
+  check('Token milik pemain lain ditolak', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  // Jeda minimum 30 detik: grant kedua langsung setelah yang pertama ditolak.
+  r = await A.post('/api/ads/start');
+  const tok2 = r.data.token;
+  r = await A.post('/api/ads/reward', { token: tok2 });
+  check('Grant kedua dalam 30 detik ditolak (jeda minimum anti-skrip)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  // Token kedaluwarsa: mundurkan expires_at lewat DB, lalu coba reward.
+  r = await A.post('/api/ads/start');
+  const tok3 = r.data.token;
+  {
+    const dbAds = new DatabaseSync(DB_PATH);
+    dbAds.prepare('UPDATE ad_tokens SET expires_at = ? WHERE token = ?').run(Date.now() - 1000, tok3);
+    dbAds.close();
+  }
+  r = await A.post('/api/ads/reward', { token: tok3 });
+  check('Token kedaluwarsa ditolak', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  // Tanpa cap harian: grant ke-2..ke-7 tetap berhasil — jeda minimum
+  // dilewati dengan memundurkan granted_at di ad_rewards (simulasi waktu).
+  {
+    const dbAds = new DatabaseSync(DB_PATH);
+    let okCount = 0;
+    for (let i = 0; i < 6; i++) {
+      const st = await A.post('/api/ads/start');
+      dbAds.prepare('UPDATE ad_rewards SET granted_at = 0 WHERE citizen_id = ?').run(adsId);
+      const rw = await A.post('/api/ads/reward', { token: st.data.token });
+      if (rw.status === 200 && rw.data.reward?.gold === 30) okCount++;
+      else { check(`Grant tanpa cap #${i + 2} berhasil`, false, `status=${rw.status} ${rw.data.error || ''}`); break; }
+    }
+    check('Grant ke-2 sampai ke-7 (lebih dari 5/hari) tetap berhasil — tanpa cap harian', okCount === 6, `berhasil ${okCount}/6`);
+    const n = dbAds.prepare('SELECT COUNT(*) AS n FROM ad_rewards WHERE citizen_id = ?').get(adsId);
+    check('Tabel audit ad_rewards mencatat semua grant (7 baris)', Number(n.n) === 7, `n=${n.n}`);
+    dbAds.close();
+  }
 
   setDayO(1);
 

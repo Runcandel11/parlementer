@@ -439,6 +439,7 @@ const NAV = [
   { group: 'EKONOMI', items: [
     ['market', 'Pasar', '🏪'], ['global', 'Pasar Global', '🌐'], ['fx', 'Valas', '⇄'],
     ['jobs', 'Pekerjaan', '💼'], ['companies', 'Perusahaan', '🏭'], ['contracts', 'Kontrak', '📜'],
+    ['ads', 'Nonton Iklan', '🎬'],
   ]},
   { group: 'KOMUNITAS', items: [
     ['press', 'Pers', '📰'], ['newspaper', 'Dirikan Koran', '✏️'],
@@ -912,6 +913,7 @@ ROUTES.dashboard = async () => {
   const c = ME.citizen;
   const cap = c.energyCap || 100;
   const fatigue = c.fatigue || 0;
+  const adsCfg = ME.ads || { enabled: false, propertyId: '', rewardGold: 30 };
   const fatigueMultNow = fatigue >= 15000 ? '0.5' : fatigue >= 10000 ? '0.75' : '1';
   // Negara di hero: warna/bendera negara HANYA ada kalau wilayah sudah
   // punya negara — tanpa negara, hero jadi kaca abu-abu + "?" (aturan
@@ -985,6 +987,14 @@ ROUTES.dashboard = async () => {
     ${doubleXpChip()}
     <button class="btn-gold" id="btn-dash-shift" type="button" ${c.energy <= 0 ? 'disabled' : ''}>KERJAKAN SATU GILIRAN (${Math.min(c.energy, 100)} ⚡)</button>
   </div>` : ''}
+  <div class="panel" id="dash-ads">
+    <div class="panel-head"><h3>🎬 NONTON IKLAN</h3><button class="btn-text gold" type="button" data-goto="#/ads">BUKA ›</button></div>
+    ${adsCfg.enabled
+      ? `<p class="muted small">Tonton iklan sampai selesai, dapat +${adsCfg.rewardGold} emas per iklan — tanpa batas harian.</p>
+    <button class="btn-gold" type="button" data-goto="#/ads">▶ TONTON IKLAN (+${adsCfg.rewardGold} EMAS)</button>`
+      : `<p class="muted small">Segera hadir — menu nonton iklan sedang disiapkan, menunggu aktivasi dari admin.</p>
+    <button class="btn-gold" type="button" data-goto="#/ads">LIHAT MENU ›</button>`}
+  </div>
   <div class="panel" id="dash-map">
     <div class="panel-head"><h3>🗺️ PETA LANGSUNG</h3><button class="btn-text gold" type="button" data-goto="#/map">BUKA PETA ›</button></div>
     <div class="map-tiles" id="dash-map-tiles"><p class="muted small">Memuat…</p></div>
@@ -4000,6 +4010,95 @@ ROUTES.shop = async () => {
       <p class="muted small">${fmtIDR(p.perMonth)}/bulan</p>
       <a class="btn-gold" style="display:block;text-align:center;text-decoration:none" href="${wa('Premium ' + p.months + ' bulan ' + fmtIDR(p.price))}" target="_blank" rel="noopener">AMBIL PREMIUM</a></div>`).join('')}
   </div>`);
+};
+
+// ---------- IKLAN BERHADIAH (AdinPlay, v4.4.0) ----------
+// Library aiptag dimuat dinamis HANYA bila property ID terisi — dengan ID
+// kosong tidak ada skrip pihak ketiga yang dimuat sama sekali, dan menu
+// menampilkan "segera hadir" tanpa iklan atau hadiah palsu. Callback
+// AIP_REWARDEDGRANTED = iklan selesai → hadiah diminta ke server dengan
+// token tontonan; callback itu sendiri TIDAK memberi hadiah (server yang
+// memvalidasi token satu kali pakai).
+let adinplayLoad = null;
+function loadAdinPlay(propertyId) {
+  if (adinplayLoad) return adinplayLoad;
+  adinplayLoad = new Promise((resolve) => {
+    window.aiptag = window.aiptag || {};
+    window.aiptag.cmd = window.aiptag.cmd || [];
+    window.aiptag.cmd.display = window.aiptag.cmd.display || [];
+    window.aiptag.cmd.player = window.aiptag.cmd.player || [];
+    const s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://api.adinplay.com/libs/aiptag/pub/' + encodeURIComponent(propertyId) + '/tag.min.js';
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+  return adinplayLoad;
+}
+
+async function watchRewardedAd(ads) {
+  const btn = $('#btn-watch-ad');
+  const status = $('#ad-status');
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = 'Meminta token tontonan…';
+  let start;
+  try { start = await post('/api/ads/start'); }
+  catch (e) { toast(e.message); if (btn) btn.disabled = false; if (status) status.textContent = ''; return; }
+  if (status) status.textContent = 'Memuat pemutar iklan…';
+  const ok = await loadAdinPlay(ads.propertyId);
+  if (!ok) {
+    toast('Pemutar iklan gagal dimuat. Periksa koneksimu lalu coba lagi.');
+    if (btn) btn.disabled = false; if (status) status.textContent = '';
+    return;
+  }
+  if (status) status.textContent = 'Iklan diputar — tonton sampai selesai untuk mendapat hadiah.';
+  // Player dibuat sekali per pemuatan halaman; pemutaran berikutnya memakai
+  // player yang sama (token baru tetap diminta tiap kali menonton).
+  window.aiptag.cmd.player.push(function() {
+    if (!window.aiptag.adplayer) {
+      window.aiptag.adplayer = new window.aipPlayer({
+        AD_WIDTH: 960,
+        AD_HEIGHT: 540,
+        AD_DISPLAY: 'center',
+        PREROLL_ELEM: function() { return document.getElementById('ad-player-slot'); },
+        AIP_REWARDEDGRANTED: async function() {
+          try {
+            const r = await post('/api/ads/reward', { token: start.token });
+            toast(`Hadiah diterima: +${r.reward.gold} emas!`);
+            await refreshMe(); route();
+          } catch (e) { toast(e.message); if (btn) btn.disabled = false; }
+        },
+        AIP_REWARDEDNOTGRANTED: function() {
+          toast('Iklan tidak selesai ditonton — tidak ada hadiah.');
+          if (btn) btn.disabled = false;
+          if (status) status.textContent = '';
+        },
+      });
+    }
+    // startRewardedAd memakai placement berhadiah default milik properti
+    // ini (diatur di dashboard AdinPlay) — tanpa argumen.
+    window.aiptag.adplayer.startRewardedAd();
+  });
+}
+
+ROUTES.ads = async () => {
+  const ads = ME.ads || { enabled: false, propertyId: '', rewardGold: 30 };
+  if (!ads.enabled) {
+    $('#page').innerHTML = page('🎬 NONTON IKLAN', 'Tonton iklan, dapat emas.', `
+    <div class="panel"><div class="empty"><div class="big-ico">🎬</div>
+    <h3>Segera hadir</h3>
+    <p class="muted">Menu nonton iklan sedang disiapkan — menunggu aktivasi dari admin. Begitu aktif, tiap iklan yang kamu tonton sampai selesai memberi +${ads.rewardGold} emas, tanpa batas harian.</p>
+    <button class="btn-gold" data-goto="#/dashboard">Kembali ke Dashboard</button></div></div>`);
+    return;
+  }
+  $('#page').innerHTML = page('🎬 NONTON IKLAN', `Tonton iklan sampai selesai, dapat +${ads.rewardGold} emas per iklan — tanpa batas harian.`, `
+  <div class="panel"><h3>🎬 TONTON IKLAN, DAPAT EMAS</h3>
+  <p class="muted small">Iklan diputar oleh AdinPlay. Hadiah masuk begitu iklan selesai ditonton. Menutup iklan sebelum selesai = tidak ada hadiah.</p>
+  <div id="ad-player-slot"><p class="muted small">Pemutar iklan siap. Tekan tombol di bawah untuk memutar iklan.</p></div>
+  <div class="row"><button class="btn-gold" id="btn-watch-ad" type="button">▶ TONTON IKLAN (+${ads.rewardGold} EMAS)</button></div>
+  <p class="muted small" id="ad-status"></p></div>`);
+  $('#btn-watch-ad').onclick = () => watchRewardedAd(ads);
 };
 
 // ---------- MEJA BANTUAN / KONTAK / BUKU ----------

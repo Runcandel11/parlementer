@@ -1,5 +1,6 @@
 // API inti Parlementer: auth (email+password), dashboard, pekerjaan, perusahaan,
 // pasar, valas, peta, inventaris, konvoi, misi, kronik, pencapaian, notifikasi, profil, toko.
+import crypto from 'node:crypto';
 import { hashPassword, verifyPassword } from './bcrypt-pool.js';
 import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings, getParliamentOpensAt, getWorldDay, missionValue, missionClaimedKeys, insertMissionClaim, chronicleDoneKeys, chronicleClaimedChapters, insertChronicleClaim, markChronicleDone } from './db.js';
 import {
@@ -21,6 +22,7 @@ import {
   MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, tradeReputation, worldEventFor,
   DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
   ONLINE_WINDOW_MS, onlineStatus,
+  ADINPLAY_PROPERTY_ID, AD_REWARD_GOLD, AD_TOKEN_TTL_MS, AD_MIN_INTERVAL_MS,
 } from './game.js';
 
 export function registerCore(app) {
@@ -495,6 +497,10 @@ export function registerCore(app) {
       world, population: Number(population.n), onlineCount: await countOnline(),
       activeWars, votingLaws,
       xpNext: xpForLevel(c.level),
+      // Iklan berhadiah (v4.4.0): klien perlu tahu apakah AdinPlay aktif +
+      // hadiah per iklan — Property ID bukan rahasia (tampil di sumber
+      // halaman di semua integrasi AdinPlay), jadi aman dikirim ke klien.
+      ads: { enabled: ADINPLAY_PROPERTY_ID !== '', propertyId: ADINPLAY_PROPERTY_ID, rewardGold: AD_REWARD_GOLD },
     });
   }));
 
@@ -519,6 +525,48 @@ export function registerCore(app) {
     await addXp(locked.row, DAILY_CLAIM.xp);
     await chronicleDone(locked.row, 'claim');
     res.json({ ok: true, reward: { gold: DAILY_CLAIM.gold + locked.bonus, usd: DAILY_CLAIM.usd, xp: DAILY_CLAIM.xp }, budgetBonus: locked.bonus > 0 });
+  }));
+
+  // ---------- IKLAN BERHADIAH (AdinPlay, v4.4.0) ----------
+  // Alur: klien minta token tontonan (POST /api/ads/start) → video AdinPlay
+  // diputar → bila selesai (callback AIP_REWARDEDGRANTED), klien panggil
+  // POST /api/ads/reward dengan token itu. Hadiah TIDAK PERNAH diberikan
+  // tanpa token server yang valid — callback klien mentah-mentah tidak
+  // dipercaya (bisa dipalsukan dari console). Token: acak 256-bit, berlaku
+  // 5 menit, satu kali pakai. Jeda minimum 30 detik antar grant per pemain
+  // (anti-skrip). TANPA batas harian (perintah pemilik 28 Nov 2026).
+  // Bila AdinPlay belum aktif (property ID kosong), /start menolak 503 —
+  // klien menampilkan "segera hadir" dan tidak ada hadiah apa pun.
+  app.post('/api/ads/start', authRequired, citizenRequired, r(async (req, res) => {
+    if (!ADINPLAY_PROPERTY_ID) return res.status(503).json({ error: 'Iklan berhadiah belum aktif. Tunggu aktivasi dari admin.' });
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = Date.now() + AD_TOKEN_TTL_MS;
+    await run('INSERT INTO ad_tokens (token, citizen_id, expires_at, used_at) VALUES (?,?,?,NULL)', [token, req.citizen.id, expiresAt]);
+    res.json({ ok: true, token, expiresAt });
+  }));
+
+  app.post('/api/ads/reward', authRequired, citizenRequired, r(async (req, res) => {
+    const { token } = req.body || {};
+    if (!token || typeof token !== 'string') return res.status(400).json({ error: 'Token tontonan tidak valid.' });
+    const now = Date.now();
+    const result = await tx(async (t) => {
+      const row = await t.one(forUpdate('SELECT * FROM ad_tokens WHERE token = ?'), [token]);
+      if (!row || Number(row.citizen_id) !== req.citizen.id) throw Object.assign(new Error('Token tontonan tidak valid.'), { status: 400 });
+      if (row.used_at) throw Object.assign(new Error('Token sudah dipakai.'), { status: 400 });
+      if (Number(row.expires_at) <= now) throw Object.assign(new Error('Token sudah kedaluwarsa. Tonton iklan lagi.'), { status: 400 });
+      // Jeda minimum antar grant (anti-skrip): 30 detik sejak grant terakhir.
+      const last = await t.one('SELECT granted_at FROM ad_rewards WHERE citizen_id = ? ORDER BY granted_at DESC LIMIT 1', [req.citizen.id]);
+      if (last && now - Number(last.granted_at) < AD_MIN_INTERVAL_MS) throw Object.assign(new Error('Terlalu cepat. Tunggu sebentar sebelum menonton lagi.'), { status: 400 });
+      // Tandai token terpakai + beri emas + catat audit — atomik: UPDATE
+      // bersyarat (used_at IS NULL) + cek changes membuat dua request
+      // paralel dengan token yang sama hanya satu yang berhasil.
+      const upd = await t.run('UPDATE ad_tokens SET used_at = ? WHERE token = ? AND used_at IS NULL', [now, token]);
+      if (!upd.changes) throw Object.assign(new Error('Token sudah dipakai.'), { status: 400 });
+      await t.run('UPDATE citizens SET gold = gold + ? WHERE id = ?', [AD_REWARD_GOLD, req.citizen.id]);
+      await t.run('INSERT INTO ad_rewards (citizen_id, gold, granted_at) VALUES (?,?,?)', [req.citizen.id, AD_REWARD_GOLD, now]);
+      return { gold: AD_REWARD_GOLD };
+    });
+    res.json({ ok: true, reward: { gold: result.gold } });
   }));
 
   app.post('/api/train', authRequired, citizenRequired, r(async (req, res) => {

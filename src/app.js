@@ -46,15 +46,20 @@ export function createApp() {
   app.use(express.json({ limit: '3mb' }));
 
   // Security headers (manual, tanpa dependensi baru). CSP mengizinkan
-  // Google Fonts (dipakai UI) dan skrip/gaya dari origin sendiri saja.
+  // Google Fonts (dipakai UI) dan skrip/gaya dari origin sendiri saja —
+  // DITAMBAH AdinPlay (v4.4.0, iklan berhadiah): library tag dimuat dari
+  // api.adinplay.com; video VAST datang dari berbagai CDN iklan (media-src
+  // https:), unit VPAID jalan di iframe lintas-origin (frame-src https:),
+  // dan piksel pelacak iklan memakai img https:. Ini pelonggaran yang
+  // disengaja untuk iklan; skrip tetap hanya dari 'self' + AdinPlay.
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-      "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+      "default-src 'self'; script-src 'self' https://api.adinplay.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; media-src 'self' https:; connect-src 'self' https://api.adinplay.com; frame-src https:; frame-ancestors 'none'",
     );
     if (process.env.NODE_ENV === 'production') {
       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');

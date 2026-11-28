@@ -912,6 +912,25 @@ CREATE TABLE IF NOT EXISTS chronicle_claims (
   claimed_at BIGINT NOT NULL,
   UNIQUE(citizen_id, chapter)
 );
+-- (v4.4.0) Iklan berhadiah AdinPlay — token tontonan satu kali pakai:
+-- diterbitkan POST /api/ads/start, dipakai POST /api/ads/reward, lalu
+-- ditandai used_at. Token kedaluwarsa (expires_at lewat) tidak bisa
+-- dipakai. Baris lama tidak dihapus (jejak audit) — tabel kecil, satu
+-- baris per tontonan yang dimulai.
+CREATE TABLE IF NOT EXISTS ad_tokens (
+  token TEXT PRIMARY KEY,
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  expires_at BIGINT NOT NULL,
+  used_at BIGINT
+);
+-- (v4.4.0) Jejak audit hadiah iklan: 1 baris per grant +30 emas, supaya
+-- admin bisa melihat siapa saja yang menerima hadiah iklan dan kapan.
+CREATE TABLE IF NOT EXISTS ad_rewards (
+  id ${id},
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  gold INTEGER NOT NULL,
+  granted_at BIGINT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS convoys (
   id ${id},
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
@@ -1254,7 +1273,7 @@ async function runDataFixups() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -1271,7 +1290,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 18;
+const SCHEMA_VERSION = 19;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
