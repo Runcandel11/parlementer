@@ -481,12 +481,13 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   koneksi lambat. Dicek test/compression.js (9 cek: gzip JS + isi utuh
   setelah gunzip, /api/world di bawah threshold tidak dikompres,
   favicon tidak dikompres, Vary) + suite: pg-test 46/46 + e2e 1301/1301
-  hijau (28 Nov 2026); SISA (run 18:24 WIB): pg-verify + pg-concurrency
-  tertunda — Postgres lokal mati setelah restart runtime (ECONNREFUSED
-  127.0.0.1:5432, agen lane lain sedang install ulang postgresql-16 via
-  apt) — dan suite DOM + xp-rollback + ssl + compression tertunda antrean
-  flock /tmp/parl-test.lock (8 lane jalan bersamaan). Lanjutkan di run
-  berikutnya sebelum push.
+  hijau + pg-verify 287/287 + pg-concurrency 38/38 + compression 9/9
+  (28 Nov 2026, run 20:51 WIB — compression diverifikasi ulang hijau);
+  total lokal 20 suite / 2404 tes, 0 gagal. Sisa 11 suite (stage6-dom,
+  stage7-dom, bottom-nav-dom, ads-dom, offside-dom, topbar-dom, share-dom,
+  tutorial-dom, conversion-dom, password-reset-dom, party-dom)
+  diverifikasi via GitHub Actions setelah push (aturan baru 28 Nov 2026
+  — full suite pindah dari VM lokal ke Actions).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;
