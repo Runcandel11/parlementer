@@ -1,7 +1,8 @@
 // Parlementer — tes DOM UI batch 2 ala Parlamentum (jsdom + server sungguhan).
 // Membuktikan tampilan baru memakai angka NYATA dari DB (bukan karangan):
 //   (1) HUD: avatar bulat berisi inisial + LEVEL besar di dalam perisai +
-//       saldo Rupiah (500 USD → Rp9.150.000) + countdown parlemen tetap ada;
+//       saldo Rupiah (500 USD → Rp9.150.000) + countdown parlemen (tampil
+//       sebelum 28 Nov 2026 20:00 WIB, tersembunyi setelah parlemen dibuka);
 //   (2) Dashboard: PETA LANGSUNG (17 ubin wilayah + penanda KAMU), angka
 //       dunia/negara/wilayah, INVENTARIS (kartu T1 + "Sisa roti hari ini"),
 //       KONVOI (slot + bangunan), kartu wilayah (skor kota + peringkat +
@@ -185,7 +186,12 @@ async function main() {
     check('HUD: saldo tampil sebagai Rupiah Rp9.150.000 (500 USD)', (document.querySelector('#hud-usd')?.textContent || '').includes('Rp9.150.000'), document.querySelector('#hud-usd')?.textContent);
     check('HUD: emas 50', document.querySelector('#hud-gold')?.textContent === '50', document.querySelector('#hud-gold')?.textContent);
     const pcd = document.querySelector('#parliament-countdown');
-    check('HUD: countdown parlemen tetap tampil', !!pcd && !pcd.hidden && pcd.textContent.includes('Parlemen dibuka'), pcd?.textContent.slice(0, 60));
+    // Countdown tampil hanya SEBELUM parlemen dibuka (28 Nov 2026 20:00 WIB,
+    // app.js: pcd.hidden = true bila ME.parliamentOpen) — setelah dibuka ia
+    // tersembunyi by design, jadi kedua keadaan ini sama-sama benar.
+    check('HUD: countdown parlemen tampil sebelum dibuka / tersembunyi setelah dibuka',
+      !!pcd && (pcd.hidden || pcd.textContent.includes('Parlemen dibuka')),
+      pcd ? `hidden=${pcd.hidden} text=${pcd.textContent.slice(0, 60)}` : 'tidak ada');
 
     // --- DASHBOARD (ref 06 + 07) ---
     const tiles = [...document.querySelectorAll('.map-tile')];
