@@ -1043,7 +1043,6 @@ CREATE INDEX IF NOT EXISTS idx_market_tx_seller ON market_tx(seller_id);
 CREATE INDEX IF NOT EXISTS idx_market_buy_orders ON market_buy_orders(scope, commodity_id);
 CREATE INDEX IF NOT EXISTS idx_market_buy_orders_buyer ON market_buy_orders(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_treasury_tx_created ON treasury_tx(created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_share_code ON citizens(share_code) WHERE share_code IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_share_clicks_owner_day ON share_clicks(owner_id, day);
 CREATE INDEX IF NOT EXISTS idx_market_flags_created ON market_flags(created_at);
 CREATE INDEX IF NOT EXISTS idx_announcement_reads_citizen ON announcement_reads(citizen_id);
@@ -1333,7 +1332,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 21;
+const SCHEMA_VERSION = 22;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1939,6 +1938,11 @@ async function migrateAutoWorkColumns(t) {
 // Migrasikan kolom link share harian (v4.6.0) untuk database yang sudah
 // ada: citizens.share_code. Idempotent — kolom yang sudah ada tidak
 // disentuh. (Tabel share_clicks dibuat lewat schema() di atas.)
+// Indeks unik dibuat DI SINI (setelah ADD COLUMN), BUKAN di schema():
+// schema() jalan SEBELUM migrasi, dan database lama belum punya kolom ini
+// — indeks di schema() menggagalkan initDb (Postgres 42703, insiden
+// 28 Nov 2026: v4.6.0 crash-loop di live) sehingga server tidak pernah
+// nyala. Pola yang sama seperti migrateOnlineColumns / migrateWorldRedesign.
 async function migrateShareColumns(t) {
   const addCol = async (table, col, ddl) => {
     if (isPg) {
@@ -1949,6 +1953,7 @@ async function migrateShareColumns(t) {
     }
   };
   await addCol('citizens', 'share_code', 'TEXT');
+  await t.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_share_code ON citizens(share_code) WHERE share_code IS NOT NULL');
 }
 
 // Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di

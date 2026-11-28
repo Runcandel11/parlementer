@@ -1,4 +1,4 @@
-// Parlementer — tes DOM share link + notifikasi v4.6.0: tombol Bagikan Link
+// Parlementer — tes DOM share link + notifikasi v4.6.1: tombol Bagikan Link
 // di top bar + halaman #/share + pusat notifikasi di atas + chip SISTEM +
 // deteksi HEIC di klien.
 // Membuktikan (di jsdom + server sungguhan):
@@ -28,7 +28,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3474;
 const DB_PATH = '/tmp/parlementer-share-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '4.6.0';
+const EXPECTED_VERSION = '4.6.1';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -93,7 +93,7 @@ async function main() {
     await sleep(1200);
 
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 4.6.0', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 4.6.1', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // --- Warga baru, boot dashboard.
     const jar = makeJar();

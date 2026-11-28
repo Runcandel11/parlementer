@@ -83,10 +83,11 @@
 // otomatis Premium 24 jam yang jalan di server walau aplikasi ditutup.
 // Update kecil v4.5.1 = tombol Nonton Iklan di top bar + dompet HUD jadi
 // dua pill uang+emas yang sejajar (perintah pemilik 28 Nov 2026).
-// Update v4.6.0 = stok bahan perusahaan + edit upah + multi-shift +
-// minum sekaligus + donasi kas negara + share link harian + HEIC +
-// notifikasi di atas (saran LIO + perintah pemilik 28 Nov 2026).
-export const VERSION = '4.6.0';
+// Update v4.6.1 = hotfix migrasi share_code (28 Nov 2026): indeks unik
+// idx_share_code pindah dari schema() ke migrateShareColumns — di schema()
+// ia menggagalkan initDb di database lama (Postgres 42703) sehingga server
+// crash-loop setelah deploy v4.6.0.
+export const VERSION = '4.6.1';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
