@@ -321,6 +321,32 @@ export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// Pesan error khusus HEIC (v4.6.0, penyelidikan bug foto LIO): file HEIC
+// dari galeri HP TIDAK BISA di-decode browser lewat <img> (Chrome Android
+// tidak mendukung HEIC), jadi gagalnya di tahap decode — BUKAN karena
+// ukuran atau karena file rusak. Pesan ini memberi jalan keluar yang
+// konkret (ubah ke JPG dulu), bukan tuduhan format generik. Teks yang
+// sama dipakai klien (public/js/app.js, IMAGE_ERROR_HEIC) — jaga agar
+// keduanya selaras bila diubah.
+export const HEIC_ERROR_MESSAGE = 'Foto ini berformat HEIC (dari galeri HP) — browser tidak bisa membacanya. Ubah ke JPG dulu (di galeri: bagikan → simpan sebagai JPG, atau ubah pengaturan kamera ke "Paling Kompatibel"), lalu upload lagi.';
+// Deteksi HEIC dari data URL gambar: prefix MIME image/heic|heif, atau
+// magic bytes kotak ftyp (....ftyp + brand heic/heix/hevc/heim/heis/
+// heif/mif1/msf1) setelah decode base64. Dipakai endpoint foto profil &
+// foto perusahaan supaya file HEIC yang lolos dari klien (atau dikirim
+// langsung) mendapat pesan HEIC, bukan pesan format generik.
+export function isHeicDataUrl(dataUrl) {
+  if (typeof dataUrl !== 'string') return false;
+  if (/^data:image\/(heic|heif);base64,/.test(dataUrl)) return true;
+  const m = dataUrl.match(/^data:image\/[a-z0-9]+;base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) return false;
+  let buf;
+  try { buf = Buffer.from(m[1], 'base64'); } catch { return false; }
+  if (buf.length < 12) return false;
+  if (buf.toString('ascii', 4, 8) !== 'ftyp') return false;
+  const brand = buf.toString('ascii', 8, 12);
+  return ['heic', 'heix', 'hevc', 'heim', 'heis', 'heif', 'mif1', 'msf1'].includes(brand);
+}
+
 // Validasi data URL gambar (JPEG/PNG/WebP) — dipakai foto profil
 // (api-core.js) dan gambar artikel: sampul + gambar di isi (api-civic.js).
 // Mengembalikan { bytes, dataUrl } atau null bila bukan gambar valid atau

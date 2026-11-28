@@ -1,6 +1,6 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
 import { sql, one, run, tx, forUpdate, convoyBuildings, getParliamentOpensAt, getWorldDay, missionValue, setMissionValue, markChronicleDone } from './db.js';
-import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl, requireCredit } from './util.js';
+import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl, requireCredit, fmtRp } from './util.js';
 import { warDamage, warDamageWithBonus, unitDamageMult, worldEventFor, MILITARY_UNITS, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR, IMPORT_TAX, DAY_MS, ELECTION_VOTE_MS, ELECTION_VOTE_MIN_AGE_MS, CHAT_COOLDOWN_MS, CHAT_COUNT_WINDOW_MS, CHAT_COUNT_MIN_WORDS } from './game.js';
 
 // Ruang chat publik yang selalu ada. Ruang wilayah (region_<id>) bersifat
@@ -222,6 +222,12 @@ export function registerCivic(app) {
       ? await sql('SELECT join_id, vote FROM country_join_votes WHERE citizen_id = ? AND join_id IN (' + openJoins.map(() => '?').join(',') + ')', [req.citizen.id, ...openJoins.map((j) => j.id)])
       : [];
     const par = await parliamentStatus();
+    // Barang yang bisa disumbangkan (v4.6.0): inventaris tier 1 pemanggil
+    // (nama + jumlah) — dipakai dropdown sumbangan bahan di halaman Negara.
+    const myDonateItems = await sql(
+      `SELECT c.name, i.qty FROM inventory i JOIN commodities c ON c.id = i.commodity_id
+       WHERE i.citizen_id = ? AND i.tier = 1 AND i.qty > 0 ORDER BY c.name`,
+      [req.citizen.id]);
     res.json({
       country: countrySummary(country),
       countryFull: country || null,
@@ -230,6 +236,7 @@ export function registerCivic(app) {
       president: president?.username || 'Kosong',
       presidentTitle: country ? systemDef(country.system).presidentTitle : 'Presiden',
       ministers, memberRegions, wars, treasuryTx, openJoins,
+      myDonateItems: myDonateItems.map((i) => ({ name: i.name, qty: Number(i.qty) })),
       myJoinVotes: Object.fromEntries(myJoinVotes.map((v) => [v.join_id, v.vote])),
       // Tahap 5: jabatan pemanggil + status wewenang menteri (untuk UI).
       myMinisterRole: ministerRole(country, req.citizen.id),
@@ -523,6 +530,69 @@ export function registerCivic(app) {
     });
     await notifyAll('POLITIK', 'Hari libur nasional', 'Menteri Dalam Negeri menetapkan hari libur: semua warga mendapat +20 energi.');
     res.json({ ok: true });
+  }));
+
+  // ---------- SUMBANG KE KAS NEGARA (v4.6.0, saran LIO) ----------
+  // Warga menyumbang ke kas NEGARANYA SENDIRI (kewarganegaraan mengikuti
+  // home_region_id — getMyCountry; tanpa negara → 400). Tiga bentuk:
+  //   gold: emas langsung → country.treasury.
+  //   usd: Rupiah (klien mengirim USD hasil konversi Rp; server menerima
+  //     USD) → country.treasury_usd.
+  //   item: bahan/barang dari inventaris (tier 1) — dikonversi ke nilai
+  //     USD acuan (ref_usd) lalu masuk treasury_usd; kas negara tidak
+  //     menyimpan inventaris barang, jadi konversi adalah pencatatannya
+  //     (nama + jumlah barang TERCATAT di note ledger).
+  // Semua atomik (kunci baris warga + negara); jumlah > 0 dan saldo/bahan
+  // harus cukup. Setiap sumbangan TERCATAT di treasury_tx (kind
+  // 'sumbangan', amount positif) — terlihat di panel ARUS KAS halaman
+  // Negara. Tidak ada batas jumlah; tidak ada hadiah balik (bukan
+  // pembelian — jangan samakan dengan toko/grant admin).
+  app.post('/api/country/donate', authRequired, citizenRequired, r(async (req, res) => {
+    const { type, amount, commodity, qty } = req.body || {};
+    if (!['gold', 'usd', 'item'].includes(type)) return res.status(400).json({ error: 'Jenis sumbangan tidak dikenal (emas, Rupiah, atau bahan).' });
+    const country = await getMyCountry({ one }, req.citizen);
+    if (!country) return res.status(400).json({ error: 'Kamu belum bernegara — sumbangan hanya untuk kas negaramu.' });
+    const out = await tx(async (t) => {
+      const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      const lockedCountry = await t.one(forUpdate('SELECT * FROM country WHERE id = ?'), [country.id]);
+      if (!lockedCountry) throw Object.assign(new Error('Negaramu tidak ditemukan.'), { status: 400 });
+      const username = locked.username;
+      if (type === 'gold') {
+        const n = Number(amount);
+        if (!Number.isFinite(n) || n <= 0) throw Object.assign(new Error('Jumlah emas harus lebih dari 0.'), { status: 400 });
+        const upd = await t.run('UPDATE citizens SET gold = gold - ? WHERE id = ? AND gold >= ?', [n, locked.id, n]);
+        if (!upd.changes) throw Object.assign(new Error(`Emasmu tidak cukup (punya ${Math.floor(locked.gold)}).`), { status: 400 });
+        await t.run('UPDATE country SET treasury = treasury + ? WHERE id = ?', [n, country.id]);
+        await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, country_id, created_at) VALUES ('sumbangan','gold',?,?,?,?) RETURNING id",
+          [n, `Sumbangan ${username}: +${n} emas`, country.id, Date.now()]);
+        return { type, amount: n, treasury: Number(lockedCountry.treasury) + n, treasury_usd: Number(lockedCountry.treasury_usd) };
+      }
+      if (type === 'usd') {
+        const n = Number(amount);
+        if (!Number.isFinite(n) || n <= 0) throw Object.assign(new Error('Jumlah Rupiah harus lebih dari 0.'), { status: 400 });
+        const upd = await t.run('UPDATE citizens SET usd = usd - ? WHERE id = ? AND usd >= ?', [n, locked.id, n]);
+        if (!upd.changes) throw Object.assign(new Error('Saldomu tidak cukup.'), { status: 400 });
+        await t.run('UPDATE country SET treasury_usd = treasury_usd + ? WHERE id = ?', [n, country.id]);
+        await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, country_id, created_at) VALUES ('sumbangan','usd',?,?,?,?) RETURNING id",
+          [n, `Sumbangan ${username}: +${fmtRp(n)}`, country.id, Date.now()]);
+        return { type, amount: n, treasury: Number(lockedCountry.treasury), treasury_usd: Number(lockedCountry.treasury_usd) + n };
+      }
+      // item: bahan dari inventaris → nilai USD acuan → kas Rupiah.
+      const q = Number(qty);
+      if (!Number.isInteger(q) || q <= 0) throw Object.assign(new Error('Jumlah bahan harus bilangan bulat lebih dari 0.'), { status: 400 });
+      const com = await t.one('SELECT * FROM commodities WHERE name = ?', [String(commodity || '')]);
+      if (!com) throw Object.assign(new Error('Bahan tidak dikenal.'), { status: 400 });
+      const row = await t.one(forUpdate('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1'), [locked.id, com.id]);
+      if (!row || row.qty < q) throw Object.assign(new Error(`Kamu tidak punya ${q}× ${com.name} di inventaris.`), { status: 400 });
+      if (row.qty === q) await t.run('DELETE FROM inventory WHERE id = ?', [row.id]);
+      else await t.run('UPDATE inventory SET qty = qty - ? WHERE id = ?', [q, row.id]);
+      const value = Math.round(q * Number(com.ref_usd) * 100) / 100;
+      await t.run('UPDATE country SET treasury_usd = treasury_usd + ? WHERE id = ?', [value, country.id]);
+      await t.run("INSERT INTO treasury_tx (kind, currency, amount, note, country_id, created_at) VALUES ('sumbangan','usd',?,?,?,?) RETURNING id",
+        [value, `Sumbangan ${username}: ${q}× ${com.name} (setara ${fmtRp(value)})`, country.id, Date.now()]);
+      return { type, amount: value, commodity: com.name, qty: q, treasury: Number(lockedCountry.treasury), treasury_usd: Number(lockedCountry.treasury_usd) + value };
+    });
+    res.json({ ok: true, ...out });
   }));
 
   // ---------- PARTAI ----------

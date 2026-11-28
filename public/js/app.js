@@ -92,8 +92,41 @@ function profilePhotoHtml(avatar, username) {
 // ukuran padahal masalahnya format.
 const IMAGE_ERROR_FORMAT = 'Format foto tidak didukung atau file rusak. Pakai JPG, PNG, atau WebP.';
 const IMAGE_ERROR_SIZE = 'Foto terlalu besar (maks 500 KB setelah diperkecil).';
+// (v4.6.0, penyelidikan bug foto LIO): file HEIC dari galeri HP tidak bisa
+// di-decode browser (Chrome Android tidak mendukung HEIC di <img>) — pesan
+// ini memberi jalan keluar konkret, bukan tuduhan format generik. Teks
+// yang sama dipakai server (src/util.js, HEIC_ERROR_MESSAGE) — jaga agar
+// keduanya selaras bila diubah.
+const IMAGE_ERROR_HEIC = 'Foto ini berformat HEIC (dari galeri HP) — browser tidak bisa membacanya. Ubah ke JPG dulu (di galeri: bagikan → simpan sebagai JPG, atau ubah pengaturan kamera ke "Paling Kompatibel"), lalu upload lagi.';
 function imageErrorMessage(err) {
-  return err === 'size' ? IMAGE_ERROR_SIZE : IMAGE_ERROR_FORMAT;
+  if (err === 'size') return IMAGE_ERROR_SIZE;
+  if (err === 'heic') return IMAGE_ERROR_HEIC;
+  return IMAGE_ERROR_FORMAT;
+}
+
+// Deteksi HEIC/HEIF SEBELUM decode (v4.6.0, penyelidikan bug foto LIO):
+// browser gagal decode HEIC lewat <img> tanpa memberi tahu alasannya,
+// jadi kenali dulu dari tiga sinyal — tipe MIME, ekstensi nama, dan magic
+// bytes kotak ftyp (....ftyp + brand heic/heix/hevc/heim/heis/heif/mif1/
+// msf1). Mengembalikan true bila HEIC. File tanpa sinyal apa pun (mis.
+// JPEG dengan tipe kosong — kasus ronde 2) TETAP lanjut ke decode seperti
+// biasa; deteksi ini hanya menangkap HEIC, bukan mengembalikan gerbang
+// tipe/ekstensi yang sudah dihapus.
+async function isHeicFile(file) {
+  if (!file) return false;
+  const type = String(file.type || '').toLowerCase();
+  if (type === 'image/heic' || type === 'image/heif') return true;
+  const name = String(file.name || '').toLowerCase();
+  if (name.endsWith('.heic') || name.endsWith('.heif')) return true;
+  try {
+    const buf = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    if (buf.length < 12) return false;
+    const ascii = (a, b) => String.fromCharCode(...buf.slice(a, b));
+    if (ascii(4, 8) !== 'ftyp') return false;
+    return ['heic', 'heix', 'hevc', 'heim', 'heis', 'heif', 'mif1', 'msf1'].includes(ascii(8, 12));
+  } catch {
+    return false;
+  }
 }
 
 // Baca file gambar → resize mengikuti aspek asli (sisi terpanjang 256px)
@@ -104,6 +137,8 @@ function imageErrorMessage(err) {
 // resize tetap > 500 KB (thumbnail > 25 KB).
 async function processAvatarFile(file) {
   if (!file) return { error: 'format' };
+  // (v4.6.0): HEIC dikenali dulu — decode <img> akan gagal tanpa alasan.
+  if (await isHeicFile(file)) return { error: 'heic' };
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => {
@@ -159,6 +194,8 @@ function toast(msg) {
 // { error: 'format' | 'size' } (sama seperti processAvatarFile).
 async function processCoverFile(file) {
   if (!file) return { error: 'format' };
+  // (v4.6.0): HEIC dikenali dulu — decode <img> akan gagal tanpa alasan.
+  if (await isHeicFile(file)) return { error: 'heic' };
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => {
@@ -207,6 +244,8 @@ async function processCoverFile(file) {
 // (≈ 409.600 karakter base64).
 async function processInlineImageFile(file) {
   if (!file) return null;
+  // (v4.6.0): HEIC dikenali dulu — decode <img> akan gagal tanpa alasan.
+  if (await isHeicFile(file)) return null;
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => {
@@ -453,7 +492,7 @@ const NAV = [
   { group: 'EKONOMI', items: [
     ['market', 'Pasar', '🏪'], ['global', 'Pasar Global', '🌐'], ['fx', 'Valas', '⇄'],
     ['jobs', 'Pekerjaan', '💼'], ['companies', 'Perusahaan', '🏭'], ['contracts', 'Kontrak', '📜'],
-    ['ads', 'Nonton Iklan', '🎬'],
+    ['ads', 'Nonton Iklan', '🎬'], ['share', 'Bagikan Link', '🔗'],
   ]},
   { group: 'KOMUNITAS', items: [
     ['press', 'Pers', '📰'], ['newspaper', 'Dirikan Koran', '✏️'],
@@ -1000,9 +1039,9 @@ ROUTES.dashboard = async () => {
   ${ME.job ? `<div class="panel" id="dash-shift">
     <div class="panel-head"><h3>💼 PEKERJAAN</h3><button class="btn-text gold" type="button" data-goto="#/jobs">LIHAT ›</button></div>
     <div class="kv"><span class="k">${esc(ME.job.title)} · ${esc(ME.job.company_name || 'ADMIN')}</span><span class="v gold-text">${payLabel(ME.job)}</span></div>
-    <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah dan XP sebanding dengan energi yang dipakai.</p>
+    <p class="muted small">Satu tekan memakai SEMUA energimu sekaligus — shift demi shift sampai habis.</p>
     ${doubleXpChip()}
-    <button class="btn-gold" id="btn-dash-shift" type="button" ${c.energy <= 0 ? 'disabled' : ''}>KERJAKAN SATU GILIRAN (${Math.min(c.energy, 100)} ⚡)</button>
+    <button class="btn-gold" id="btn-dash-shift" type="button" ${c.energy <= 0 ? 'disabled' : ''}>KERJAKAN SEMUA ENERGI (${c.energy} ⚡)</button>
   </div>` : ''}
   <div class="panel" id="dash-ads">
     <div class="panel-head"><h3>🎬 NONTON IKLAN</h3><button class="btn-text gold" type="button" data-goto="#/ads">BUKA ›</button></div>
@@ -1011,6 +1050,11 @@ ROUTES.dashboard = async () => {
     <button class="btn-gold" type="button" data-goto="#/ads">▶ TONTON IKLAN (+${adsCfg.rewardGold} EMAS)</button>`
       : `<p class="muted small">Segera hadir — menu nonton iklan sedang disiapkan, menunggu aktivasi dari admin.</p>
     <button class="btn-gold" type="button" data-goto="#/ads">LIHAT MENU ›</button>`}
+  </div>
+  <div class="panel" id="dash-share">
+    <div class="panel-head"><h3>🔗 BAGIKAN LINK</h3><button class="btn-text gold" type="button" data-goto="#/share">BUKA ›</button></div>
+    <p class="muted small">Bagikan link pribadimu ke siapa pun — tiap klik unik dapat +10 emas (maks 200 emas/hari). Tanpa perlu login untuk yang mengklik.</p>
+    <button class="btn-gold" type="button" data-goto="#/share">SALIN LINK ›</button>
   </div>
   <div class="panel" id="dash-map">
     <div class="panel-head"><h3>🗺️ PETA LANGSUNG</h3><button class="btn-text gold" type="button" data-goto="#/map">BUKA PETA ›</button></div>
@@ -1269,13 +1313,13 @@ ROUTES.inventory = async () => {
     ${foods.length ? '' : '<p class="muted" style="margin-top:8px">Tidak ada roti. Beli di Pasar.</p>'}
   </div>
   <div class="panel"><h3>🥤 MINUMAN ENERGI</h3>
-    <p class="muted small">Sekali minum +1 energi (dibatasi cap energimu). Harga 0,10 emas/kaleng — beli di sini, langsung masuk inventaris.</p>
+    <p class="muted small">Sekali tekan minum sampai energi penuh (atau sampai kaleng habis) — bukan satu kaleng per tekan. Harga 0,10 emas/kaleng — beli di sini, langsung masuk inventaris.</p>
     <div class="kv"><span class="k">Kaleng yang kamu punya</span><span class="v"><b>×${(inv.items.find((i) => i.name === 'Minuman Energi' && i.tier === 1)?.qty || 0)}</b></span></div>
     <div class="kv"><span class="k">Energi sekarang</span><span class="v">${ME.citizen.energy}/${ME.citizen.energyCap || 100} ⚡</span></div>
     <div class="row">
       <label>JUMLAH BELI<input id="drink-buy-qty" type="number" value="10" min="1" max="100"></label>
       <button class="btn-gold" id="btn-drink-buy" type="button">BELI · 0,10 emas/kaleng</button>
-      <button class="btn-gold" id="btn-drink" type="button" ${(inv.items.find((i) => i.name === 'Minuman Energi' && i.tier === 1)?.qty || 0) ? '' : 'disabled'}>MINUM 1 KALENG (+1 ⚡)</button>
+      <button class="btn-gold" id="btn-drink" type="button" ${(inv.items.find((i) => i.name === 'Minuman Energi' && i.tier === 1)?.qty || 0) ? '' : 'disabled'}>MINUM SAMPAI PENUH</button>
     </div>
   </div>
   <div class="panel"><h3>📦 SEMUA BARANG</h3>
@@ -1292,7 +1336,7 @@ ROUTES.inventory = async () => {
     catch (e) { toast(e.message); }
   };
   $('#btn-drink').onclick = async () => {
-    try { const r = await post('/api/inventory/drink', { qty: 1 }); toast(`Energi +${r.gained} (sekarang ${r.energy}/${r.cap}). Sisa kaleng: ${r.remaining}.`); await refreshMe(); route(); }
+    try { const r = await post('/api/inventory/drink', {}); toast(`Energi +${r.gained} (sekarang ${r.energy}/${r.cap}). Sisa kaleng: ${r.remaining}.`); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
   };
 };
@@ -1366,13 +1410,22 @@ ROUTES.notifications = async () => {
     const list = n.notifications.filter(tab.match);
     const box = $('#notif-list');
     if (box) box.innerHTML = list.length ? list.map((x) => `
-      <div class="kv"><span class="k"><span class="chip">${esc(x.category)}</span> <b>${esc(x.title)}</b><br><small class="muted">${esc(x.content)}</small></span>
+      <div class="kv"><span class="k">${x.category === 'SISTEM'
+        ? '<span class="chip teal">⚙️ SISTEM</span>'
+        : `<span class="chip">${esc(x.category)}</span>`} <b>${esc(x.title)}</b><br><small class="muted">${esc(x.content)}</small></span>
       <span class="v small muted" style="white-space:nowrap;flex-shrink:0">${ago(x.created_at)}</span></div>`).join('')
       : '<p class="muted">Belum ada notifikasi di tab ini.</p>';
     $$('#notif-tabs [data-ntab]').forEach((b) => b.classList.toggle('active', b.dataset.ntab === tab.key));
   };
   $('#page').innerHTML = page('NOTIFIKASI', '', `
-  <div class="panel"><h3>📣 APA YANG BARU</h3>
+  <div class="panel">
+    <div class="panel-head"><h3>🔔 Pusat Notifikasi</h3><button class="btn-ghost btn-sm" id="btn-read-all">Tandai Semua Dibaca</button></div>
+    <div class="tabs" id="notif-tabs">${NOTIF_TABS.map((t) => `<button class="tab ${t.key === notifTab ? 'active' : ''}" type="button" data-ntab="${t.key}">${t.label} (${n.notifications.filter(t.match).length})</button>`).join('')}</div>
+    <div id="notif-list"></div>
+  </div>
+  <div class="panel" id="notif-announcements">
+    <div class="panel-head"><h3>📣 APA YANG BARU</h3><span class="chip">Pengumuman update game</span></div>
+    <p class="muted small">Ini PENGUMUMAN resmi update game dari admin — berbeda dari notifikasi pribadimu di atas (yang bertanda ⚙️ SISTEM itu pesan sistem untukmu, bukan pengumuman).</p>
     ${ann.announcements.length ? ann.announcements.map((a) => `
       <div class="${a.read ? '' : 'announce-unread'}" style="margin-bottom:14px">
         <div class="kv"><span class="k"><span class="chip">Update #${a.num}</span> <b>${esc(a.title)}</b><br><small class="muted">${fmtDate(a.created_at)}</small></span>
@@ -1380,11 +1433,6 @@ ROUTES.notifications = async () => {
         <p class="announce-body">${esc(a.body)}</p>
       </div>`).join('')
       : '<p class="muted">Belum ada pengumuman.</p>'}
-  </div>
-  <div class="panel">
-    <div class="panel-head"><h3>🔔 Pusat Notifikasi</h3><button class="btn-ghost btn-sm" id="btn-read-all">Tandai Semua Dibaca</button></div>
-    <div class="tabs" id="notif-tabs">${NOTIF_TABS.map((t) => `<button class="tab ${t.key === notifTab ? 'active' : ''}" type="button" data-ntab="${t.key}">${t.label} (${n.notifications.filter(t.match).length})</button>`).join('')}</div>
-    <div id="notif-list"></div>
   </div>`);
   renderNotifList();
   $$('#notif-tabs [data-ntab]').forEach((b) => b.onclick = () => { notifTab = b.dataset.ntab; renderNotifList(); });
@@ -1616,6 +1664,7 @@ ROUTES.admin = async (q) => {
   if (q === 'gift-all') return renderAdminGiftAll();
   if (q === 'announcements') return renderAdminAnnouncements();
   if (q === 'flags') return renderAdminFlags();
+  if (q === 'share') return renderAdminShare();
   if (q === 'inbox' || (q && q.startsWith('inbox?'))) {
     const params = new URLSearchParams((q.split('?')[1] || ''));
     return renderAdminInbox(params.get('status') || '');
@@ -1636,6 +1685,7 @@ ROUTES.admin = async (q) => {
     <button class="tab" data-goto="#/admin/inbox">📥 Laporan &amp; Saran</button>
     <button class="tab" data-goto="#/admin/announcements">📣 Pengumuman</button>
     <button class="tab" data-goto="#/admin/flags">🚩 Tanda Pasar</button>
+    <button class="tab" data-goto="#/admin/share">🔗 Share Link</button>
   </div>
   <div class="panel"><h3>🔍 CARI PEMAIN</h3>
     <p class="muted small">Jalan darurat admin (kode bootstrap): <b>${status?.bootstrapActive ? 'AKTIF — registrasi dengan kode yang benar bisa membuat admin' : 'TIDAK AKTIF — tidak ada jalan membuat admin lewat registrasi (aman)'}</b></p>
@@ -1737,6 +1787,38 @@ ROUTES.admin = async (q) => {
   });
 };
 
+// ---------- PANEL ADMIN: STATISTIK SHARE LINK (v4.6.0) ----------
+// Read-only: siapa membagikan link, berapa klik terhitung, berapa emas
+// didapat (hari ini + total). Data dari tabel klik yang SAMA dengan
+// fitur share (GET /api/admin/share) — bukan hitungan terpisah.
+async function renderAdminShare() {
+  const data = await api('/api/admin/share');
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Statistik share link harian — read-only.', `
+  <div class="tabs">
+    <button class="tab" data-goto="#/admin">👥 Pemain</button>
+    <button class="tab" data-goto="#/admin/appeals">📬 Banding</button>
+    <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
+    <button class="tab" data-goto="#/admin/inbox">📥 Laporan &amp; Saran</button>
+    <button class="tab" data-goto="#/admin/announcements">📣 Pengumuman</button>
+    <button class="tab" data-goto="#/admin/flags">🚩 Tanda Pasar</button>
+    <button class="tab active">🔗 Share Link</button>
+  </div>
+  <div class="panel"><h3>🔗 STATISTIK SHARE LINK (HARI INI ${esc(data.day)})</h3>
+    <p class="muted small">Klik terhitung = klik unik (1 IP = 1 klik/hari/link) yang memberi +${fmt(data.perClick)} emas. Klik duplikat-IP / di luar kuota tetap tercatat di audit, tapi tidak menambah emas.</p>
+    <div class="kv"><span class="k">Pemain yang membagikan</span><span class="v">${fmt(data.summary.players)}</span></div>
+    <div class="kv"><span class="k">Klik terhitung hari ini</span><span class="v">${fmt(data.summary.clicksToday)}</span></div>
+    <div class="kv"><span class="k">Emas dari share hari ini</span><span class="v gold-text">${fmt(data.summary.goldToday)} emas</span></div>
+    <div class="kv"><span class="k">Klik terhitung (total)</span><span class="v">${fmt(data.summary.clicksTotal)}</span></div>
+    <div class="kv"><span class="k">Emas dari share (total)</span><span class="v gold-text">${fmt(data.summary.goldTotal)} emas</span></div>
+  </div>
+  <div class="panel"><h3>📊 PER PEMAIN (URUT EMAS TERBANYAK)</h3>
+    ${data.rows.length ? data.rows.map((r) => `
+      <div class="kv"><span class="k">${esc(r.username)} <small class="muted">${esc(r.publicId)}</small><br><small class="muted">Hari ini: ${fmt(r.clicksToday)} klik · ${fmt(r.goldToday)} emas</small></span>
+      <span class="v">Total: ${fmt(r.clicksTotal)} klik · <b class="gold-text">${fmt(r.goldTotal)} emas</b></span></div>`).join('')
+      : '<p class="muted">Belum ada yang membagikan link.</p>'}
+  </div>`);
+}
+
 // ---------- PANEL ADMIN: TAB BANDING ----------
 async function renderAdminAnnouncements() {
   const data = await api('/api/admin/announcements');
@@ -1745,6 +1827,7 @@ async function renderAdminAnnouncements() {
     <button class="tab" data-goto="#/admin">👥 Pemain</button>
     <button class="tab active">📣 Pengumuman</button>
     <button class="tab" data-goto="#/admin/flags">🚩 Tanda Pasar</button>
+    <button class="tab" data-goto="#/admin/share">🔗 Share Link</button>
   </div>
   <div class="panel"><h3>📣 BUAT PENGUMUMAN BARU</h3>
     <p class="muted small">Pengumuman tampil di Notifikasi pemain, sebagai modal saat login (bila belum dibaca), dan di arsip Buku Panduan → Riwayat Update. Nomor update terisi otomatis sesuai urutan terbit.</p>
@@ -2410,9 +2493,9 @@ ROUTES.jobs = async () => {
   </div>
   ${myJob ? `<div class="panel"><h3>💼 PEKERJAANMU</h3>
     <div class="kv"><span class="k">${esc(myJob.title)} · ${esc(myJob.company_name || 'ADMIN')}</span><span class="v">${payLabel(myJob)}</span></div>
-    <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah DAN XP sebanding dengan energi yang dipakai (50 energi → ~50% hadiah + 10 XP; 1 energi pun tetap dapat 1 XP). ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan (tarif sesuai UU yang berlaku).'}</p>
+    <p class="muted small">Satu tekan memakai SEMUA energimu sekaligus — shift demi shift sampai habis (140 energi → shift 100 + shift 40 dalam satu aksi). Hadiah DAN XP sebanding dengan energi yang dipakai (50 energi → ~50% hadiah + 10 XP; 1 energi pun tetap dapat 1 XP). ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan (tarif sesuai UU yang berlaku).'}</p>
     ${doubleXpChip()}
-    <div class="row"><button class="btn-gold" id="btn-shift" ${ME.citizen.energy <= 0 ? 'disabled' : ''}>KERJAKAN SATU GILIRAN (${Math.min(ME.citizen.energy, 100)} ⚡)</button>
+    <div class="row"><button class="btn-gold" id="btn-shift" ${ME.citizen.energy <= 0 ? 'disabled' : ''}>KERJAKAN SEMUA ENERGI (${ME.citizen.energy} ⚡)</button>
     <button class="btn-ghost" id="btn-quit">Berhenti Kerja</button></div>
     ${autoWorkBlock()}</div>` : `${doubleXpChip()}`}
   <div class="panel"><h3>📍 DI WILAYAHMU${myRegionName ? ' — ' + esc(myRegionName.toUpperCase()) : ''}</h3>
@@ -2457,7 +2540,7 @@ ROUTES.companies = async () => {
     <p class="small">• <b>Produksi harian:</b> setiap perusahaan menghasilkan produk setiap hari (otomatis saat pergantian hari) dan langsung masuk inventaris pemilik.</p>
     <p class="small">• <b>Karyawan:</b> setiap shift karyawan menambah produk ke inventaris pemilik — sekitar 1/10 produksi harian per shift penuh. Produk kecil langsung masuk; produk besar seperti Drone terakumulasi beberapa shift.</p>
     <p class="small">• <b>Gaji:</b> gaji karyawan dibayar oleh sistem, <b>bukan</b> dipotong dari pemilik — mendirikan perusahaan tidak membuatmu keluar uang tiap giliran.</p>
-    <p class="small">• <b>Bahan baku:</b> semua perusahaan (kecuali Pabrik Sumber Daya) butuh bahan baku dari inventaris pemilik — Pabrik: 2× Besi Mentah per Bahan Bangunan; Industri Ringan: 1× Gandum Mentah per Makanan; Industri Berat: 1× Besi Mentah + 1× Minyak Mentah per Drone. Produksi maupun bonus shift berhenti bila bahan habis.</p>
+    <p class="small">• <b>Bahan baku:</b> semua perusahaan (kecuali Pabrik Sumber Daya) butuh bahan baku dari <b>STOK perusahaan</b> — pemilik mengisi stok dulu lewat ISI BAHAN di kartu perusahaannya (bahan pindah dari inventaris ke stok). Pabrik: 2× Besi Mentah per Bahan Bangunan; Industri Ringan: 1× Gandum Mentah per Makanan; Industri Berat: 1× Besi Mentah + 1× Minyak Mentah per Drone. Produksi maupun bonus shift berhenti bila stok habis (pemilik &amp; pekerja diberi tahu).</p>
     <p class="small">• <b>Milikmu:</b> pemilik bisa mengubah nama, tentang, dan bahan yang diproduksi, serta memasang foto perusahaan.</p>
   </div>
   <div class="panel"><h3>➕ DIRIKAN PERUSAHAAN</h3>
@@ -2483,6 +2566,13 @@ ROUTES.companies = async () => {
       ${c.about ? `<p class="small">${esc(c.about)}</p>` : ''}
       <p class="muted small">🎁 Bonus shift: ${esc(c.bonus_text || '')} · Total dari karyawan: ${fmt(c.bonus_given || 0)} unit</p>
       <p class="muted small">🧱 ${esc(c.input_text || '')}</p>
+      <p class="muted small">📦 Stok bahan: ${c.stock?.length ? c.stock.map((s) => `${fmt(s.qty)}× ${esc(s.commodity)}`).join(', ') : 'KOSONG — isi dulu supaya produksi &amp; bonus shift jalan.'}</p>
+      ${c.inputs?.length ? `<div class="row"><select id="stock-commodity-${c.id}">${c.inputs.map((i) => `<option>${esc(i)}</option>`).join('')}</select><input placeholder="Jumlah" type="number" min="1" value="10" id="stock-qty-${c.id}" style="max-width:100px"><button class="btn-gold btn-sm" data-stockco="${c.id}">📦 ISI BAHAN</button></div>
+      <p class="muted small">Bahan diambil dari inventarismu ke stok perusahaan.</p>` : ''}
+      ${c.jobs?.length ? `<div style="margin-top:8px"><p class="muted small">💼 Lowonganmu (edit upah):</p>${c.jobs.map((j) => `
+        <div class="row"><span class="small" style="flex:1">${esc(j.title)} · ${fmt(j.workers || 0)} pekerja · sekarang ${fmtRp(j.salary)}</span>
+        <input placeholder="Upah baru (Rp)" type="number" min="1" id="wage-${j.id}" style="max-width:130px">
+        <button class="btn-gold btn-sm" data-wagejob="${j.id}">SIMPAN UPAH</button></div>`).join('')}</div>` : ''}
       <div class="row"><input placeholder="Judul lowongan baru" id="job-title-${c.id}"><input placeholder="Gaji (Rp)" type="number" id="job-salary-${c.id}" style="max-width:120px">
       <button class="btn-gold btn-sm" data-newjob="${c.id}">BUKA LOWONGAN</button></div>
       <div class="row" style="margin-top:8px"><button class="btn-gold btn-sm" data-editco="${c.id}">✏️ EDIT</button>
@@ -2518,6 +2608,28 @@ ROUTES.companies = async () => {
     try {
       await post(`/api/companies/${id}/job`, { title: $('#job-title-' + id).value.trim(), salary: rpToUsd(Number($('#job-salary-' + id).value)), salary_type: 'fixed', seats: 4 });
       toast('Lowongan dibuka.');
+      route();
+    } catch (e) { toast(e.message); }
+  });
+  // Isi stok bahan perusahaan (v4.6.0): hanya pemilik — tombol hanya
+  // dirender di kartu PERUSAHAANKU sendiri, server memverifikasi (403).
+  $$('[data-stockco]').forEach((b) => b.onclick = async () => {
+    const id = b.dataset.stockco;
+    try {
+      const r = await post(`/api/companies/${id}/stock`, { commodity: $('#stock-commodity-' + id).value, qty: Number($('#stock-qty-' + id).value) });
+      toast(`Stok diisi: ${r.stock.map((s) => `${fmt(s.qty)}× ${s.commodity}`).join(', ')}.`);
+      route();
+    } catch (e) { toast(e.message); }
+  });
+  // Edit upah lowongan perusahaan (v4.6.0): hanya pemilik perusahaan —
+  // server memverifikasi (403 bila bukan pemilik / lowongan ADMIN).
+  $$('[data-wagejob]').forEach((b) => b.onclick = async () => {
+    const id = b.dataset.wagejob;
+    const rp = Number($('#wage-' + id).value);
+    if (!rp || rp <= 0) { toast('Isi upah baru (Rp) dulu.'); return; }
+    try {
+      await api(`/api/jobs/${id}`, { method: 'PATCH', body: { salary: rpToUsd(rp) } });
+      toast('Upah diperbarui.');
       route();
     } catch (e) { toast(e.message); }
   });
@@ -2899,6 +3011,14 @@ ROUTES.country = async () => {
       <span class="v">${t.amount >= 0 ? '+' : ''}${t.currency === 'gold' ? fmt(t.amount, 2) + ' emas' : fmtRp(t.amount)}</span></div>`).join('')}`
       : '<p class="muted small" style="margin-top:8px">Belum ada pemasukan pajak — kas negara masih 0 sampai ada yang berdagang.</p>'}
   </div>
+  <div class="panel"><h3>🎁 SUMBANG KE KAS NEGARA</h3>
+    <p class="muted small">Sumbanganmu masuk kas negaramu dan tercatat di ARUS KAS di atas. Tidak ada hadiah balik — ini murni sumbangan untuk negaramu.</p>
+    <div class="row"><input id="donate-gold" type="number" min="1" placeholder="Jumlah emas" style="flex:1"><button class="btn-gold btn-sm" id="btn-donate-gold">SUMBANG EMAS</button></div>
+    <div class="row"><input id="donate-rp" type="number" min="1" placeholder="Jumlah (Rp)" style="flex:1"><button class="btn-gold btn-sm" id="btn-donate-rp">SUMBANG RUPIAH</button></div>
+    ${d.myDonateItems?.length ? `<div class="row"><select id="donate-commodity">${d.myDonateItems.map((i) => `<option value="${esc(i.name)}">${esc(i.name)} (punya ${fmt(i.qty)})</option>`).join('')}</select><input id="donate-qty" type="number" min="1" value="1" style="max-width:90px"><button class="btn-gold btn-sm" id="btn-donate-item">SUMBANG BAHAN</button></div>
+    <p class="muted small">Bahan disumbangkan dari inventarismu (tier 1) — dicatat di kas negara setara nilai acuannya.</p>`
+      : '<p class="muted small">Kamu tidak punya bahan tier 1 di inventaris untuk disumbangkan.</p>'}
+  </div>
   <div class="panel"><h3>⚖️ WEWENANG MENTERI</h3>
     ${d.activeBudget ? `<div class="kv"><span class="k">Anggaran aktif</span><span class="v">${{ claim: 'Pasokan +2 Emas', train: 'Latihan −10%', war: 'Dana Perang +10%' }[d.activeBudget.kind] || d.activeBudget.kind} · sampai ${fmtDate(d.activeBudget.until)}</span></div>` : '<p class="muted small">Tidak ada anggaran aktif.</p>'}
     ${d.mobilizationUntil > Date.now() ? `<div class="kv"><span class="k">Mobilisasi</span><span class="v">aktif sampai ${fmtDate(d.mobilizationUntil)} · +10% kerusakan perang</span></div>` : ''}
@@ -2955,6 +3075,19 @@ ROUTES.country = async () => {
   // page() mengembalikan <h2> judul + sub + body — judul/sub dihitung di
   // atas supaya kedua keadaan (bernegara / merdeka) memakai pola yang sama.
   $('#page').innerHTML = page(title, sub, body);
+  // Sumbang ke kas negara (v4.6.0, saran LIO): emas / Rupiah / bahan.
+  $('#btn-donate-gold')?.addEventListener('click', async () => {
+    try { const r = await post('/api/country/donate', { type: 'gold', amount: Number($('#donate-gold').value) }); toast(`Sumbangan ${fmt(r.amount)} emas diterima. Kas negara kini ${fmt(r.treasury)} emas.`); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-donate-rp')?.addEventListener('click', async () => {
+    try { const r = await post('/api/country/donate', { type: 'usd', amount: rpToUsd(Number($('#donate-rp').value)) }); toast(`Sumbangan ${fmtRp(r.amount)} diterima.`); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-donate-item')?.addEventListener('click', async () => {
+    try { const r = await post('/api/country/donate', { type: 'item', commodity: $('#donate-commodity').value, qty: Number($('#donate-qty').value) }); toast(`Sumbangan ${r.qty}× ${r.commodity} diterima (setara ${fmtRp(r.amount)}).`); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
   $('#btn-budget')?.addEventListener('click', async () => {
     try { await post('/api/country/budget', { kind: $('#budget-kind').value, amount: Number($('#budget-amount').value) }); toast('Anggaran diusulkan! Voting parlemen 3 hari.'); route(); }
     catch (e) { toast(e.message); }
@@ -4125,6 +4258,45 @@ ROUTES.ads = async () => {
   <div class="row"><button class="btn-gold" id="btn-watch-ad" type="button">▶ TONTON IKLAN (+${ads.rewardGold} EMAS)</button></div>
   <p class="muted small" id="ad-status"></p></div>`);
   $('#btn-watch-ad').onclick = () => watchRewardedAd(ads);
+};
+
+// ---------- BAGIKAN LINK (v4.6.0) ----------
+// Link share pribadi: tiap klik unik (1 IP = 1 klik per hari per link)
+// memberi +10 emas ke pemilik, maks 200 emas/hari. Link untuk publik —
+// yang mengklik tidak perlu login/akun.
+ROUTES.share = async () => {
+  const d = await api('/api/share');
+  const url = location.origin + '/s/' + d.code;
+  const t = d.today || { clicks: 0, gold: 0, remaining: 200, cap: 200 };
+  const tot = d.total || { clicks: 0, gold: 0 };
+  $('#page').innerHTML = page('🔗 BAGIKAN LINK', 'Bagikan linkmu — tiap klik unik dapat emas.', `
+  <div class="panel"><h3>🔗 LINK PRIBADIMU</h3>
+    <p class="muted small">Siapa pun bisa mengklik link ini TANPA login — kliknya tetap terhitung untukmu.</p>
+    <div class="row"><input id="share-url" value="${esc(url)}" readonly style="flex:1"><button class="btn-gold" id="btn-copy-share" type="button">📋 SALIN LINK</button></div>
+    <p class="muted small" id="share-copy-note"></p>
+  </div>
+  <div class="panel"><h3>📊 STATISTIK HARI INI</h3>
+    <div class="kv"><span class="k">Klik terhitung hari ini</span><span class="v"><b>${fmt(t.clicks)}</b> / ${fmt(d.maxClicksPerDay || 20)}</span></div>
+    <div class="kv"><span class="k">Emas didapat hari ini</span><span class="v gold-text"><b>${fmt(t.gold)} emas</b></span></div>
+    <div class="kv"><span class="k">Sisa kuota hari ini</span><span class="v"><b>${fmt(t.remaining)} emas</b> (maks ${fmt(t.cap || 200)}/hari)</span></div>
+    <div class="kv"><span class="k">Total sepanjang waktu</span><span class="v">${fmt(tot.clicks)} klik · ${fmt(tot.gold)} emas</span></div>
+  </div>
+  <div class="panel"><h3>📖 ATURAN</h3>
+    <p class="small">• Tiap klik unik = <b>+${fmt(d.perClick || 10)} emas</b> untukmu.</p>
+    <p class="small">• <b>1 IP = 1 klik terhitung per hari</b> untuk link yang sama — klik kedua dari IP yang sama di hari yang sama tidak dihitung lagi.</p>
+    <p class="small">• Maksimal <b>${fmt(t.cap || 200)} emas/hari</b> (=${fmt(d.maxClicksPerDay || 20)} klik unik/hari). Kuota reset tiap hari.</p>
+    <p class="small">• Klik dari kamu sendiri tidak dihitung. Berbeda dengan referral: ini hadiah klik, bukan hadiah pendaftaran (referral tetap cair saat rekrutan mencapai Level 3).</p>
+  </div>`);
+  $('#btn-copy-share').onclick = async () => {
+    const input = $('#share-url');
+    try {
+      await navigator.clipboard.writeText(input.value);
+      $('#share-copy-note').textContent = 'Link disalin! Bagikan ke teman-temanmu.';
+    } catch {
+      input.select();
+      $('#share-copy-note').textContent = 'Salin manual: link sudah dipilih, tekan Ctrl+C.';
+    }
+  };
 };
 
 // ---------- MEJA BANTUAN / KONTAK / BUKU ----------

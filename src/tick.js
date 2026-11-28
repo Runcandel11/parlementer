@@ -142,25 +142,29 @@ export async function runDailyTick() {
     // baku (PRODUCTION_INPUT di game.js — satu sumber kebenaran dengan
     // bonus shift). Bila bahan kurang, produksi hanya sebanyak bahannya
     // cukup (bisa 0 + notifikasi).
+    // (v4.6.0, saran LIO): bahan diambil dari STOK PERUSAHAAN
+    // (company_stock — diisi pemilik lewat halaman Industri), BUKAN LAGI
+    // diam-diam dari inventaris pemilik.
     let produce = amount;
     const inputs = PRODUCTION_INPUT[co.type] || [];
     const usedInputs = [];
     for (const input of inputs) {
       const inputRow = await one('SELECT id FROM commodities WHERE name = ?', [input.commodity]);
-      const stock = inputRow ? await one('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1', [co.owner_id, inputRow.id]) : null;
+      const stock = inputRow ? await one('SELECT * FROM company_stock WHERE company_id = ? AND commodity_id = ?', [co.id, inputRow.id]) : null;
       const have = stock?.qty || 0;
       produce = Math.min(produce, Math.floor(have / input.perUnit));
       usedInputs.push({ input, stock, have });
     }
     if (inputs.length && produce <= 0) {
       await notify(co.owner_id, 'EKONOMI', `${co.name} kekurangan bahan`,
-        `${co.name} tidak berproduksi hari ini: butuh ${inputs.map((i) => `${amount * i.perUnit}× ${i.commodity}`).join(' + ')} (punya ${inputs.map((i, idx) => `${usedInputs[idx].have}× ${i.commodity}`).join(', ')}).`);
+        `${co.name} tidak berproduksi hari ini: stok bahan habis (butuh ${inputs.map((i) => `${amount * i.perUnit}× ${i.commodity}`).join(' + ')}; stok sekarang ${inputs.map((i, idx) => `${usedInputs[idx].have}× ${i.commodity}`).join(', ')}). Isi stok dari halaman Industri → PERUSAHAANKU → ISI BAHAN.`);
       continue;
     }
     for (const { input, stock } of usedInputs) {
       const used = produce * input.perUnit;
       if (used <= 0) continue;
-      const took = await run('UPDATE inventory SET qty = qty - ? WHERE id = ? AND qty >= ?', [used, stock.id, used]);
+      if (!stock) { produce = 0; break; } // stok hilang bersamaan — lewati hari ini
+      const took = await run('UPDATE company_stock SET qty = qty - ? WHERE id = ? AND qty >= ?', [used, stock.id, used]);
       if (!took.changes) { produce = 0; break; } // stok berubah bersamaan — lewati hari ini
     }
     if (produce <= 0) continue;

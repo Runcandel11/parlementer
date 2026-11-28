@@ -47,16 +47,22 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   1 penawaran terbuka per arah).
 - **Pekerjaan:** lowongan ADMIN (dibayar bahan mentah, lihat di atas) +
   lowongan perusahaan pemain (tetap / bagi hasil). Menu Pekerjaan default
-  hanya lowongan wilayah pemain saat ini.
+  hanya lowongan wilayah pemain saat ini. Satu tekan tombol kerja memakai
+  SEMUA energi sekaligus (shift berturut-turut sampai habis).
 - **Perusahaan:** 4 jenis — Pabrik Sumber Daya 100 emas, Pabrik 100 emas,
   Industri Ringan 250 emas, Industri Berat 500 emas; produksi harian masuk
-  inventaris pemilik; rantai produksi penuh (tiap jenis butuh bahan baku);
-  bonus ~1/10 produksi tiap shift; bisa diedit + pasang foto (maks 500 KB).
+  inventaris pemilik; rantai produksi penuh (tiap jenis butuh bahan baku —
+  pemilik mengisi STOK perusahaan dulu lewat ISI BAHAN, bukan lagi diam-diam
+  dari inventaris; stok habis → produksi & bonus shift berhenti + pemilik &
+  pekerja diberi tahu); bonus ~1/10 produksi tiap shift; bisa diedit + pasang
+  foto (maks 500 KB); upah lowongan bisa diedit pemilik (1–1000 USD/shift).
 - **Negara:** TIDAK ADA negara awal — dunia mulai terpecah, warga mendirikan
   negara (Level 10 + 100 emas; pendiri bukan otomatis presiden). Ideologi
   (Konservatisme/Sosialisme/Liberalisme/Nasionalisme) + sistem pemerintahan
   (Presidensial/Parlementer/Imperial/Diktator) berefek nyata (pajak, upah,
   klaim, kerusakan perang). Unifikasi wilayah lewat voting warga wilayah itu.
+  Warga bisa menyumbang emas / Rupiah / bahan ke kas negaranya sendiri
+  (tercatat di arus kas).
 - **Partai:** dirikan butuh Level 10 + 50 emas; gabung langsung / lamaran / tertutup.
 - **Parlemen:** dibuka **2 Desember 2026** (sebelumnya terkunci); 60 kursi,
   mayoritas 31, usul UU (Level 5 + 5 emas), voting 7 hari. UU bisa mengubah
@@ -85,7 +91,8 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
 - **Reputasi dagang + demografi:** tiap transaksi pasar selesai +1 reputasi
   (pembeli & penjual; tier Pedagang Baru → Saudagar Besar); halaman wilayah
   menampilkan demografi + kekuatan militer wilayah.
-- **Minuman energi:** 0,10 emas/kaleng, +1 energi (beli + minum di Inventaris).
+- **Minuman energi:** 0,10 emas/kaleng, +1 energi (beli + minum di Inventaris;
+  satu tekan minum sekaligus sampai energi penuh, sisa kaleng tetap di inventaris).
 - **Konvoi:** bangun dengan BAHAN MENTAH (bukan emas) — RS Lapangan, Sekolah
   Keliling, Gudang Industri, Pos Militer — masing-masing memberi bonus nyata.
 - **Tiket (Laporan & Saran):** pemain mengirim saran/laporan dari dalam game;
@@ -108,6 +115,16 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   bonus ke-6+ hari itu ditunda). Form daftar ada field Kode Referral + link
   share `?ref=CODE`. Profil menampilkan kode, link share, jumlah pemakai, dan
   total emas referral yang sudah cair.
+- **Bagikan Link (harian):** setiap pemain punya link pribadi stabil
+  `/s/<kode>` (tombol 🔗 di top bar, di samping tombol iklan). Siapa pun bisa
+  mengklik TANPA login; tiap klik unik memberi pemilik **+10 emas**, anti-fraud
+  **1 IP = 1 klik terhitung per hari per link**, maks **200 emas/hari**
+  (= 20 klik unik). Klik + emas tercatat untuk audit; panel Admin menampilkan
+  statistik share per pemain (klik & emas hari ini + total). Sistem ini
+  TERPISAH dari referral (yang cair saat pendaftar Level 3).
+- **Notifikasi:** pusat notifikasi di ATAS halaman (sebelum pengumuman
+  "APA YANG BARU"); notifikasi sistem ditandai chip teal ⚙️ SISTEM agar
+  terbedakan dari pengumuman update game.
 - **ID pemain:** setiap pemain punya ID publik `PL-000001` dst. (dari id
   database), tampil di Profil dan panel Admin.
 - **Toko:** harga rupiah — Premium 1 bln Rp5.000, 3 bln Rp15.000, 6 bln Rp25.000,
@@ -141,26 +158,28 @@ Variabel environment (lihat `.env.example`):
 ## Tes
 
 ```bash
-npm test            # e2e HTTP di SQLite (DB sekali pakai): 906 pemeriksaan
+npm test            # e2e HTTP di SQLite (DB sekali pakai): 1046 pemeriksaan
 npm run test:pg     # jalur Postgres via pg-mem: 46 pemeriksaan
 npm run test:modal  # DOM modal laporan (jsdom): 155 pemeriksaan
 npm run test:all    # pg + e2e + modal + chat-dom
-npm run test:pg-verify # migrasi initDb di Postgres 16 sungguhan: 144 pemeriksaan
+npm run test:pg-verify # migrasi initDb di Postgres 16 sungguhan: 178 pemeriksaan
 npm run test:conc    # balapan HTTP (pasar/klaim/shift/pencapaian/blokir) di Postgres 16: 38 pemeriksaan
 npm run test:stage7-dom # DOM integrasi Tahap 7 (jsdom): 28 pemeriksaan
 npm run test:load    # stress test lokal (20 + 50 VU): hasil mentah docs/loadtest-2026-11-28.json
 npm run test:recovery # uji pemulihan (SIGKILL di tengah burst): 13 pemeriksaan
 # Suite DOM lain: test:chat-dom (43), test:market-dom (14),
 # test:ui-batch2 (53), test:landing-glass (40), test:photo-upload (32),
-# test:profile-admin (49), test:ssl (6), test:jobs-region (22),
+# test:profile-admin (52), test:ssl (6), test:jobs-region (22),
 # test:ui-icons (18), test:company-dom (25), test:map-dom (47),
-# test:credit-dom (22), test:ticket-dom (56), test:stage6-dom (27).
-# Total seluruh suite: 1771 pemeriksaan (+ 13 uji pemulihan).
+# test:credit-dom (22), test:ticket-dom (56), test:stage6-dom (27),
+# test:bottom-nav (29), test:ads (20), test:offside (24),
+# test:topbar (31), test:share (28), test:xp-rollback (49).
+# Total seluruh suite: 2129 pemeriksaan (+ 13 uji pemulihan).
 ```
 
-Hasil terakhir (28 Nov 2026, Tahap 8 v4.2.0): **e2e 906/906 lolos,
-pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 144/144 lolos,
-pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos** — dan semua suite
+Hasil terakhir (28 Nov 2026, v4.6.0): **e2e 1046/1046 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 178/178 lolos,
+pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos** — dan semua suite
 DOM lain hijau (lihat daftar di atas). Catatan: e2e pernah sekali
 menghitung 907/907 (satu check kondisional yang kadang tereksekusi,
 0 gagal di 7 run berturut-turut) — flake jumlah, bukan kegagalan.

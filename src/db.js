@@ -380,6 +380,10 @@ CREATE TABLE IF NOT EXISTS citizens (
   auto_work_shifts INTEGER NOT NULL DEFAULT 0,
   auto_work_paused INTEGER NOT NULL DEFAULT 0,
   auto_work_last_at BIGINT NOT NULL DEFAULT 0,
+  -- Link share harian (v4.6.0): kode acak per warga (unik, stabil) untuk
+  -- URL publik /s/<kode>; NULL sampai warga pertama kali membuka halaman
+  -- Bagikan Link (dibuat malas di GET /api/share).
+  share_code TEXT,
   energy_spent_today INTEGER NOT NULL DEFAULT 0,
   chat_today INTEGER NOT NULL DEFAULT 0,
   last_chat_at BIGINT NOT NULL DEFAULT 0,
@@ -610,6 +614,32 @@ CREATE TABLE IF NOT EXISTS companies (
   bonus_given INTEGER NOT NULL DEFAULT 0,
   bonus_warned_at BIGINT NOT NULL DEFAULT 0,
   created_at BIGINT NOT NULL
+);
+-- Stok bahan perusahaan (v4.6.0, saran LIO): bahan produksi TIDAK LAGI
+-- diambil diam-diam dari inventaris pemilik — pemilik mengisi stok ini
+-- dulu (POST /api/companies/:id/stock); produksi harian (tick) + bonus
+-- shift mengambil dari sini. Satu baris per (perusahaan, komoditas).
+CREATE TABLE IF NOT EXISTS company_stock (
+  id ${id},
+  company_id INTEGER NOT NULL REFERENCES companies(id),
+  commodity_id INTEGER NOT NULL REFERENCES commodities(id),
+  qty INTEGER NOT NULL DEFAULT 0 CHECK (qty >= 0),
+  UNIQUE(company_id, commodity_id)
+);
+-- Jejak klik link share (v4.6.0): satu baris per (pemilik link, IP, hari)
+-- — IP yang sama di hari yang sama untuk link yang sama TIDAK dihitung
+-- lagi (UNIQUE). gold_given = 10 bila klik terhitung & kuota harian
+-- belum habis, 0 bila duplikat-IP tidak mungkin (dicegah UNIQUE) atau
+-- kuota 200/hari sudah habis. Jejak ini = audit admin (siapa pemilik,
+-- berapa klik terhitung, berapa emas dibayar).
+CREATE TABLE IF NOT EXISTS share_clicks (
+  id ${id},
+  owner_id INTEGER NOT NULL REFERENCES citizens(id),
+  ip TEXT NOT NULL,
+  day TEXT NOT NULL,
+  gold_given INTEGER NOT NULL DEFAULT 0,
+  created_at BIGINT NOT NULL,
+  UNIQUE(owner_id, ip, day)
 );
 CREATE TABLE IF NOT EXISTS parties (
   id ${id},
@@ -1013,6 +1043,8 @@ CREATE INDEX IF NOT EXISTS idx_market_tx_seller ON market_tx(seller_id);
 CREATE INDEX IF NOT EXISTS idx_market_buy_orders ON market_buy_orders(scope, commodity_id);
 CREATE INDEX IF NOT EXISTS idx_market_buy_orders_buyer ON market_buy_orders(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_treasury_tx_created ON treasury_tx(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_share_code ON citizens(share_code) WHERE share_code IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_share_clicks_owner_day ON share_clicks(owner_id, day);
 CREATE INDEX IF NOT EXISTS idx_market_flags_created ON market_flags(created_at);
 CREATE INDEX IF NOT EXISTS idx_announcement_reads_citizen ON announcement_reads(citizen_id);
 CREATE INDEX IF NOT EXISTS idx_convoys_citizen ON convoys(citizen_id, expires_at);
@@ -1222,6 +1254,7 @@ export async function initDb() {
     await migrateStage7Columns(t);
     await migrateStage8Columns(t);
     await migrateAutoWorkColumns(t);
+    await migrateShareColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1283,7 +1316,7 @@ async function runDataFixups() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'company_stock', 'share_clicks', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -1300,7 +1333,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 20;
+const SCHEMA_VERSION = 21;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1901,6 +1934,21 @@ async function migrateAutoWorkColumns(t) {
   await addCol('citizens', 'auto_work_shifts', 'INTEGER NOT NULL DEFAULT 0');
   await addCol('citizens', 'auto_work_paused', 'INTEGER NOT NULL DEFAULT 0');
   await addCol('citizens', 'auto_work_last_at', 'BIGINT NOT NULL DEFAULT 0');
+}
+
+// Migrasikan kolom link share harian (v4.6.0) untuk database yang sudah
+// ada: citizens.share_code. Idempotent — kolom yang sudah ada tidak
+// disentuh. (Tabel share_clicks dibuat lewat schema() di atas.)
+async function migrateShareColumns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('citizens', 'share_code', 'TEXT');
 }
 
 // Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di

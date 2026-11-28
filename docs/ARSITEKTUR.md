@@ -87,6 +87,10 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
 | Slot konvoi | `convoySlotsFor(citizen)` (`game.js`) | GET + POST `/api/convoy` |
 | UU yang tersedia | `LAW_KINDS` (`game.js`) | usul UU, `lawEffectText`, tick |
 | Harga pasar acuan | `COMMODITIES` + `checkPriceBand` (`game.js`) | pasar lokal/global, chart |
+| Hadiah klik share link | `SHARE_GOLD_PER_CLICK` = 10, `SHARE_MAX_GOLD_PER_DAY` = 200, `SHARE_MAX_CLICKS_PER_DAY` = 20 (`game.js`) | klik `/s/:code`, GET `/api/share`, GET `/api/admin/share`, tes |
+| Upah perusahaan maks | `COMPANY_WAGE_MAX_USD` = 1000 (`game.js`) | PATCH `/api/jobs/:id`, UI edit upah |
+| Shift maks per tekan | `SHIFT_MAX_PER_CALL` = 10 (`game.js`) | POST `/api/jobs/shift` (multi-shift) |
+| Pesan error HEIC | `HEIC_ERROR_MESSAGE` (`util.js`) + `IMAGE_ERROR_HEIC` (`app.js`) — jaga selaras | endpoint foto profil/perusahaan, klien `isHeicFile` |
 
 ## 4. Duplikasi yang DITERIMA (jangan "diperbaiki" sembarangan)
 
@@ -107,9 +111,15 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
 
 ## 5. Skema database
 
-- `SCHEMA_VERSION` saat ini **16** (`src/db.js`). Migrasi berurutan
+- `SCHEMA_VERSION` saat ini **21** (`src/db.js`). Migrasi berurutan
   (`migrateStageNColumns`) — jangan pernah menulis ulang `CREATE TABLE`
   tanpa jalur migrasi; data live harus ikut naik versi.
+- **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
+  per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
+  mengambil bahan dari sini, BUKAN dari inventaris pemilik;
+  `share_clicks` (UNIQUE owner+IP+hari) — jejak klik link share, satu
+  sumber kebenaran untuk statistik pemilik + admin; `citizens.share_code`
+  (unik, NULL sampai warga membuka halaman Bagikan Link).
 - **Misi harian + Kronik (Tahap 7): relasional, bukan JSON.**
   `mission_progress` (citizen_id, key, value), `mission_claims`
   (citizen_id, key), `chronicle_done` (citizen_id, ckey),

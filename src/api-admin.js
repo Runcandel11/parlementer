@@ -5,9 +5,9 @@
 // benar (lihat api-core.js), atau migrasi initDb yang menjaga akun admin
 // Khalid yang sudah ada (koboijuniorkhalid@gmail.com).
 import { sql, one, run, tx, forUpdate, convoyBuildings } from './db.js';
-import { authRequired, publicId, bootstrapActive, fmtRp, creditScoreSettled } from './util.js';
+import { authRequired, publicId, bootstrapActive, fmtRp, creditScoreSettled, todayStr } from './util.js';
 import { checkRateLimit } from './rate-limit.js';
-import { energyCapFor, CREDIT_DEDUCTION_PROVEN_REPORT, CREDIT_UNBAN_RESET_SCORE } from './game.js';
+import { energyCapFor, CREDIT_DEDUCTION_PROVEN_REPORT, CREDIT_UNBAN_RESET_SCORE, SHARE_GOLD_PER_CLICK } from './game.js';
 
 const PREMIUM_MONTHS = [1, 3, 6, 12];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -118,6 +118,52 @@ export function registerAdmin(app) {
         ...p,
         publicId: publicId(p.id),
         isPremium: p.premium_until > Date.now(),
+      })),
+    });
+  }));
+
+  // ---------- STATISTIK SHARE LINK (v4.6.0) ----------
+  // Admin HANYA MELIHAT — tidak ada aksi ubah dari statistik ini.
+  // Data dari tabel yang SAMA dengan fitur share (share_clicks) dengan
+  // definisi yang SAMA: klik terhitung = gold_given > 0; emas = klik × 10
+  // (bukan hitung ulang dengan cara berbeda). Urutan: emas total
+  // terbanyak dulu (lalu klik total). Pemain yang belum pernah membagikan
+  // link (belum ada baris share_clicks) tidak muncul — wajar, karena
+  // statistik ini tentang yang membagikan.
+  app.get('/api/admin/share', authRequired, admin, r(async (req, res) => {
+    const day = todayStr();
+    const rows = await sql(
+      `SELECT c.id AS citizen_id, u.id AS user_id, u.username,
+         SUM(CASE WHEN sc.day = ? AND sc.gold_given > 0 THEN 1 ELSE 0 END) AS clicks_today,
+         SUM(CASE WHEN sc.gold_given > 0 THEN 1 ELSE 0 END) AS clicks_total,
+         SUM(CASE WHEN sc.day = ? THEN sc.gold_given ELSE 0 END) AS gold_today,
+         SUM(sc.gold_given) AS gold_total
+       FROM share_clicks sc
+       JOIN citizens c ON c.id = sc.owner_id
+       JOIN users u ON u.id = c.user_id
+       GROUP BY c.id, u.id, u.username
+       ORDER BY gold_total DESC, clicks_total DESC, u.username ASC`,
+      [day, day]);
+    const summary = rows.reduce((s, r) => ({
+      players: s.players + 1,
+      clicksToday: s.clicksToday + Number(r.clicks_today),
+      clicksTotal: s.clicksTotal + Number(r.clicks_total),
+      goldToday: s.goldToday + Number(r.gold_today),
+      goldTotal: s.goldTotal + Number(r.gold_total),
+    }), { players: 0, clicksToday: 0, clicksTotal: 0, goldToday: 0, goldTotal: 0 });
+    res.json({
+      day,
+      perClick: SHARE_GOLD_PER_CLICK,
+      summary,
+      rows: rows.map((r) => ({
+        citizenId: Number(r.citizen_id),
+        userId: Number(r.user_id),
+        username: r.username,
+        publicId: publicId(Number(r.user_id)),
+        clicksToday: Number(r.clicks_today),
+        clicksTotal: Number(r.clicks_total),
+        goldToday: Number(r.gold_today),
+        goldTotal: Number(r.gold_total),
       })),
     });
   }));

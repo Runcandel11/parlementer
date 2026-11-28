@@ -1019,8 +1019,13 @@ async function main() {
     .run(aId, 'Perusahaan Tes', '', 'light', aRegion, '', Date.now());
   // Tahap 6: Industri Ringan kini butuh 1× Gandum Mentah per 1× Makanan —
   // beri bahan supaya produksi 8→9 (+10% Gudang Industri) tetap jalan.
+  // v4.6.0: bahan produksi diambil dari STOK perusahaan, bukan inventaris
+  // pemilik — isi stok lewat endpoint baru (bahan pindah inventaris → stok).
   const gandumCv = dbCv.prepare("SELECT id FROM commodities WHERE name = 'Gandum Mentah'").get();
   dbCv.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?)').run(aId, gandumCv.id, 20);
+  const cvCompanyId = dbCv.prepare("SELECT id FROM companies WHERE owner_id = ? AND name = 'Perusahaan Tes'").get(aId)?.id;
+  r = await A.post(`/api/companies/${cvCompanyId}/stock`, { commodity: 'Gandum Mentah', qty: 20 });
+  check('Stok perusahaan: 20 Gandum masuk stok', r.status === 200 && r.data.stock?.[0]?.qty === 20, `status=${r.status} ${r.data.error || ''}`);
   const beforeFood = (await A.get('/api/inventory')).data.items.find((x) => x.name === 'Makanan');
   const beforeFoodQty = beforeFood ? beforeFood.qty : 0;
   // Picu tick harian lagi (mundurkan tanggal seperti [12]).
@@ -1211,13 +1216,18 @@ async function main() {
   r = await C.post('/api/companies', { type: 'factory', name: 'Pabrik Tes' });
   check('Pabrik didirikan (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
   const bahanId = market0.data.commodities.find((x) => x.name === 'Bahan Bangunan').id;
+  const pabrikTesId = r.data.companyId;
+  const stockQty = (companyId, commodityId) => db4.prepare('SELECT qty FROM company_stock WHERE company_id = ? AND commodity_id = ?').get(companyId, commodityId)?.qty || 0;
   setInv(cId, besiId, 25);
+  // v4.6.0: produksi mengambil dari STOK perusahaan — isi stok dulu.
+  r = await C.post(`/api/companies/${pabrikTesId}/stock`, { commodity: 'Besi Mentah', qty: 25 });
+  check('Stok Pabrik Tes: 25 Besi masuk stok', r.status === 200 && r.data.stock?.[0]?.qty === 25, `status=${r.status} ${r.data.error || ''}`);
   await forceTick(C);
-  check('Tick 1: 20 Besi → 10 Bahan Bangunan (Besi 25 → 5)', invQty(cId, bahanId) === 10 && invQty(cId, besiId) === 5, `bahan=${invQty(cId, bahanId)} besi=${invQty(cId, besiId)}`);
+  check('Tick 1: 20 Besi → 10 Bahan Bangunan (stok Besi 25 → 5)', invQty(cId, bahanId) === 10 && stockQty(pabrikTesId, besiId) === 5, `bahan=${invQty(cId, bahanId)} stokBesi=${stockQty(pabrikTesId, besiId)}`);
   await forceTick(C);
-  check('Tick 2: 4 Besi → 2 Bahan Bangunan (Besi 5 → 1, total 12)', invQty(cId, bahanId) === 12 && invQty(cId, besiId) === 1, `bahan=${invQty(cId, bahanId)} besi=${invQty(cId, besiId)}`);
+  check('Tick 2: 4 Besi → 2 Bahan Bangunan (stok Besi 5 → 1, total 12)', invQty(cId, bahanId) === 12 && stockQty(pabrikTesId, besiId) === 1, `bahan=${invQty(cId, bahanId)} stokBesi=${stockQty(pabrikTesId, besiId)}`);
   await forceTick(C);
-  check('Tick 3: Besi 1 → produksi 0 (tetap 12)', invQty(cId, bahanId) === 12 && invQty(cId, besiId) === 1);
+  check('Tick 3: Besi 1 → produksi 0 (tetap 12)', invQty(cId, bahanId) === 12 && stockQty(pabrikTesId, besiId) === 1);
   r = await C.get('/api/notifications');
   check('Pabrik kekurangan bahan: notifikasi dikirim', (r.data.notifications || []).some((n) => n.title === 'Pabrik Tes kekurangan bahan'));
 
@@ -1453,6 +1463,11 @@ async function main() {
     const row = dbCo.prepare('SELECT qty FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1').get(citizenId, commodityId);
     return row ? row.qty : 0;
   };
+  // v4.6.0: baca isi stok bahan perusahaan (company_stock).
+  const stockQtyL = (companyId, commodityId) => {
+    const row = dbCo.prepare('SELECT qty FROM company_stock WHERE company_id = ? AND commodity_id = ?').get(companyId, commodityId);
+    return row ? row.qty : 0;
+  };
   const setEnergyL = (citizenId, energy) => dbCo.prepare('UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ?').run(energy, Date.now(), citizenId);
   const jobIdFor = (companyId) => dbCo.prepare('SELECT id FROM jobs WHERE company_id = ? ORDER BY id LIMIT 1').get(companyId)?.id;
   // JPEG mungil yang valid (magic bytes FF D8 FF) untuk tes foto.
@@ -1481,6 +1496,9 @@ async function main() {
   // Tahap 6: bonus shift Dapur kini butuh 1× Gandum Mentah per unit Makanan.
   const gandumId = dbCo.prepare("SELECT id FROM commodities WHERE name = 'Gandum Mentah'").get().id;
   setInvL(gId, gandumId, 10);
+  // v4.6.0: bonus shift mengambil bahan dari STOK perusahaan — isi stok dulu.
+  r = await GO.post(`/api/companies/${dapurId}/stock`, { commodity: 'Gandum Mentah', qty: 10 });
+  check('Stok Dapur: 10 Gandum masuk stok', r.status === 200 && r.data.stock?.[0]?.qty === 10, `status=${r.status} ${r.data.error || ''}`);
   const makananBefore = invQtyL(gId, makananId);
   r = await IO.post('/api/jobs/shift');
   check('Shift 1 Dapur: belum genap 1 unit (0,8 terakumulasi)', r.status === 200 && (r.data.companyBonus === null || r.data.companyBonus?.qty === 0), JSON.stringify(r.data.companyBonus));
@@ -1489,7 +1507,7 @@ async function main() {
   r = await IO.post('/api/jobs/shift');
   check('Shift 2 Dapur: 1× Makanan masuk (akumulasi 1,6)', r.status === 200 && r.data.companyBonus?.qty === 1 && r.data.companyBonus?.product === 'Makanan', JSON.stringify(r.data.companyBonus));
   check('Pemilik GO: inventaris +1 Makanan', invQtyL(gId, makananId) === makananBefore + 1, `makanan=${invQtyL(gId, makananId)}`);
-  check('Dapur: 1 Gandum terpakai untuk 1 Makanan bonus (Tahap 6)', invQtyL(gId, gandumId) === 9, `gandum=${invQtyL(gId, gandumId)}`);
+  check('Dapur: 1 Gandum terpakai dari stok untuk 1 Makanan bonus (v4.6.0)', stockQtyL(dapurId, gandumId) === 9, `stokGandum=${stockQtyL(dapurId, gandumId)}`);
   // (c) Pabrik — bonus butuh 2× Besi Mentah per unit; bila habis, tertahan.
   r = await GO.post('/api/companies', { type: 'factory', name: 'Pabrik Bonus' });
   check('Pabrik Bonus didirikan (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
@@ -1497,16 +1515,20 @@ async function main() {
   r = await HO.post('/api/jobs/apply', { job_id: jobIdFor(pabrikId) });
   check('HO pindah kerja ke Pabrik Bonus', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
   setInvL(gId, besiId, 10);
+  // v4.6.0: isi stok Pabrik dulu (bonus shift mengambil dari stok).
+  r = await GO.post(`/api/companies/${pabrikId}/stock`, { commodity: 'Besi Mentah', qty: 10 });
+  check('Stok Pabrik: 10 Besi masuk stok', r.status === 200 && r.data.stock?.[0]?.qty === 10, `status=${r.status} ${r.data.error || ''}`);
   const bahanBefore = invQtyL(gId, bahanId);
   setEnergyL(hId, 100);
   r = await HO.post('/api/jobs/shift');
   check('Shift Pabrik: bonus 1× Bahan Bangunan', r.status === 200 && r.data.companyBonus?.qty === 1 && r.data.companyBonus?.product === 'Bahan Bangunan', JSON.stringify(r.data.companyBonus));
-  check('Pabrik: 2 Besi terpakai, +1 Bahan Bangunan', invQtyL(gId, besiId) === 8 && invQtyL(gId, bahanId) === bahanBefore + 1, `besi=${invQtyL(gId, besiId)} bahan=${invQtyL(gId, bahanId)}`);
-  setInvL(gId, besiId, 1);
+  check('Pabrik: 2 Besi terpakai dari stok, +1 Bahan Bangunan', stockQtyL(pabrikId, besiId) === 8 && invQtyL(gId, bahanId) === bahanBefore + 1, `stokBesi=${stockQtyL(pabrikId, besiId)} bahan=${invQtyL(gId, bahanId)}`);
+  // v4.6.0: stok yang menentukan kekurangan — set stok Besi ke 1 (kurang dari 2 yang dibutuhkan).
+  dbCo.prepare('UPDATE company_stock SET qty = 1 WHERE company_id = ? AND commodity_id = ?').run(pabrikId, besiId);
   setEnergyL(hId, 100);
   r = await HO.post('/api/jobs/shift');
   check('Shift Pabrik tanpa Besi: bonus 0 + shortage', r.status === 200 && r.data.companyBonus?.qty === 0 && r.data.companyBonus?.shortage === true, JSON.stringify(r.data.companyBonus));
-  check('Pabrik tanpa Besi: Besi tetap 1, Bahan tidak bertambah', invQtyL(gId, besiId) === 1 && invQtyL(gId, bahanId) === bahanBefore + 1, `besi=${invQtyL(gId, besiId)} bahan=${invQtyL(gId, bahanId)}`);
+  check('Pabrik tanpa Besi: stok Besi tetap 1, Bahan tidak bertambah', stockQtyL(pabrikId, besiId) === 1 && invQtyL(gId, bahanId) === bahanBefore + 1, `stokBesi=${stockQtyL(pabrikId, besiId)} bahan=${invQtyL(gId, bahanId)}`);
   r = await GO.get('/api/notifications');
   check('Pemilik GO: notifikasi Bonus shift tertunda', (r.data.notifications || []).some((n) => n.title === 'Bonus shift tertunda'));
   // (d) Edit perusahaan — hanya pemilik.
@@ -2636,6 +2658,8 @@ async function main() {
   const besiO = comIdO('Besi Mentah'); const gandumO = comIdO('Gandum Mentah'); const minyakO = comIdO('Minyak Mentah');
   const invQtyO = (citizenId, commodityId) => dbS6.prepare('SELECT qty FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1').get(citizenId, commodityId)?.qty || 0;
   const setInvO = (citizenId, commodityId, qty) => dbS6.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = ?').run(citizenId, commodityId, qty, qty);
+  // v4.6.0: baca isi stok bahan perusahaan (company_stock).
+  const stockQtyO = (companyId, commodityId) => dbS6.prepare('SELECT qty FROM company_stock WHERE company_id = ? AND commodity_id = ?').get(companyId, commodityId)?.qty || 0;
   const setEnergyO = (citizenId, energy) => dbS6.prepare('UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ?').run(energy, Date.now(), citizenId);
   const setDayO = (day) => dbS6.prepare('UPDATE world SET day = ? WHERE id = 1').run(day);
   const unitsO = (citizenId) => dbS6.prepare('SELECT unit_type, qty FROM military_units WHERE citizen_id = ?').all(citizenId);
@@ -2716,13 +2740,22 @@ async function main() {
   dbS6.prepare('UPDATE citizens SET gold = 1000 WHERE id = ?').run(m3Id);
   r = await M3.post('/api/companies', { type: 'light', name: 'Dapur Enam' });
   check('M3 mendirikan Industri Ringan', r.status === 200 && !!r.data.companyId, `status=${r.status}`);
+  const dapurEnamId = r.data.companyId;
   setInvO(m3Id, gandumO, 5);
+  // v4.6.0: produksi mengambil dari STOK perusahaan — isi stok dulu.
+  r = await M3.post(`/api/companies/${dapurEnamId}/stock`, { commodity: 'Gandum Mentah', qty: 5 });
+  check('M3 mengisi stok Dapur Enam: 5 Gandum', r.status === 200 && r.data.stock?.[0]?.qty === 5, `status=${r.status} ${r.data.error || ''}`);
   const makananM3Before = invQtyO(m3Id, comIdO('Makanan'));
   // M4: Industri Berat + 2 Besi + 2 Minyak -> produksi 2 Drone (butuh 3+3).
   dbS6.prepare('UPDATE citizens SET gold = 1000 WHERE id = ?').run(m4Id);
   r = await M4.post('/api/companies', { type: 'heavy', name: 'Berat Enam' });
   check('M4 mendirikan Industri Berat', r.status === 200 && !!r.data.companyId, `status=${r.status}`);
+  const beratEnamId = r.data.companyId;
   setInvO(m4Id, besiO, 2); setInvO(m4Id, minyakO, 2);
+  r = await M4.post(`/api/companies/${beratEnamId}/stock`, { commodity: 'Besi Mentah', qty: 2 });
+  check('M4 mengisi stok Berat Enam: 2 Besi', r.status === 200 && r.data.stock?.[0]?.qty === 2, `status=${r.status} ${r.data.error || ''}`);
+  r = await M4.post(`/api/companies/${beratEnamId}/stock`, { commodity: 'Minyak Mentah', qty: 2 });
+  check('M4 mengisi stok Berat Enam: 2 Minyak', r.status === 200 && r.data.stock?.[0]?.qty === 2, `status=${r.status} ${r.data.error || ''}`);
   const droneM4Before = invQtyO(m4Id, droneO);
   // Perang A (penyerang menang): panglima = M1 (kerusakan terbanyak 60 vs 40).
   const warA = dbS6.prepare("INSERT INTO wars (name, region_id, attacker_label, defender_label, score_a, score_d, status, winner, ends_at, created_at) VALUES (?,?,?,?,?,?,'active','',?,?)")
@@ -2779,8 +2812,8 @@ async function main() {
   check('Perawatan: saldo M2 habis (5 → 0)', dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m2Id).usd === 0, `usd=${dbS6.prepare('SELECT usd FROM citizens WHERE id = ?').get(m2Id).usd}`);
   r = await M2.get('/api/notifications');
   check('M2 diberitahu: Pasukanmu desersi', (r.data.notifications || []).some((n) => n.title === 'Pasukanmu desersi'));
-  check('Produksi Ringan: 5 Gandum -> 5 Makanan (bahan membatasi)', invQtyO(m3Id, comIdO('Makanan')) === makananM3Before + 5 && invQtyO(m3Id, gandumO) === 0, `makanan=${invQtyO(m3Id, comIdO('Makanan'))} gandum=${invQtyO(m3Id, gandumO)}`);
-  check('Produksi Berat: 2 Besi + 2 Minyak -> 2 Drone (bahan membatasi)', invQtyO(m4Id, droneO) === droneM4Before + 2 && invQtyO(m4Id, besiO) === 0 && invQtyO(m4Id, minyakO) === 0, `drone=${invQtyO(m4Id, droneO)} besi=${invQtyO(m4Id, besiO)} minyak=${invQtyO(m4Id, minyakO)}`);
+  check('Produksi Ringan: 5 Gandum -> 5 Makanan (bahan membatasi)', invQtyO(m3Id, comIdO('Makanan')) === makananM3Before + 5 && stockQtyO(dapurEnamId, gandumO) === 0, `makanan=${invQtyO(m3Id, comIdO('Makanan'))} stokGandum=${stockQtyO(dapurEnamId, gandumO)}`);
+  check('Produksi Berat: 2 Besi + 2 Minyak -> 2 Drone (bahan membatasi)', invQtyO(m4Id, droneO) === droneM4Before + 2 && stockQtyO(beratEnamId, besiO) === 0 && stockQtyO(beratEnamId, minyakO) === 0, `drone=${invQtyO(m4Id, droneO)} stokBesi=${stockQtyO(beratEnamId, besiO)} stokMinyak=${stockQtyO(beratEnamId, minyakO)}`);
   r = await M1.get('/api/military');
   check('GET /api/military top: M2 teratas (kekuatan 10, sisa Infanteri)', (r.data.top || [])[0]?.username === 'tahap6_m2' && (r.data.top || [])[0]?.power === 10, JSON.stringify(r.data.top));
 
@@ -3336,6 +3369,175 @@ async function main() {
   // P: memang belum bekerja — error tetap muncul dengan benar.
   r = await SH1.post('/api/jobs/shift');
   check('P yang belum bekerja tetap ditolak 400 "belum punya pekerjaan"', r.status === 400 && /belum punya pekerjaan/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+
+  console.log('\n[33] v4.6.0 — share link harian + stok/upah perusahaan + multi-shift + minum sekaligus + donasi + HEIC');
+  const S1 = new Client(); const S2 = new Client(); const S3 = new Client(); const S4 = new Client();
+  S1.extraHeaders = { 'X-Forwarded-For': '127.0.0.51' };
+  S2.extraHeaders = { 'X-Forwarded-For': '127.0.0.52' };
+  S3.extraHeaders = { 'X-Forwarded-For': '127.0.0.53' };
+  S4.extraHeaders = { 'X-Forwarded-For': '127.0.0.54' };
+  r = await S1.post('/api/auth/register', { email: 'share_s1@test.local', password: 'rahasia123', username: 'share_s1' });
+  check('S1 (pemilik link) terdaftar', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await S2.post('/api/auth/register', { email: 'share_s2@test.local', password: 'rahasia123', username: 'share_s2' });
+  check('S2 terdaftar', r.status === 200 && r.data.ok);
+  r = await S3.post('/api/auth/register', { email: 'share_s3@test.local', password: 'rahasia123', username: 'share_s3' });
+  check('S3 (pemilik perusahaan) terdaftar', r.status === 200 && r.data.ok);
+  r = await S4.post('/api/auth/register', { email: 'share_s4@test.local', password: 'rahasia123', username: 'share_s4' });
+  check('S4 terdaftar', r.status === 200 && r.data.ok);
+  const dbS33 = new DatabaseSync(DB_PATH);
+
+  // --- (a) Share link: kode + klik publik + anti-fraud 1 IP/hari + cap 200.
+  const meS1 = (await S1.get('/api/me')).data;
+  const goldS1Before = meS1.citizen.gold;
+  r = await S1.get('/api/share');
+  check('GET /api/share: kode 10 karakter (tanpa 0/O/1/l)', r.status === 200 && /^[a-hj-km-np-z2-9]{10}$/.test(r.data.code || ''), `code=${r.data.code}`);
+  check('GET /api/share: perClick 10, cap 200/hari (= 20 klik)', r.data.perClick === 10 && r.data.today?.cap === 200 && r.data.maxClicksPerDay === 20, JSON.stringify(r.data.today));
+  const shareCode = r.data.code;
+  const clickAs = async (ip) => fetch(BASE + '/s/' + shareCode, { headers: { 'X-Forwarded-For': ip }, redirect: 'manual' });
+  await clickAs('203.0.113.1');
+  let goldNow = (await S1.get('/api/me')).data.citizen.gold;
+  check('Klik publik IP baru: pemilik +10 emas', goldNow === goldS1Before + 10, `gold=${goldNow} (sebelum ${goldS1Before})`);
+  await clickAs('203.0.113.1');
+  goldNow = (await S1.get('/api/me')).data.citizen.gold;
+  check('Klik kedua IP yang sama di hari yang sama: tidak ada emas tambahan', goldNow === goldS1Before + 10, `gold=${goldNow}`);
+  await clickAs('203.0.113.2');
+  goldNow = (await S1.get('/api/me')).data.citizen.gold;
+  check('Klik IP berbeda: +10 lagi', goldNow === goldS1Before + 20, `gold=${goldNow}`);
+  await S1.get('/s/' + shareCode);
+  goldNow = (await S1.get('/api/me')).data.citizen.gold;
+  check('Klik sendiri (login sebagai pemilik): tidak dihitung', goldNow === goldS1Before + 20, `gold=${goldNow}`);
+  const badClick = await fetch(BASE + '/s/kode-salah-123', { redirect: 'manual' });
+  check('Kode share salah → 404', badClick.status === 404, `status=${badClick.status}`);
+  r = await S1.get('/api/share');
+  check('Statistik share hari ini: 2 klik, 20 emas, sisa 180', r.data.today?.clicks === 2 && r.data.today?.gold === 20 && r.data.today?.remaining === 180, JSON.stringify(r.data.today));
+  for (let i = 3; i <= 20; i++) await clickAs('203.0.113.' + i);
+  goldNow = (await S1.get('/api/me')).data.citizen.gold;
+  check('20 klik unik: total 200 emas (cap harian tercapai)', goldNow === goldS1Before + 200, `gold=${goldNow}`);
+  await clickAs('203.0.113.99');
+  goldNow = (await S1.get('/api/me')).data.citizen.gold;
+  check('Klik ke-21 (kuota habis): tidak ada emas tambahan', goldNow === goldS1Before + 200, `gold=${goldNow}`);
+  r = await ADM.get('/api/admin/share');
+  const s1Row = (r.data.rows || []).find((x) => x.username === 'share_s1');
+  check('Admin: statistik share menampilkan S1 (20 klik, 200 emas hari ini)', r.status === 200 && s1Row?.clicksToday === 20 && s1Row?.goldToday === 200 && s1Row?.goldTotal === 200, `status=${r.status} ${JSON.stringify(s1Row)}`);
+  r = await S1.get('/api/admin/share');
+  check('Bukan admin: /api/admin/share → 403', r.status === 403, `status=${r.status}`);
+  const clickRows = dbS33.prepare('SELECT COUNT(*) AS n, SUM(gold_given) AS g FROM share_clicks WHERE owner_id = ?').get(meS1.citizen.id);
+  check('Audit share_clicks: 21 klik tercatat (20 terhitung + 1 di luar kuota), total emas 200', Number(clickRows.n) === 21 && Number(clickRows.g) === 200, `n=${clickRows.n} gold=${clickRows.g}`);
+
+  // --- (b) Multi-shift: 140 energi → 2 shift dalam satu tekan.
+  const meS2 = (await S2.get('/api/me')).data;
+  dbS33.prepare('UPDATE citizens SET level = 9, energy = 140, energy_updated_at = ? WHERE id = ?').run(Date.now(), meS2.citizen.id);
+  const jobsS2 = (await S2.get('/api/jobs')).data;
+  const adminS2 = jobsS2.jobs.find((j) => j.is_admin);
+  dbS33.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(adminS2.region_id, meS2.citizen.id);
+  r = await S2.post('/api/jobs/apply', { job_id: adminS2.id });
+  check('S2 melamar lowongan ADMIN', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await S2.post('/api/jobs/shift');
+  check('Multi-shift: 140 energi → 2 shift, energyUsed 140', r.status === 200 && r.data.shifts === 2 && r.data.energyUsed === 140, `status=${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+  check('Multi-shift: energyPct 70 (rata-rata fraksi shift penuh)', r.data.energyPct === 70, `energyPct=${r.data.energyPct}`);
+  check('Multi-shift: energi habis (0)', (await S2.get('/api/me')).data.citizen.energy === 0);
+  // --- (b2) Minum sekaligus: satu tekan sampai energi penuh.
+  r = await S2.post('/api/shop/energy-drink', { qty: 100 });
+  check('S2 beli 100 kaleng', r.status === 200 && r.data.qty === 100, `status=${r.status} ${r.data.error || ''}`);
+  r = await S2.post('/api/shop/energy-drink', { qty: 100 });
+  check('S2 beli 100 kaleng lagi (total 200)', r.status === 200 && r.data.qty === 100, `status=${r.status}`);
+  r = await S2.post('/api/inventory/drink', {});
+  check('Minum sekaligus: energi 0 → 140 (cap Level 9), sisa 60 kaleng', r.status === 200 && r.data.energy === 140 && r.data.gained === 140 && r.data.remaining === 60, `status=${r.status} ${JSON.stringify(r.data)}`);
+  r = await S2.post('/api/inventory/drink', {});
+  check('Minum saat energi penuh → 400 tanpa kaleng terpotong', r.status === 400 && r.data.error, `status=${r.status} ${r.data.error || ''}`);
+  dbS33.prepare('UPDATE citizens SET energy = 139 WHERE id = ?').run(meS2.citizen.id);
+  r = await S2.post('/api/inventory/drink', { qty: 1 });
+  check('Minum qty=1 eksplisit: energi 139 → 140, sisa 59 kaleng', r.status === 200 && r.data.energy === 140 && r.data.remaining === 59, `status=${r.status} ${JSON.stringify(r.data)}`);
+
+  // --- (c) Stok + upah perusahaan.
+  const meS3 = (await S3.get('/api/me')).data;
+  dbS33.prepare('UPDATE citizens SET gold = 1000 WHERE id = ?').run(meS3.citizen.id);
+  r = await S3.post('/api/companies', { type: 'factory', name: 'Pabrik 33' });
+  check('S3 mendirikan Pabrik (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
+  const pabrik33Id = r.data.companyId;
+  r = await S3.post('/api/companies', { type: 'resource', name: 'Tambang 33', resource: 'Besi Mentah' });
+  check('S3 mendirikan Tambang (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
+  const tambang33Id = r.data.companyId;
+  const besi33 = dbS33.prepare("SELECT id FROM commodities WHERE name = 'Besi Mentah'").get().id;
+  dbS33.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = ?').run(meS3.citizen.id, besi33, 30, 30);
+  r = await S3.post(`/api/companies/${pabrik33Id}/stock`, { commodity: 'Besi Mentah', qty: 10 });
+  check('Pemilik isi stok Pabrik: 10 Besi', r.status === 200 && r.data.stock?.[0]?.qty === 10, `status=${r.status} ${r.data.error || ''}`);
+  r = await S3.get('/api/companies');
+  const pabrik33 = (r.data.companies || []).find((x) => x.id === pabrik33Id);
+  check('GET /api/companies: stok + inputs Pabrik terlihat', pabrik33?.stock?.[0]?.commodity === 'Besi Mentah' && pabrik33?.stock?.[0]?.qty === 10 && pabrik33?.inputs?.includes('Besi Mentah'), JSON.stringify({ stock: pabrik33?.stock, inputs: pabrik33?.inputs }));
+  r = await S4.post(`/api/companies/${pabrik33Id}/stock`, { commodity: 'Besi Mentah', qty: 1 });
+  check('Bukan pemilik isi stok → 403', r.status === 403, `status=${r.status}`);
+  r = await S3.post(`/api/companies/${pabrik33Id}/stock`, { commodity: 'Gandum Mentah', qty: 1 });
+  check('Stok bahan yang bukan input Pabrik → 400', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await S3.post(`/api/companies/${pabrik33Id}/stock`, { commodity: 'Besi Mentah', qty: 999 });
+  check('Stok melebihi inventaris → 400', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await S3.post(`/api/companies/${tambang33Id}/stock`, { commodity: 'Besi Mentah', qty: 1 });
+  check('Tambang (tanpa input) isi stok → 400', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  r = await S3.post(`/api/companies/${pabrik33Id}/job`, { title: 'Operator 33', salary: 100, salary_type: 'fixed', seats: 4 });
+  check('S3 membuka lowongan di Pabrik', r.status === 200 && !!r.data.jobId, `status=${r.status} ${r.data.error || ''}`);
+  const job33Id = r.data.jobId;
+  r = await S3.patch(`/api/jobs/${job33Id}`, { salary: 500 });
+  check('Pemilik edit upah → 200 (500 USD)', r.status === 200 && Number(r.data.job?.salary) === 500, `status=${r.status} ${JSON.stringify(r.data.job)}`);
+  r = await S4.patch(`/api/jobs/${job33Id}`, { salary: 600 });
+  check('Bukan pemilik edit upah → 403', r.status === 403, `status=${r.status}`);
+  r = await S3.patch(`/api/jobs/${job33Id}`, { salary: 0 });
+  check('Upah 0 → 400', r.status === 400, `status=${r.status}`);
+  r = await S3.patch(`/api/jobs/${job33Id}`, { salary: 1001 });
+  check('Upah 1001 (>1000) → 400', r.status === 400, `status=${r.status}`);
+  r = await S3.patch(`/api/jobs/${adminS2.id}`, { salary: 500 });
+  check('Upah lowongan ADMIN → 403', r.status === 403, `status=${r.status}`);
+
+  // --- (d) Donasi ke kas negara — S5 mendirikan negara dulu (A kehilangan
+  // negaranya di tes Tahap 6: wilayahnya direbut pemberontak).
+  const S5 = new Client();
+  S5.extraHeaders = { 'X-Forwarded-For': '127.0.0.55' };
+  r = await S5.post('/api/auth/register', { email: 'share_s5@test.local', password: 'rahasia123', username: 'share_s5' });
+  check('S5 terdaftar', r.status === 200 && r.data.ok);
+  const meS5 = (await S5.get('/api/me')).data;
+  // Wilayah merdeka BUKAN wilayah asal S1 (supaya S1 tetap tanpa negara
+  // untuk cek penolakan di bawah — kewarganegaraan mengikuti home region).
+  const freeRegion = dbS33.prepare('SELECT id FROM regions WHERE country_id IS NULL AND id != ? ORDER BY id LIMIT 1').get(meS1.citizen.home_region_id);
+  dbS33.prepare('UPDATE citizens SET level = 10, gold = 1000, region_id = ?, home_region_id = ? WHERE id = ?').run(freeRegion.id, freeRegion.id, meS5.citizen.id);
+  r = await S5.post('/api/countries', { name: 'Negara 33', ideology: 'Konservatisme', system: 'presidensial' });
+  check('S5 mendirikan negara (Level 10 + 100 emas)', r.status === 200 && !!r.data.countryId, `status=${r.status} ${r.data.error || ''}`);
+  const ctryS5 = (await S5.get('/api/country')).data;
+  check('S5 bernegara untuk tes donasi', !!ctryS5.country, `country=${ctryS5.country?.name}`);
+  const treasBefore = ctryS5.country.treasury;
+  const treasUsdBefore = ctryS5.country.treasury_usd;
+  r = await S5.post('/api/country/donate', { type: 'gold', amount: 10 });
+  check('Donasi 10 emas: kas negara +10', r.status === 200 && r.data.treasury === treasBefore + 10, `status=${r.status} ${JSON.stringify(r.data)}`);
+  r = await S5.post('/api/country/donate', { type: 'gold', amount: 0 });
+  check('Donasi 0 emas → 400', r.status === 400, `status=${r.status}`);
+  r = await S5.post('/api/country/donate', { type: 'gold', amount: 99999999 });
+  check('Donasi melebihi saldo emas → 400', r.status === 400, `status=${r.status}`);
+  r = await S5.post('/api/country/donate', { type: 'usd', amount: 183 });
+  check('Donasi 183 USD: kas Rupiah +183', r.status === 200 && Math.abs(r.data.treasury_usd - (treasUsdBefore + 183)) < 0.01, `status=${r.status} ${JSON.stringify(r.data)}`);
+  const besiA = dbS33.prepare("SELECT id FROM commodities WHERE name = 'Besi Mentah'").get().id;
+  const besiRef = dbS33.prepare('SELECT ref_usd FROM commodities WHERE id = ?').get(besiA).ref_usd;
+  dbS33.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = qty + ?').run(meS5.citizen.id, besiA, 5, 5);
+  r = await S5.post('/api/country/donate', { type: 'item', commodity: 'Besi Mentah', qty: 2 });
+  check('Donasi 2× Besi: kas Rupiah + nilai acuan', r.status === 200 && Math.abs(r.data.amount - 2 * besiRef) < 0.01, `status=${r.status} ${JSON.stringify(r.data)}`);
+  r = await S5.get('/api/country');
+  check('Arus kas menampilkan 3 sumbangan', (r.data.treasuryTx || []).filter((t) => t.kind === 'sumbangan').length >= 3, `n=${(r.data.treasuryTx || []).filter((t) => t.kind === 'sumbangan').length}`);
+  r = await S5.post('/api/country/donate', { type: 'item', commodity: 'Besi Mentah', qty: 999 });
+  check('Donasi bahan melebihi inventaris → 400', r.status === 400, `status=${r.status}`);
+  r = await S5.post('/api/country/donate', { type: 'nonsense', amount: 1 });
+  check('Jenis donasi tidak dikenal → 400', r.status === 400, `status=${r.status}`);
+  // Tanpa negara: S1 lahir di wilayah Nusantara — pindahkan dulu ke
+  // wilayah merdeka (kewarganegaraan mengikuti home region).
+  const freeForS1 = dbS33.prepare('SELECT id FROM regions WHERE country_id IS NULL ORDER BY id LIMIT 1').get();
+  dbS33.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(freeForS1.id, freeForS1.id, meS1.citizen.id);
+  r = await S1.post('/api/country/donate', { type: 'gold', amount: 1 });
+  check('Tanpa negara: donasi ditolak 400', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+
+  // --- (e) HEIC: foto profil HEIC ditolak dengan pesan khusus.
+  const heicB64 = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0x00, 0x00, 0x00, 0x00]).toString('base64');
+  r = await S1.post('/api/profile/avatar', { avatar: 'data:image/heic;base64,' + heicB64 });
+  check('Avatar HEIC ditolak 400 dengan pesan HEIC (bukan format generik)', r.status === 400 && /HEIC/.test(r.data.error || '') && /JPG/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  const tinyJpeg33 = 'data:image/jpeg;base64,' + Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9]).toString('base64');
+  r = await S1.post('/api/profile/avatar', { avatar: tinyJpeg33 });
+  check('Avatar JPEG mungil tetap diterima (hanya HEIC yang ditolak)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  dbS33.close();
 
   setDayO(1);
 

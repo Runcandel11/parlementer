@@ -10,7 +10,7 @@
 //   (3) SEMUA ikon di tengah dengan flex (bukan teks mentah yang duduk
 //       miring): .hud-icon, .crate-btn, .drawer-close, .nav-item .ico,
 //       .stat-head .lbl .ico — ukuran kotak ikon konsisten;
-//   (4) Struktur HUD utuh di HTML: avatar + menu + peti + 4 tombol aksi
+//   (4) Struktur HUD utuh di HTML: avatar + menu + peti + 5 tombol aksi
 //       (chat, lonceng, iklan, gear) dengan urutan yang benar.
 // Catatan jujur: jsdom tidak menghitung layout sungguhan (tidak ada
 // getBoundingClientRect yang bermakna), jadi "tidak terpotong di 375–
@@ -101,11 +101,11 @@ async function main() {
     check('HUD: kolom kiri berisi avatar, menu, peti — urut',
       sideIds.join(',') === 'hud-avatar,btn-menu,btn-crate', `urutan=${sideIds.join(',')}`);
     const actions = [...(hud?.querySelectorAll('.hud-actions .hud-icon') || [])].map((el) => el.id);
-    check('HUD: 4 tombol aksi (chat, lonceng, iklan, gear)',
-      actions.join(',') === 'btn-chat,btn-notif,btn-ads,btn-settings', `aksi=${actions.join(',')}`);
+    check('HUD: 5 tombol aksi (chat, lonceng, iklan, share, gear)',
+      actions.join(',') === 'btn-chat,btn-notif,btn-ads,btn-share,btn-settings', `aksi=${actions.join(',')}`);
     const icons = [...(hud?.querySelectorAll('.hud-icon') || [])];
     check('HUD: semua tombol ikon berisi glyph (tidak kosong)',
-      icons.length === 5 && icons.every((el) => el.textContent.trim().length > 0), `tombol=${icons.length}`);
+      icons.length === 6 && icons.every((el) => el.textContent.trim().length > 0), `tombol=${icons.length}`);
   } finally {
     stop();
     if (dom) dom.window.close();

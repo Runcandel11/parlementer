@@ -83,7 +83,10 @@
 // otomatis Premium 24 jam yang jalan di server walau aplikasi ditutup.
 // Update kecil v4.5.1 = tombol Nonton Iklan di top bar + dompet HUD jadi
 // dua pill uang+emas yang sejajar (perintah pemilik 28 Nov 2026).
-export const VERSION = '4.5.2';
+// Update v4.6.0 = stok bahan perusahaan + edit upah + multi-shift +
+// minum sekaligus + donasi kas negara + share link harian + HEIC +
+// notifikasi di atas (saran LIO + perintah pemilik 28 Nov 2026).
+export const VERSION = '4.6.0';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
@@ -530,6 +533,33 @@ export const AUTO_WORK_DURATION_MS = 24 * 60 * 60 * 1000;
 export const AUTO_WORK_MIN_ENERGY = 100;
 export const AUTO_WORK_FATIGUE_PAUSE = 10000;
 export const AUTO_WORK_INTERVAL_MS = Number(process.env.AUTO_WORK_INTERVAL_MS || 5 * 60 * 1000);
+
+// --- Stok bahan perusahaan + upah (v4.6.0, saran LIO) ---
+// Produksi perusahaan TIDAK LAGI mengambil bahan diam-diam dari inventaris
+// pemilik: pemilik mengisi STOK perusahaan dulu (POST /api/companies/:id/
+// stock); produksi harian (tick) + bonus shift mengambil dari stok itu.
+// Bila stok habis, produksi berhenti + pemilik & pekerja diberi tahu.
+// Upah perusahaan bisa diubah pemilik (PATCH /api/jobs/:id): 1–1000 USD
+// per shift (Rp18.300–Rp18.300.000); lowongan ADMIN bukan milik warga jadi
+// tidak bisa diubah.
+export const COMPANY_WAGE_MAX_USD = 1000;
+// Kerja satu giliran (v4.6.0, saran LIO): satu tekan POST /api/jobs/shift
+// menjalankan shift berturut-turut sampai energi habis (bukan 100 dulu
+// lalu 40). Batas iterasi = pengaman (cap energi tertinggi realistis
+// ~625 → 7 shift); shift berhenti lebih awal bila gagal (mis. pekerjaan
+// hilang) dan hasil parsial tetap dilaporkan.
+export const SHIFT_MAX_PER_CALL = 10;
+
+// --- Link share harian (v4.6.0, perintah pemilik 28 Nov 2026) ---
+// Tiap warga punya link pribadi stabil https://parlementer.my.id/s/<kode>.
+// Siapa pun bisa klik TANPA login (publik); tiap klik unik (1 IP = 1 klik
+// per hari per link) memberi +10 emas ke pemilik link, maks 200 emas/hari
+// (= 20 klik unik/hari). Hari memakai todayStr() (UTC, sama seperti klaim
+// harian). Satu sumber kebenaran untuk endpoint klik + statistik + tes.
+export const SHARE_GOLD_PER_CLICK = 10;
+export const SHARE_MAX_GOLD_PER_DAY = 200;
+export const SHARE_MAX_CLICKS_PER_DAY = SHARE_MAX_GOLD_PER_DAY / SHARE_GOLD_PER_CLICK;
+export const SHARE_CODE_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789'; // tanpa 0/O/1/l (sulit dibaca)
 
 // --- Batas energi & regen (Tahap 4) ---
 // Batas dasar naik 5 per level: 100 + 5×(level−1). Bonus lama tetap

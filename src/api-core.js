@@ -2,11 +2,12 @@
 // pasar, valas, peta, inventaris, konvoi, misi, kronik, pencapaian, notifikasi, profil, toko.
 import crypto from 'node:crypto';
 import { hashPassword, verifyPassword } from './bcrypt-pool.js';
-import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings, getParliamentOpensAt, getWorldDay, missionValue, missionClaimedKeys, insertMissionClaim, chronicleDoneKeys, chronicleClaimedChapters, insertChronicleClaim, markChronicleDone } from './db.js';
+import { sql, one, run, tx, forUpdate, generateReferralCode, convoyBuildings, getParliamentOpensAt, getWorldDay, missionValue, missionClaimedKeys, insertMissionClaim, chronicleDoneKeys, chronicleClaimedChapters, insertChronicleClaim, markChronicleDone, isPg } from './db.js';
 import {
   signToken, cookieOptions, COOKIE_NAME, authRequired, citizenRequired,
   loadCitizen, isValidEmail, isValidUsername, todayStr, publicId,
   getUserIdFromReq, bootstrapCodeMatches, fmtRp, parseImageDataUrl,
+  isHeicDataUrl, HEIC_ERROR_MESSAGE,
   requireCredit, creditScoreSettled,
 } from './util.js';
 import { dbRateLimit } from './rate-limit.js';
@@ -19,11 +20,13 @@ import {
   DAILY_PRODUCTION, PRODUCTION_INPUT, productionInputText, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS, convoySlotsFor,
   ENERGY_DRINK_NAME, ENERGY_DRINK_PRICE_GOLD, ENERGY_DRINK_ENERGY,
   breadLimitFor, AUTO_WORK_DURATION_MS,
+  COMPANY_WAGE_MAX_USD, SHIFT_MAX_PER_CALL,
   PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
   MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, tradeReputation, worldEventFor,
   DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
   ONLINE_WINDOW_MS, onlineStatus,
   ADINPLAY_PROPERTY_ID, AD_REWARD_GOLD, AD_TOKEN_TTL_MS, AD_MIN_INTERVAL_MS,
+  SHARE_GOLD_PER_CLICK, SHARE_MAX_GOLD_PER_DAY, SHARE_MAX_CLICKS_PER_DAY, SHARE_CODE_CHARS,
 } from './game.js';
 
 // Diekspos untuk modul kerja otomatis (src/auto-work.js): performShift
@@ -586,6 +589,100 @@ export function registerCore(app) {
     res.json({ ok: true, reward: { gold: result.gold } });
   }));
 
+  // ---------- LINK SHARE HARIAN (v4.6.0, perintah pemilik 28 Nov 2026) ----------
+  // Tiap warga punya link pribadi stabil /s/<kode> (kode acak 10 karakter,
+  // dibuat malas saat pertama kali membuka halaman Bagikan Link). Link
+  // untuk PUBLIK: siapa pun bisa klik TANPA login/tanpa akun — kliknya
+  // tetap terhitung untuk pemilik link. Yang butuh akun hanya pemilik
+  // (untuk menerima emas + melihat statistik).
+  // Anti-fraud: 1 IP = 1 klik terhitung per hari per link (UNIQUE
+  // (owner_id, ip, day) di share_clicks); +10 emas per klik terhitung,
+  // maks 200 emas/hari (= 20 klik unik/hari) per pemilik. Hari memakai
+  // todayStr() (UTC) — sama seperti klaim harian. Emas diberikan atomik
+  // HANYA bila klik terhitung (IP baru hari itu + kuota belum habis);
+  // klik duplikat-IP / di luar kuota tetap TERCATAT (gold_given 0) untuk
+  // audit, tapi tidak menambah emas. Klik dari pemilik link sendiri
+  // TIDAK dihitung bila terdeteksi (sesi login = pemilik) — klik tanpa
+  // login dari IP yang sama dengan IP pemilik tidak bisa dibedakan dari
+  // klik orang lain di belakang NAT yang sama, jadi batasannya jujur:
+  // tanpa login, satu IP hanya bisa memberi +10/hari ke satu link, dan
+  // kuota 200/hari tetap butuh 20 IP berbeda. TIDAK ADA kaitannya dengan
+  // sistem referral (hadiah referral cair saat pendaftar Level 3 — jalur
+  // terpisah, tidak disentuh).
+  async function ensureShareCode(citizenId) {
+    const row = await one('SELECT share_code FROM citizens WHERE id = ?', [citizenId]);
+    if (row?.share_code) return row.share_code;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const bytes = crypto.randomBytes(10);
+      let code = '';
+      for (const b of bytes) code += SHARE_CODE_CHARS[b % SHARE_CODE_CHARS.length];
+      const upd = await run('UPDATE citizens SET share_code = ? WHERE id = ? AND share_code IS NULL', [code, citizenId]);
+      if (upd.changes) return code;
+      const again = await one('SELECT share_code FROM citizens WHERE id = ?', [citizenId]);
+      if (again?.share_code) return again.share_code;
+    }
+    throw Object.assign(new Error('Gagal membuat kode share. Coba lagi.'), { status: 500 });
+  }
+  // Statistik share SATU warga (satu sumber kebenaran — dipakai GET
+  // /api/share DAN GET /api/admin/share): klik terhitung = baris
+  // share_clicks dengan gold_given > 0; emas = klik × 10. Klik dengan
+  // gold_given 0 (kuota habis) TERCATAT tapi tidak terhitung.
+  async function shareStatsFor(ownerId, day) {
+    const rows = await sql(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(gold_given), 0) AS gold FROM share_clicks
+       WHERE owner_id = ? AND gold_given > 0 AND (? IS NULL OR day = ?)`,
+      [ownerId, day, day]);
+    const total = rows[0] || { n: 0, gold: 0 };
+    return { clicks: Number(total.n), gold: Number(total.gold) };
+  }
+
+  // Statistik share untuk pemilik link: kode + link + hari ini + total.
+  app.get('/api/share', authRequired, citizenRequired, r(async (req, res) => {
+    const code = await ensureShareCode(req.citizen.id);
+    const day = todayStr();
+    const today = await shareStatsFor(req.citizen.id, day);
+    const total = await shareStatsFor(req.citizen.id, null);
+    res.json({
+      ok: true,
+      code,
+      today: { clicks: today.clicks, gold: today.gold, remaining: Math.max(0, SHARE_MAX_GOLD_PER_DAY - today.gold), cap: SHARE_MAX_GOLD_PER_DAY },
+      total: { clicks: total.clicks, gold: total.gold },
+      perClick: SHARE_GOLD_PER_CLICK,
+      maxClicksPerDay: SHARE_MAX_CLICKS_PER_DAY,
+    });
+  }));
+
+  // Klik link share — PUBLIK, tanpa login. Mencatat klik lalu redirect
+  // ke landing (/). Kode salah → 404 tanpa emas. Klik pemilik sendiri
+  // (terdeteksi lewat sesi login) → redirect tanpa mencatat. Duplikat IP
+  // di hari yang sama → redirect tanpa emas tambahan. Kuota 200/hari
+  // habis → klik tetap tercatat (gold 0), tanpa emas.
+  app.get('/s/:code', r(async (req, res) => {
+    const code = String(req.params.code || '').trim();
+    const owner = code ? await one('SELECT id, user_id FROM citizens WHERE share_code = ?', [code]) : null;
+    if (!owner) return res.status(404).send('Link tidak ditemukan.');
+    // Klik sendiri: sesi login milik pemilik link → jangan hitung.
+    const uid = getUserIdFromReq(req);
+    if (uid && Number(uid) === Number(owner.user_id)) return res.redirect('/');
+    const ip = (req.ip || 'unknown').slice(0, 45);
+    const day = todayStr();
+    await tx(async (t) => {
+      await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [owner.id]);
+      const counted = await t.one(
+        'SELECT COUNT(*) AS n FROM share_clicks WHERE owner_id = ? AND day = ? AND gold_given > 0',
+        [owner.id, day]);
+      const gold = Number(counted.n) < SHARE_MAX_CLICKS_PER_DAY ? SHARE_GOLD_PER_CLICK : 0;
+      const insertSql = isPg
+        ? 'INSERT INTO share_clicks (owner_id, ip, day, gold_given, created_at) VALUES (?,?,?,?,?) ON CONFLICT (owner_id, ip, day) DO NOTHING'
+        : 'INSERT OR IGNORE INTO share_clicks (owner_id, ip, day, gold_given, created_at) VALUES (?,?,?,?,?)';
+      const ins = await t.run(insertSql, [owner.id, ip, day, gold, Date.now()]);
+      if (ins.changes && gold > 0) {
+        await t.run('UPDATE citizens SET gold = gold + ? WHERE id = ?', [gold, owner.id]);
+      }
+    });
+    return res.redirect('/');
+  }));
+
   app.post('/api/train', authRequired, citizenRequired, r(async (req, res) => {
     const { attr } = req.body || {};
     if (!['str', 'edu', 'eco'].includes(attr)) return res.status(400).json({ error: 'Atribut tidak dikenal.' });
@@ -689,10 +786,17 @@ export function registerCore(app) {
     res.json({ ok: true, qty: bought, cost, priceEach: ENERGY_DRINK_PRICE_GOLD });
   }));
 
+  // MINUM SEKALIGUS (v4.6.0, saran LIO): bila qty TIDAK dikirim, minum
+  // sampai energi penuh (atau sampai kaleng habis) dalam satu tekan —
+  // bukan satu kaleng per tekan. qty eksplisit (1–100) tetap didukung
+  // untuk kompatibilitas lama. Kaleng yang tidak terminum tetap di
+  // inventaris (tidak ada yang hilang); energi penuh → 400 tanpa kaleng
+  // terpotong.
   app.post('/api/inventory/drink', authRequired, citizenRequired, r(async (req, res) => {
-    const rawQty = Number((req.body || {}).qty);
-    if (!Number.isInteger(rawQty) || rawQty < 1 || rawQty > 100) return res.status(400).json({ error: 'Jumlah 1–100 kaleng.' });
-    const qty = rawQty;
+    const rawQty = (req.body || {}).qty;
+    const qtyGiven = rawQty !== undefined && rawQty !== null;
+    if (qtyGiven && (!Number.isInteger(Number(rawQty)) || Number(rawQty) < 1 || Number(rawQty) > 100)) return res.status(400).json({ error: 'Jumlah 1–100 kaleng.' });
+    const qty = qtyGiven ? Number(rawQty) : Infinity;
     const drink = await one('SELECT id FROM commodities WHERE name = ?', [ENERGY_DRINK_NAME]);
     if (!drink) return res.status(500).json({ error: 'Minuman Energi belum tersedia.' });
     const result = await tx(async (t) => {
@@ -1010,6 +1114,12 @@ export function registerCore(app) {
   // Parser gambar bersama ada di util.js (dipakai juga gambar artikel).
   const parseAvatarDataUrl = (dataUrl, maxBytes = AVATAR_MAX_BYTES) => parseImageDataUrl(dataUrl, maxBytes);
   app.post('/api/profile/avatar', authRequired, r(async (req, res) => {
+    // (v4.6.0, penyelidikan bug foto LIO): file HEIC dari galeri HP gagal
+    // di-decode browser — kenali di sini supaya pesannya spesifik HEIC
+    // (dengan jalan keluar), bukan tuduhan format generik.
+    if (isHeicDataUrl(req.body?.avatar)) {
+      return res.status(400).json({ error: HEIC_ERROR_MESSAGE });
+    }
     const parsed = parseAvatarDataUrl(req.body?.avatar);
     if (!parsed) {
       return res.status(400).json({ error: 'Foto harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 500 KB.' });
@@ -1224,8 +1334,13 @@ export function registerCore(app) {
       // Tahap 6 — rantai produksi penuh: bonus shift memakai bahan baku
       // yang sama seperti produksi harian (PRODUCTION_INPUT di game.js —
       // satu sumber kebenaran). Tiap jenis input membatasi unit yang bisa
-      // dibuat; bila satu bahan habis, bonus tertahan sebagai kredit +
-      // pemilik diberi tahu sekali per 24 jam.
+      // dibuat. (v4.6.0, saran LIO): bahan diambil dari STOK PERUSAHAAN
+      // (company_stock — diisi pemilik lewat POST /api/companies/:id/stock),
+      // BUKAN LAGI diam-diam dari inventaris pemilik. Bila stok habis,
+      // bonus tertahan sebagai kredit + pemilik diberi tahu sekali per
+      // 24 jam + SEMUA karyawan perusahaan itu ikut diberi tahu sekali
+      // (supaya pekerja yang menekan tombol kerja tahu kenapa bonusnya
+      // tertunda — pemberitahuan ke pekerja yang diminta tiket LIO).
       const inputs = PRODUCTION_INPUT[co.type] || [];
       let shortage = false;
       let shortageNeed = '';
@@ -1233,7 +1348,7 @@ export function registerCore(app) {
         const stocks = [];
         for (const input of inputs) {
           const inputRow = await t.one('SELECT id FROM commodities WHERE name = ?', [input.commodity]);
-          const stock = inputRow ? await t.one('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1', [co.owner_id, inputRow.id]) : null;
+          const stock = inputRow ? await t.one('SELECT * FROM company_stock WHERE company_id = ? AND commodity_id = ?', [co.id, inputRow.id]) : null;
           stocks.push({ input, stock, have: stock?.qty || 0 });
         }
         let affordable = units;
@@ -1245,14 +1360,21 @@ export function registerCore(app) {
           if (!co.bonus_warned_at || now - co.bonus_warned_at > DAY_MS) {
             await t.run('UPDATE companies SET bonus_warned_at = ? WHERE id = ?', [now, co.id]);
             await notify(co.owner_id, 'EKONOMI', 'Bonus shift tertunda',
-              `${co.name} tidak mendapat bonus shift: butuh ${shortageNeed} per unit ${product} (punya ${stocks.map((s) => `${s.have}× ${s.input.commodity}`).join(', ')}).`, t);
+              `${co.name} tidak mendapat bonus shift: stok bahan habis (butuh ${shortageNeed} per unit ${product}; stok sekarang ${stocks.map((s) => `${s.have}× ${s.input.commodity}`).join(', ')}). Isi stok dari halaman Industri → PERUSAHAANKU → ISI BAHAN.`, t);
+            // Beri tahu semua karyawan perusahaan ini (sekali per 24 jam,
+            // bersamaan dengan peringatan pemilik) — pekerja yang menekan
+            // tombol kerja melihat kenapa bonus perusahaan tertunda.
+            await t.run(`INSERT INTO notifications (citizen_id, category, title, content, created_at)
+              SELECT c.id, 'EKONOMI', 'Perusahaan kehabisan bahan', ?, ? FROM citizens c JOIN jobs j ON j.id = c.job_id WHERE j.company_id = ?`,
+              [`${co.name} kehabisan bahan (butuh ${shortageNeed} per unit ${product}). Produksi & bonus shift berhenti sampai pemilik mengisi stok bahan.`, now, co.id]);
           }
         } else {
           if (affordable < units) { units = affordable; credit = total - units * 10; }
           for (const s of stocks) {
             const used = units * s.input.perUnit;
             if (used <= 0) continue;
-            const took = await t.run('UPDATE inventory SET qty = qty - ? WHERE id = ? AND qty >= ?', [used, s.stock.id, used]);
+            if (!s.stock) { units = 0; credit = total; shortage = true; break; }
+            const took = await t.run('UPDATE company_stock SET qty = qty - ? WHERE id = ? AND qty >= ?', [used, s.stock.id, used]);
             if (!took.changes) { units = 0; credit = total; shortage = true; break; }
           }
         }
@@ -1287,7 +1409,7 @@ export function registerCore(app) {
       const usdValue = Math.round(spent.qty * com.ref_usd * 100) / 100;
       const note = `${shiftPrefix(spent)}Dibayar ${spent.qty}× ${job.resource} (setara ~${fmtRp(usdValue)}).`;
       const xp = await rewardShift(spent);
-      return { ok: true, gross: usdValue, net: 0, tax: 0, goods: `${spent.qty}× ${job.resource}`, note: note + xpNoteSuffix(xp), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
+      return { ok: true, gross: usdValue, net: 0, tax: 0, goods: `${spent.qty}× ${job.resource}`, goodsQty: spent.qty, goodsName: job.resource, note: note + xpNoteSuffix(xp), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100), companyShortage: false };
     }
     if (job.salary_type === 'share') {
       // Bagi hasil: 80–98% dibayar dalam bentuk barang (sumber daya perusahaan).
@@ -1305,7 +1427,7 @@ export function registerCore(app) {
       });
       goodsNote = `${shiftPrefix(spent)}Dibayar ${spent.units}× ${resource} (bagi hasil ${pct}%).${bonusNote(spent.bonus)}`;
       const xp = await rewardShift(spent);
-      return { ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, note: goodsNote + xpNoteSuffix(xp), companyBonus: spent.bonus || null, xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
+      return { ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, goodsQty: spent.units, goodsName: resource, note: goodsNote + xpNoteSuffix(xp), companyBonus: spent.bonus || null, companyShortage: !!(spent.bonus && spent.bonus.shortage), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
     }
     const spent = await tx(async (t) => {
       const s = await spendEnergy(t);
@@ -1318,16 +1440,65 @@ export function registerCore(app) {
     });
     const xp = await rewardShift(spent);
     const baseNote = `${spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%).`}${bonusNote(spent.bonus)}`.trim();
-    return { ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, note: (baseNote + xpNoteSuffix(xp)).trim(), companyBonus: spent.bonus || null, xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
+    return { ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, goods: '', goodsQty: 0, goodsName: '', note: (baseNote + xpNoteSuffix(xp)).trim(), companyBonus: spent.bonus || null, companyShortage: !!(spent.bonus && spent.bonus.shortage), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
   }
 
   // Kerja otomatis memakai performShift yang sama — daftarkan di sini
   // (registerCore berjalan sekali saat aplikasi dibuat).
   shiftRunner.performShift = performShift;
 
-  // Endpoint manual: tipis — seluruh logika di performShift di atas.
+  // Endpoint manual — KERJA SATU GILIRAN PAKAI SEMUA ENERGI (v4.6.0, saran
+  // LIO): satu tekan menjalankan shift berturut-turut sampai energi habis
+  // (140 energi → shift 100 + shift 40 dalam satu aksi), bukan 100 dulu
+  // lalu pencet ulang. Tiap shift memakai performShift yang sama persis
+  // (gaji/XP/kelelahan/bonus proporsional) — hasil digabung. Berhenti
+  // lebih awal bila shift gagal (mis. pekerjaan hilang): hasil parsial
+  // tetap dikembalikan; bila shift PERTAMA gagal, error dilempar seperti
+  // dulu (400). Kerja otomatis TIDAK berubah — runner memanggil
+  // performShift langsung (satu shift per jalan).
+  // energyPct mengikuti arti LAMA (fraksi satu shift penuh 100 energi,
+  // dirata-rata per shift) supaya klien/tes lama tidak berubah arti:
+  // 50 energi 1 shift → 50; 140 energi 2 shift → 70.
   app.post('/api/jobs/shift', authRequired, citizenRequired, r(async (req, res) => {
-    res.json(await performShift(req.userId));
+    const results = [];
+    let stoppedBy = '';
+    for (let i = 0; i < SHIFT_MAX_PER_CALL; i++) {
+      const energyNow = (await one('SELECT energy FROM citizens WHERE id = ?', [req.citizen.id]))?.energy ?? 0;
+      if (energyNow <= 0) break;
+      try {
+        results.push(await performShift(req.userId));
+      } catch (e) {
+        if (results.length === 0) throw e;
+        stoppedBy = e.message || 'Shift berikutnya gagal.';
+        break;
+      }
+    }
+    if (results.length === 0) {
+      return res.status(400).json({ error: 'Energi habis (0). Makan roti dulu.' });
+    }
+    const total = (f) => results.reduce((s, r) => s + (Number(r[f]) || 0), 0);
+    const energyUsed = total('energyUsed');
+    const goodsQty = results.reduce((s, r) => s + (Number(r.goodsQty) || 0), 0);
+    const goodsName = results.find((r) => r.goodsName)?.goodsName || '';
+    const first = results[0];
+    const note = results.length > 1
+      ? `${results.length} shift selesai (semua energi dipakai). ${results.map((r) => r.note).filter(Boolean).join(' ')}`
+      : first.note;
+    res.json({
+      ok: true,
+      shifts: results.length,
+      energyUsed,
+      energyPct: Math.round(energyUsed / (100 * results.length) * 100),
+      gross: total('gross'), net: total('net'), tax: total('tax'),
+      goods: goodsQty > 0 && goodsName ? `${goodsQty}× ${goodsName}` : (first.goods || ''),
+      goodsQty, goodsName,
+      note: (note + (stoppedBy ? ` Berhenti: ${stoppedBy}` : '')).trim(),
+      companyBonus: results.map((r) => r.companyBonus).find((b) => b) || null,
+      companyShortage: results.some((r) => r.companyShortage),
+      xpGained: total('xpGained'),
+      doubleXp: results.some((r) => r.doubleXp),
+      festivalXp: results.some((r) => r.festivalXp),
+    });
   }));
 
   // ---------- KERJA OTOMATIS 24 JAM (Premium, v4.5.0) ----------
@@ -1366,7 +1537,20 @@ export function registerCore(app) {
     // sudah masuk inventaris pemilik dari shift karyawan.
     // Tahap 6: input_text = bahan baku yang dibutuhkan per unit (rantai
     // produksi penuh — tampil di kartu perusahaan + form pendirian).
-    const withBonus = rows.map((x) => ({ ...x, bonus_text: shiftBonusText(x), bonus_given: x.bonus_given || 0, input_text: productionInputText(x.type) }));
+    // v4.6.0: stock = isi stok bahan perusahaan (company_stock) per
+    // perusahaan, supaya pemilik & pekerja melihat bahan yang tersedia;
+    // myJobs = lowongan milik warga (untuk edit upah).
+    const stockRows = await sql(
+      `SELECT cs.company_id, c.name AS commodity, cs.qty FROM company_stock cs
+       JOIN commodities c ON c.id = cs.commodity_id WHERE cs.qty > 0 ORDER BY c.name`, []);
+    const stockByCompany = {};
+    for (const s of stockRows) (stockByCompany[s.company_id] ||= []).push({ commodity: s.commodity, qty: Number(s.qty) });
+    const myJobs = await sql(
+      `SELECT j.id, j.company_id, j.title, j.salary, j.salary_type, j.seats, j.seats_taken,
+        (SELECT COUNT(*) FROM citizens WHERE job_id = j.id) AS workers
+       FROM jobs j JOIN companies co ON co.id = j.company_id WHERE co.owner_id = ? ORDER BY j.created_at ASC`,
+      [req.citizen.id]);
+    const withBonus = rows.map((x) => ({ ...x, bonus_text: shiftBonusText(x), bonus_given: x.bonus_given || 0, input_text: productionInputText(x.type), inputs: (PRODUCTION_INPUT[x.type] || []).map((i) => i.commodity), stock: stockByCompany[x.id] || [], jobs: myJobs.filter((j) => j.company_id === x.id) }));
     const mine = withBonus.filter((x) => x.owner_id === req.citizen.id);
     res.json({ companies: withBonus, mine, types: COMPANY_TYPES.map((t) => ({ ...t, input_text: productionInputText(t.type) })), resources: RESOURCE_PRODUCTS });
   }));
@@ -1397,6 +1581,57 @@ export function registerCore(app) {
     });
     await chronicleDone(c, 'company');
     res.json({ ok: true, companyId });
+  }));
+
+  // Isi stok bahan perusahaan (v4.6.0, saran LIO): HANYA pemilik.
+  // Memindahkan bahan dari inventaris pemilik ke stok perusahaan —
+  // produksi harian + bonus shift mengambil dari stok ini, BUKAN LAGI
+  // diam-diam dari inventaris. commodity HARUS salah satu bahan baku
+  // jenis perusahaan ini (Pabrik Sumber Daya tidak butuh bahan → 400).
+  // qty bilangan bulat > 0 dan tidak melebihi stok inventaris pemilik.
+  app.post('/api/companies/:id/stock', authRequired, citizenRequired, r(async (req, res) => {
+    const co = await one('SELECT * FROM companies WHERE id = ?', [req.params.id]);
+    if (!co) return res.status(404).json({ error: 'Perusahaan tidak ditemukan.' });
+    if (co.owner_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya pemilik yang bisa mengisi stok perusahaan ini.' });
+    const inputs = PRODUCTION_INPUT[co.type] || [];
+    if (!inputs.length) return res.status(400).json({ error: `${co.name} tidak butuh bahan baku (menambang langsung dari wilayah).` });
+    const { commodity, qty } = req.body || {};
+    const input = inputs.find((i) => i.commodity === commodity);
+    if (!input) return res.status(400).json({ error: `Bahan yang dibutuhkan: ${inputs.map((i) => i.commodity).join(', ')}.` });
+    const n = Number(qty);
+    if (!Number.isInteger(n) || n <= 0) return res.status(400).json({ error: 'Jumlah harus bilangan bulat lebih dari 0.' });
+    const com = await one('SELECT * FROM commodities WHERE name = ?', [commodity]);
+    if (!com) return res.status(400).json({ error: 'Bahan tidak dikenal.' });
+    const stock = await tx(async (t) => {
+      const ok = await takeItem(req.citizen.id, com.id, 1, n, t);
+      if (!ok) throw Object.assign(new Error(`Kamu tidak punya ${n}× ${commodity} di inventaris.`), { status: 400 });
+      const row = await t.one('SELECT * FROM company_stock WHERE company_id = ? AND commodity_id = ?', [co.id, com.id]);
+      if (row) await t.run('UPDATE company_stock SET qty = qty + ? WHERE id = ?', [n, row.id]);
+      else await t.run('INSERT INTO company_stock (company_id, commodity_id, qty) VALUES (?,?,?) RETURNING id', [co.id, com.id, n]);
+      return await t.sql('SELECT c.name AS commodity, cs.qty FROM company_stock cs JOIN commodities c ON c.id = cs.commodity_id WHERE cs.company_id = ? AND cs.qty > 0 ORDER BY c.name', [co.id]);
+    });
+    res.json({ ok: true, stock: stock.map((s) => ({ commodity: s.commodity, qty: Number(s.qty) })) });
+  }));
+
+  // Edit upah lowongan perusahaan (v4.6.0, saran LIO): HANYA pemilik
+  // perusahaan pemilik lowongan. Lowongan ADMIN (is_admin=1) bukan milik
+  // warga — tidak bisa diubah. Yang bisa diubah: salary (gaji per shift,
+  // dalam USD seperti penyimpanan server; klien menampilkan Rupiah).
+  // Validasi: 1–1000 USD per shift (Rp18.300–Rp18.300.000).
+  app.patch('/api/jobs/:id', authRequired, citizenRequired, r(async (req, res) => {
+    const job = await one('SELECT * FROM jobs WHERE id = ?', [req.params.id]);
+    if (!job) return res.status(404).json({ error: 'Lowongan tidak ditemukan.' });
+    if (job.is_admin) return res.status(403).json({ error: 'Upah lowongan ADMIN tidak bisa diubah.' });
+    if (!job.company_id) return res.status(403).json({ error: 'Lowongan ini bukan milik perusahaan.' });
+    const co = await one('SELECT * FROM companies WHERE id = ?', [job.company_id]);
+    if (!co || co.owner_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya pemilik perusahaan yang bisa mengubah upah ini.' });
+    const salary = Number((req.body || {}).salary);
+    if (!Number.isFinite(salary) || salary <= 0 || salary > COMPANY_WAGE_MAX_USD) {
+      return res.status(400).json({ error: `Upah harus 1–${COMPANY_WAGE_MAX_USD} USD per shift.` });
+    }
+    await run('UPDATE jobs SET salary = ? WHERE id = ?', [salary, job.id]);
+    const updated = await one('SELECT * FROM jobs WHERE id = ?', [job.id]);
+    res.json({ ok: true, job: updated });
   }));
 
   app.post('/api/companies/:id/job', authRequired, citizenRequired, r(async (req, res) => {
@@ -1449,6 +1684,7 @@ export function registerCore(app) {
     if (co.owner_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya pemilik yang bisa memasang foto perusahaan ini.' });
     const { photo, photo_sm } = req.body || {};
     if (!photo) return res.status(400).json({ error: 'Foto perusahaan wajib diisi.' });
+    if (isHeicDataUrl(photo)) return res.status(400).json({ error: HEIC_ERROR_MESSAGE });
     const parsed = parseImageDataUrl(photo, COMPANY_PHOTO_MAX_BYTES);
     if (!parsed) return res.status(400).json({ error: 'Foto harus gambar JPEG/PNG/WebP yang valid dan ukurannya maksimal 500 KB.' });
     let photoSmUrl = null;

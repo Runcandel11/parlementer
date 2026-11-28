@@ -29,7 +29,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3473;
 const DB_PATH = '/tmp/parlementer-topbar-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '4.5.2';
+const EXPECTED_VERSION = '4.6.0';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -94,9 +94,9 @@ async function main() {
     await sleep(1200);
 
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 4.5.2', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 4.6.0', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
-    // --- CSS disajikan + aturan top bar v4.5.2 ada di dalamnya.
+    // --- CSS disajikan + aturan top bar v4.6.0 ada di dalamnya.
     const cssRes = await fetch(BASE + '/css/style.css');
     const css = await cssRes.text();
     check('CSS utama disajikan (200)', cssRes.status === 200 && css.length > 10000, `bytes=${css.length}`);
@@ -137,8 +137,8 @@ async function main() {
     check('Top bar: #btn-ads memakai gaya .hud-icon (sejajar tombol lain)',
       btnAds?.classList.contains('hud-icon') === true);
     const actionsOrder = [...(hud?.querySelectorAll('.hud-actions .hud-icon') || [])].map((el) => el.id);
-    check('Top bar: urutan aksi chat, lonceng, iklan, gear',
-      actionsOrder.join(',') === 'btn-chat,btn-notif,btn-ads,btn-settings', `aksi=${actionsOrder.join(',')}`);
+    check('Top bar: urutan aksi chat, lonceng, iklan, share, gear',
+      actionsOrder.join(',') === 'btn-chat,btn-notif,btn-ads,btn-share,btn-settings', `aksi=${actionsOrder.join(',')}`);
 
     // --- (2) Dompet = dua pill sejajar, berisi nilai asli.
     const wallet = hud?.querySelector('.hud-wallet');
