@@ -2470,23 +2470,53 @@ ROUTES.jobs = async () => {
   // error 400 "tidak berada di wilayah ini".
   const myRegionId = ME.citizen.region_id;
   const myRegionName = ME.region?.name || '';
-  const localJobs = data.jobs.filter((j) => j.region_id === myRegionId);
-  const otherJobs = data.jobs.filter((j) => j.region_id !== myRegionId);
-  const jobCard = (j, local) => `
-      <div class="card" data-job-region="${j.region_id}">
+  // Gabungkan lowongan IDENTIK menjadi satu kartu (v5.0.1, laporan
+  // Vincent): satu perusahaan yang membuka banyak lowongan dengan judul +
+  // gaji + jenis + wilayah + syarat sama (mis. 9 duplikat "Kerja" sisa
+  // exploit gaji yang sudah di-clamp $100rb) tampil sebagai kartu-kartu
+  // kembar yang membingungkan. Satu grup = satu kartu dengan kursi
+  // gabungan; tombol LAMAR memakai lowongan pertama yang masih punya kursi
+  // kosong. Tanpa duplikat, pengelompokan ini identitas (1 baris = 1 kartu).
+  const groupJobs = (list) => {
+    const groups = [];
+    const byKey = new Map();
+    for (const j of list) {
+      const key = [j.company_id ?? '', j.title, j.salary, j.salary_type, j.region_id, j.level_min, j.tier, j.is_admin ? 1 : 0].join('|');
+      let g = byKey.get(key);
+      if (!g) { g = { job: j, rows: [], seats: 0, workers: 0 }; byKey.set(key, g); groups.push(g); }
+      g.rows.push(j);
+      g.seats += j.is_admin ? 0 : (j.seats || 0);
+      g.workers += j.workers || 0;
+    }
+    return groups;
+  };
+  const localJobs = groupJobs(data.jobs.filter((j) => j.region_id === myRegionId));
+  const otherJobs = groupJobs(data.jobs.filter((j) => j.region_id !== myRegionId));
+  const jobCard = (g, local) => {
+    const j = g.job;
+    const inGroup = ME.citizen.job_id && g.rows.some((r) => r.id === ME.citizen.job_id);
+    const applyRow = g.rows.find((r) => r.is_admin || (r.seats_taken || 0) < (r.seats || 0));
+    return `
+      <div class="card" data-job-region="${j.region_id}" data-group-size="${g.rows.length}">
         <h4>${esc(j.title)} ${j.is_admin ? '<span class="chip">ADMIN</span>' : ''}</h4>
-        <p class="muted small">${esc(j.company_name || 'Pemerintah')} · ${esc(j.region_name)} · Level ${j.level_min}+ · ${j.is_admin ? 'Tanpa batas kursi' : `${j.workers}/${j.seats} kursi`}</p>
+        <p class="muted small">${esc(j.company_name || 'Pemerintah')} · ${esc(j.region_name)} · Level ${j.level_min}+ · ${j.is_admin ? 'Tanpa batas kursi' : `${g.workers}/${g.seats} kursi`}</p>
+        ${g.rows.length > 1 ? `<p class="muted small">📋 ${g.rows.length} lowongan serupa digabung — kursi dijumlahkan.</p>` : ''}
         <p class="small">${esc(j.description || '')}</p>
         <div class="kv"><span class="k">${j.salary_type === 'goods' ? 'Upah (bahan mentah)' : j.salary_type === 'share' ? 'Bagi hasil' : 'Gaji tetap'}</span><span class="v gold-text">${payLabel(j)}</span></div>
         ${j.salary_type === 'goods' ? `<p class="muted small">Setara ~${fmtRp(j.salary)} / shift · jual bahannya di pasar untuk uang.</p>` : ''}
         ${local
-          ? `<button class="btn-gold btn-sm" data-apply="${j.id}" ${ME.citizen.job_id === j.id ? 'disabled' : ''}>${ME.citizen.job_id === j.id ? '✓ Pekerjaanmu' : 'LAMAR'}</button>`
+          ? inGroup
+            ? `<button class="btn-gold btn-sm" disabled>✓ Pekerjaanmu</button>`
+            : applyRow
+              ? `<button class="btn-gold btn-sm" data-apply="${applyRow.id}">LAMAR</button>`
+              : `<button class="btn-gold btn-sm" disabled>Penuh</button>`
           : `<p class="muted small">📍 Di ${esc(j.region_name)} — kamu harus berada di sana untuk melamar.</p>
         <button class="btn-gold btn-sm" data-goto="#/regions/${j.region_id}">✈️ LIHAT WILAYAH</button>`}
       </div>`;
+  };
   $('#page').innerHTML = page('KANTOR KETENAGAKERJAAN', 'Lowongan resmi ADMIN tersedia sebagai modal awal. Perusahaan warga juga bisa membuka lowongan.', `
   <div class="stat-grid">
-    <div class="stat-cell"><div class="stat-label">📋 Lowongan di Wilayahmu</div><div class="stat-num">${fmt(localJobs.length)}</div><div class="stat-sub">di ${esc(myRegionName)} · ${fmt(data.jobs.length)} di seluruh negeri</div></div>
+    <div class="stat-cell"><div class="stat-label">📋 Lowongan di Wilayahmu</div><div class="stat-num">${fmt(localJobs.length)}</div><div class="stat-sub">di ${esc(myRegionName)} · ${fmt(localJobs.length + otherJobs.length)} di seluruh negeri (lowongan serupa digabung)</div></div>
     <div class="stat-cell"><div class="stat-label">💺 Kursi Kosong</div><div class="stat-num">${fmt(data.stats.seats || 0)}</div><div class="stat-sub">siap diisi</div></div>
     <div class="stat-cell"><div class="stat-label">💰 Nilai Terbaik</div><div class="stat-num gold">${fmt(data.stats.best || 0)}</div><div class="stat-sub">nilai setara / shift</div></div>
     <div class="stat-cell"><div class="stat-label">🧑‍💼 Posisi Saat Ini</div><div class="stat-num" style="font-size:20px">${myJob ? esc(myJob.title) : 'Belum bekerja'}</div><div class="stat-sub">${myJob ? esc(myJob.company_name || 'ADMIN') : 'Lamar lowongan di bawah'}</div></div>
@@ -3752,7 +3782,7 @@ async function renderArticle(id) {
     <div class="row" style="margin-top:14px">
       <button class="btn-ghost" id="btn-like">👍 Suka (${a.likes})</button>
       <button class="btn-ghost" id="btn-dislike">👎 Tidak Suka (${a.dislikes})</button>
-      <button class="btn-ghost" id="btn-share">🔗 Bagikan ke Obrolan</button>
+      <button class="btn-ghost" id="btn-share-article">🔗 Bagikan ke Obrolan</button>
     </div>
     <p class="muted small" style="margin-top:8px">👁️ ${fmt(a.views)} dibaca · ${esc(a.topic)}</p>
   </div>
@@ -3769,8 +3799,24 @@ async function renderArticle(id) {
   };
   $('#btn-like').onclick = () => react('like');
   $('#btn-dislike').onclick = () => react('dislike');
-  $('#btn-share').onclick = async () => {
-    try { await post('/api/chat/global', { content: 'Baca artikel ini: ' + a.title, article_id: a.id }); toast('Artikel dibagikan ke Obrolan Global.'); }
+  // v5.0.1 (laporan Vincent): ID tombol ini DULU 'btn-share' — sama dengan
+  // tombol 🔗 di HUD (share link, data-goto="#/share"). $('#btn-share')
+  // mengikat handler ke tombol HUD (yang pertama di DOM), sehingga tombol
+  // artikel MATI TOTAL (diklik tidak terjadi apa-apa — itulah yang dialami
+  // Vincent) dan klik tombol HUD malah mem-post share + balapan navigasi
+  // '#/share' vs '#/chat'. ID artikel kini 'btn-share-article' (unik).
+  $('#btn-share-article').onclick = async () => {
+    try {
+      await post('/api/chat/global', { content: 'Baca artikel ini: ' + a.title, article_id: a.id });
+      // v5.0.1 (laporan Vincent): bagikan lalu TINGGAL di halaman artikel
+      // dengan toast saja membuat pemain tidak melihat hasilnya — ia membuka
+      // chat sendiri dan tidak menemukan pesannya (apalagi bila kena
+      // cooldown 5 detik, yang hanya muncul sebagai toast sesaat). Setelah
+      // berhasil, langsung arahkan ke Obrolan Global supaya pesan +
+      // pratinjau artikelnya langsung terlihat. Gagal → toast berisi
+      // alasan sebenarnya (mis. cooldown), tetap di halaman artikel.
+      location.hash = '#/chat';
+    }
     catch (e) { toast(e.message); }
   };
   $('#btn-comment').onclick = async () => {

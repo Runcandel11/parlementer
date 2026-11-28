@@ -138,6 +138,31 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   (batas sah 2 hari ≈ $56rb) ditarik kelebihannya dari USD (sisa $100rb;
   clamp 0 bila sudah dibelanjakan); lowongan perusahaan di-clamp ke saldo
   pemilik SETELAH clawback; ADMIN tidak disentuh; emas tidak disentuh.
+- **Dedup lowongan v5.0.1 (28 Nov 2026, laporan Vincent):** 9 lowongan
+  "Kerja" identik kenzz (setelah di-clamp v5.0.0 ke $100.000) tampil sebagai
+  kartu-kartu kembar — daftar pekerjaan me-render 1 kartu per baris tanpa
+  pengelompokan. Perbaikan 3 lapis: (1) klien mengelompokkan lowongan
+  identik (perusahaan + judul + gaji + jenis + wilayah + level + tier)
+  jadi 1 kartu dengan kursi gabungan; (2) penjaga duplikat di POST
+  `/api/companies/:id/job` dan PATCH `/api/jobs/:id` — lowongan identik
+  yang masih terbuka → 400; (3) migrasi `migrateJobDedup` (skema 24,
+  penanda `job_dedup_2026_11_28`, HARUS setelah `migrateWageRollback`
+  karena gaji baru identik setelah di-clamp): per grup identik sisakan 1 —
+  penyintas = yang sedang dipegang warga, lalu seats_taken tertinggi, lalu
+  id terkecil; HANYA hapus baris seats_taken = 0 DAN tidak dipegang warga;
+  lowongan ADMIN dikecualikan; 1 notifikasi per pemilik terdampak.
+  Pelajaran: migrasi pembersih yang bergantung pada hasil migrasi lain
+  harus diurutkan eksplisit di rantai initDb, dan baris yang "hidup"
+  (dipegang pemain) tidak pernah dihapus — hanya baris kosong.
+- **Share artikel ke chat v5.0.1 (28 Nov 2026, laporan Vincent):** tombol
+  "Bagikan ke Obrolan" dulu hanya menampilkan toast dan tetap di halaman
+  artikel — pemain harus membuka chat sendiri dan tidak menemukan pesannya
+  (apalagi bila bagikannya gagal 400 karena cooldown 5 detik, yang
+  umpan-baliknya hanya toast sesaat). Sekarang: setelah berhasil langsung
+  `location.hash = '#/chat'` (pesan + pratinjau langsung terlihat);
+  article_id yang tidak ketemu → 400 "Artikel tidak ditemukan." (dulu
+  diam-diam jadi null — pesan tanpa pratinjau); validasi artikel dicek
+  SEBELUM cooldown supaya error yang benar yang tampil.
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

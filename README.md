@@ -167,20 +167,20 @@ npm run test:conc    # balapan HTTP (pasar/klaim/shift/pencapaian/blokir) di Pos
 npm run test:stage7-dom # DOM integrasi Tahap 7 (jsdom): 28 pemeriksaan
 npm run test:load    # stress test lokal (20 + 50 VU): hasil mentah docs/loadtest-2026-11-28.json
 npm run test:recovery # uji pemulihan (SIGKILL di tengah burst): 13 pemeriksaan
-# Suite DOM lain: test:chat-dom (43), test:market-dom (14),
+# Suite DOM lain: test:chat-dom (48), test:market-dom (14),
 # test:ui-batch2 (53), test:landing-glass (40), test:photo-upload (32),
-# test:profile-admin (52), test:ssl (6), test:jobs-region (22),
+# test:profile-admin (52), test:ssl (6), test:jobs-region (27),
 # test:ui-icons (18), test:company-dom (25), test:map-dom (47),
 # test:credit-dom (22), test:ticket-dom (56), test:stage6-dom (27),
 # test:bottom-nav (29), test:ads (20), test:offside (24),
 # test:topbar (31), test:share (28), test:xp-rollback (49).
-# Total seluruh suite: 2226 pemeriksaan (+ 13 uji pemulihan).
+# Total seluruh suite: 2261 pemeriksaan (+ 13 uji pemulihan).
 ```
 
-Hasil terakhir (28 Nov 2026, v5.0.0 rework upah perusahaan + rollback exploit + perbaikan share 42P18): **e2e 1097/1097 lolos,
-pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 224/224 lolos (188 lama + 36 regresi baru),
+Hasil terakhir (28 Nov 2026, v5.0.1 bagikan artikel ke chat + dedup lowongan, laporan Vincent): **e2e 1113/1113 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 233/233 lolos (224 lama + 9 regresi dedup baru),
 pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos** — dan semua suite
-DOM lain hijau (22 suite DOM + xp-rollback + ssl = 821/821, diulang penuh untuk v5.0.0). Catatan: e2e pernah sekali
+DOM lain hijau (22 suite DOM + xp-rollback + ssl = 831/831, diulang penuh untuk v5.0.1). Catatan: e2e pernah sekali
 menghitung 907/907 (satu check kondisional yang kadang tereksekusi,
 0 gagal di 7 run berturut-turut) — flake jumlah, bukan kegagalan.
 Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lamar

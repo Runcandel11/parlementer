@@ -14,9 +14,15 @@
 //   (3) ATURAN SERVER TIDAK BERUBAH: POST /api/jobs/apply lintas wilayah
 //       tetap ditolak 400 (validasi terakhir di server tetap ada).
 //   (4) LAMAR lowongan ADMIN di wilayah sendiri tetap berhasil lewat UI.
+//   (5) v5.0.1 (laporan Vincent, Discord #bugs 28 Nov 2026): lowongan
+//       perusahaan yang identik (perusahaan + judul + gaji + wilayah +
+//       syarat sama) digabung jadi SATU kartu dengan kursi gabungan —
+//       bukan 3 kartu kembar seperti 9 lowongan "Kerja" $100.000 kenzz
+//       setelah di-clamp rollback v5.0.0.
 // Jalankan: node test/jobs-region-dom.js
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import pkg from 'jsdom';
 const { JSDOM } = pkg;
 
@@ -156,6 +162,31 @@ async function main() {
     const meAfter = (await api(jar, '/api/me')).data.citizen;
     check('Klik LAMAR lokal: lamaran diterima (job_id terisi)', meAfter.job_id === adminLocal.id, `job_id=${meAfter.job_id} harapan=${adminLocal.id}`);
     check('Setelah melamar: panel PEKERJAANMU tampil', pageText(dom).includes('PEKERJAANMU'));
+
+    // (5) v5.0.1 — pengelompokan lowongan identik: seed 3 lowongan
+    // perusahaan yang identik di wilayah sendiri → tampil sebagai SATU
+    // kartu dengan kursi gabungan (bukan 3 kartu kembar).
+    const dbJ = new DatabaseSync(DB_PATH);
+    const meCitizenId = meAfter.id;
+    dbJ.prepare(`INSERT INTO companies (id, owner_id, name, about, type, region_id, resource, created_at)
+      VALUES (9001, ?, 'PT Kembar', '', 'resource', ?, 'Besi Mentah', 0)`).run(meCitizenId, myRegionId);
+    for (let i = 0; i < 3; i++) {
+      dbJ.prepare(`INSERT INTO jobs (id, company_id, is_admin, title, salary, salary_type, resource, pay_qty, level_min, tier, seats, seats_taken, region_id, description, created_at)
+        VALUES (?, 9001, 0, 'Kerja', 100, 'fixed', '', 0, 1, 1, 4, 0, ?, 'uji grup v5.0.1', 0)`).run(9002 + i, myRegionId);
+    }
+    dbJ.close();
+    dom.window.route();
+    await sleep(1500);
+    const localCardsAfter = document.querySelectorAll('#jobs-local-list [data-job-region]');
+    const twinCards = [...localCardsAfter].filter((el) => el.textContent.includes('Kerja') && el.textContent.includes('PT Kembar'));
+    check('Lowongan identik: 3 lowongan "Kerja" tampil sebagai 1 kartu', twinCards.length === 1, `kartu kembar=${twinCards.length}`);
+    const twin = twinCards[0];
+    check('Kartu gabungan: menandai 3 lowongan digabung', !!twin && twin.getAttribute('data-group-size') === '3' && twin.textContent.includes('3 lowongan serupa digabung'), twin ? `group-size=${twin.getAttribute('data-group-size')}` : 'tidak ada kartu');
+    check('Kartu gabungan: kursi dijumlahkan (0/12 kursi)', !!twin && /0\/12 kursi/.test(twin.textContent), twin ? twin.textContent.slice(0, 120) : 'tidak ada kartu');
+    const twinApply = twin?.querySelector('[data-apply]');
+    check('Kartu gabungan: tetap punya tombol LAMAR (ke lowongan berkursi kosong)', !!twinApply && ['9002', '9003', '9004'].includes(twinApply.getAttribute('data-apply')), twinApply?.getAttribute('data-apply') || 'tidak ada tombol');
+    const statsText = pageText(dom);
+    check('Statistik: jumlah lowongan wilayah memakai hitungan grup', /Lowongan di Wilayahmu/.test(statsText), statsText.slice(0, 120));
   } finally {
     if (dom) dom.window.close();
     stop();

@@ -1719,6 +1719,15 @@ export function registerCore(app) {
     if (salary > balance) {
       return res.status(400).json({ error: `Upah maksimal ${fmtRp(balance)} — sesuai uang yang sedang kamu pegang.` });
     }
+    // v5.0.1: edit upah tidak boleh menciptakan duplikat — bila upah baru
+    // membuat lowongan ini identik dengan lowongan lain yang masih terbuka
+    // di perusahaan yang sama, tolak (halaman Pekerjaan menggabungkan
+    // lowongan identik, jadi duplikat hanya membingungkan).
+    const dup = await one(
+      `SELECT id FROM jobs WHERE company_id = ? AND is_admin = 0 AND id != ? AND title = ? AND salary = ?
+       AND salary_type = ? AND region_id = ? AND level_min = ? AND tier = ? AND seats_taken < seats`,
+      [job.company_id, job.id, job.title, salary, job.salary_type, job.region_id, job.level_min, job.tier]);
+    if (dup) return res.status(400).json({ error: 'Upah ini membuat lowongan sama dengan lowongan lain yang sudah terbuka di perusahaan ini.' });
     await run('UPDATE jobs SET salary = ? WHERE id = ?', [salary, job.id]);
     const updated = await one('SELECT * FROM jobs WHERE id = ?', [job.id]);
     res.json({ ok: true, job: updated });
@@ -1731,18 +1740,34 @@ export function registerCore(app) {
     const { title, salary, salary_type, seats } = req.body || {};
     const salaryUsd = Number(salary);
     if (!title || !Number.isFinite(salaryUsd) || salaryUsd <= 0) return res.status(400).json({ error: 'Judul dan gaji wajib diisi (gaji harus angka lebih dari 0).' });
+    const cleanTitle = title.slice(0, 80);
+    const cleanType = salary_type === 'share' ? 'share' : 'fixed';
     // ATURAN BARU (v5.0.0): gaji maksimal = uang yang SEDANG dipegang
     // pemilik (tanpa batas tetap — dulu endpoint ini TIDAK ADA batas atas,
     // sehingga lowongan bergaji ~5,46e21 lolos dan meracuni NILAI TERBAIK).
-    const owner = await one('SELECT usd FROM citizens WHERE id = ?', [co.owner_id]);
-    const balance = owner?.usd ?? 0;
-    if (salaryUsd > balance) {
-      return res.status(400).json({ error: `Gaji maksimal ${fmtRp(balance)} — sesuai uang yang sedang kamu pegang.` });
-    }
-    const j = await run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, level_min, tier, seats, seats_taken, region_id, description, created_at)
-      VALUES (?,0,?,?,?,1,1,?,0,?,?,?) RETURNING id`,
-      [co.id, title.slice(0, 80), salaryUsd, salary_type === 'share' ? 'share' : 'fixed', Math.max(1, Math.min(20, Number(seats) || 1)), co.region_id, '', Date.now()]);
-    res.json({ ok: true, jobId: j.id });
+    // v5.0.1 (laporan Vincent): lowongan DUPLIKAT dilarang — lowongan
+    // identik yang masih terbuka di perusahaan yang sama ditolak, supaya
+    // halaman Pekerjaan tidak lagi dipenuhi kartu-kartu kembar. Cek +
+    // insert dalam satu tx dengan kunci baris perusahaan, jadi dua request
+    // bersamaan tidak bisa sama-sama lolos.
+    const jobId = await tx(async (t) => {
+      await t.one(forUpdate('SELECT * FROM companies WHERE id = ?'), [co.id]);
+      const owner = await t.one('SELECT usd FROM citizens WHERE id = ?', [co.owner_id]);
+      const balance = owner?.usd ?? 0;
+      if (salaryUsd > balance) {
+        throw Object.assign(new Error(`Gaji maksimal ${fmtRp(balance)} — sesuai uang yang sedang kamu pegang.`), { status: 400 });
+      }
+      const dup = await t.one(
+        `SELECT id FROM jobs WHERE company_id = ? AND is_admin = 0 AND title = ? AND salary = ?
+         AND salary_type = ? AND region_id = ? AND level_min = 1 AND tier = 1 AND seats_taken < seats`,
+        [co.id, cleanTitle, salaryUsd, cleanType, co.region_id]);
+      if (dup) throw Object.assign(new Error('Lowongan yang sama sudah terbuka di perusahaan ini.'), { status: 400 });
+      const j = await t.run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, level_min, tier, seats, seats_taken, region_id, description, created_at)
+        VALUES (?,0,?,?,?,1,1,?,0,?,?,?) RETURNING id`,
+        [co.id, cleanTitle, salaryUsd, cleanType, Math.max(1, Math.min(20, Number(seats) || 1)), co.region_id, '', Date.now()]);
+      return j.id;
+    });
+    res.json({ ok: true, jobId });
   }));
 
   // Edit perusahaan (v2.4.0, saran LIO): HANYA pemilik. Yang bisa diubah:

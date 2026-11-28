@@ -1255,6 +1255,7 @@ export async function initDb() {
     await migrateAutoWorkColumns(t);
     await migrateShareColumns(t);
     await migrateWageRollback(t);
+    await migrateJobDedup(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1333,7 +1334,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 23;
+const SCHEMA_VERSION = 24;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -2064,6 +2065,87 @@ export async function migrateWageRollback(t) {
   console.log(`[migrasi wage-rollback] warga dicek=${summary.citizensChecked} ditarik=${summary.citizensClawedBack} tidak-berubah=${summary.citizensUnchanged} | lowongan dicek=${summary.jobsChecked} diturunkan=${summary.jobsClamped} tidak-berubah=${summary.jobsUnchanged}`);
   for (const ex of summary.clawedBack.slice(0, 5)) console.log(`[migrasi wage-rollback] contoh tarik: ${ex.citizen}: total_gaji ${ex.totalSalaryBefore} usd ${ex.usdBefore} -> ditarik ${ex.deducted}, sisa ${ex.usdAfter}, tak-terpulihkan ${ex.unrecovered}`);
   for (const ex of summary.clamped.slice(0, 5)) console.log(`[migrasi wage-rollback] contoh clamp: ${ex.job} (${ex.owner}): ${ex.before} -> ${ex.after}`);
+  return summary;
+}
+
+// v5.0.1 — Bersihkan lowongan DUPLIKAT (laporan Vincent, Discord #bugs
+// 28 Nov 2026): kenzz membuka 9 lowongan "Kerja" identik di perusahaannya
+// dengan gaji menanjak (sisa exploit); rollback v5.0.0 men-clamp kesembilan-
+// nya ke $100.000 sehingga tampil sebagai kartu-kartu kembar di halaman
+// Pekerjaan. Migrasi ini HARUS jalan SETELAH migrateWageRollback — baru
+// setelah di-clamp gaji-gaji itu menjadi identik dan bisa dikelompokkan.
+// Per grup identik (perusahaan + judul + gaji + jenis + wilayah + level +
+// tier, hanya lowongan perusahaan — is_admin = 0): sisakan SATU baris,
+// hapus sisanya — TAPI hanya baris yang kursinya kosong (seats_taken = 0)
+// DAN tidak sedang dipegang warga mana pun (citizens.job_id). Bila ada
+// baris yang sedang dipegang (mis. job 57 milik kenzz), baris itu yang
+// dipertahankan. Baris yang kursinya terisi tidak pernah dihapus (tampilan
+// kembarnya tetap digabung di klien). Satu notifikasi per pemilik yang
+// lowongannya dibersihkan. Idempotent via penanda db_meta.
+const JOB_DEDUP_KEY = 'job_dedup_2026_11_28';
+export async function migrateJobDedup(t) {
+  const done = await t.one('SELECT value FROM db_meta WHERE key = ?', [JOB_DEDUP_KEY]);
+  if (done) {
+    console.log('[migrasi job-dedup] sudah pernah jalan — dilewati.');
+    return { skipped: true };
+  }
+  const now = Date.now();
+  const summary = {
+    groupsChecked: 0, groupsCleaned: 0, jobsDeleted: 0, deleted: [], kept: [],
+  };
+  const rows = await t.sql(
+    `SELECT j.id, j.company_id, j.title, j.salary, j.salary_type, j.region_id,
+       j.level_min, j.tier, j.seats, j.seats_taken, co.owner_id
+     FROM jobs j LEFT JOIN companies co ON co.id = j.company_id
+     WHERE j.is_admin = 0 ORDER BY j.id`);
+  // Lowongan yang sedang dipegang warga — diambil terpisah (bukan
+  // EXISTS berkorelasi) supaya migrasi jalan juga di pg-mem (tes pg-test)
+  // yang tidak mendukung subquery berkorelasi dengan alias tabel.
+  const heldRows = await t.sql('SELECT DISTINCT job_id FROM citizens WHERE job_id IS NOT NULL');
+  const heldIds = new Set(heldRows.map((r) => r.job_id));
+  const groups = new Map();
+  for (const j of rows) {
+    const key = [j.company_id ?? '', j.title, Number(j.salary), j.salary_type, j.region_id, j.level_min, j.tier].join('|');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(j);
+  }
+  const notifiedOwners = new Map();
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    summary.groupsChecked++;
+    // Penyintas: yang sedang dipegang warga dulu, lalu kursi terisi
+    // terbanyak, lalu id terkecil (paling tua).
+    const sorted = [...members].sort((a, b) =>
+      ((heldIds.has(b.id) ? 1 : 0) - (heldIds.has(a.id) ? 1 : 0)) ||
+      ((b.seats_taken || 0) - (a.seats_taken || 0)) ||
+      (a.id - b.id));
+    const survivor = sorted[0];
+    let deletedInGroup = 0;
+    for (const j of sorted.slice(1)) {
+      if ((j.seats_taken || 0) > 0 || heldIds.has(j.id)) continue; // berisi pemegang — jangan hapus
+      await t.run('DELETE FROM jobs WHERE id = ?', [j.id]);
+      summary.jobsDeleted++;
+      deletedInGroup++;
+      summary.deleted.push({ job: j.title, ownerId: j.owner_id ?? null, id: j.id, salary: Number(j.salary) });
+    }
+    if (deletedInGroup > 0) {
+      summary.groupsCleaned++;
+      summary.kept.push({ job: survivor.title, id: survivor.id, held: heldIds.has(survivor.id) });
+      if (survivor.owner_id != null) {
+        notifiedOwners.set(survivor.owner_id, (notifiedOwners.get(survivor.owner_id) || 0) + deletedInGroup);
+      }
+    }
+  }
+  for (const [ownerId, n] of notifiedOwners) {
+    await t.run(
+      'INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?)',
+      [ownerId, 'SISTEM', 'Lowongan duplikat dibersihkan',
+       `${n} lowongan duplikat di perusahaanmu dihapus — lowongan dengan judul, gaji, dan wilayah yang sama digabung menjadi satu (satu lowongan per grup dipertahankan, termasuk yang sedang dipegang karyawan). Buka lowongan baru yang identik dengan yang sudah terbuka kini ditolak; tambah kursi lewat lowongan yang ada.`, now]);
+  }
+  const existing = await t.one('SELECT value FROM db_meta WHERE key = ?', [JOB_DEDUP_KEY]);
+  if (existing) await t.run('UPDATE db_meta SET value = ? WHERE key = ?', [JSON.stringify(summary), JOB_DEDUP_KEY]);
+  else await t.run('INSERT INTO db_meta (key, value) VALUES (?, ?)', [JOB_DEDUP_KEY, JSON.stringify(summary)]);
+  console.log(`[migrasi job-dedup] grup identik=${summary.groupsChecked} dibersihkan=${summary.groupsCleaned} lowongan dihapus=${summary.jobsDeleted}`);
   return summary;
 }
 

@@ -1435,13 +1435,20 @@ export function registerCivic(app) {
     // Anti-spam atomik: kunci baris warga, cek jeda 5 detik dari nilai segar,
     // lalu simpan pesan + update last_chat_at di dalam tx yang sama.
     const { msgId, counted } = await tx(async (t) => {
-      const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
-      if (Date.now() - (locked.last_chat_at || 0) < CHAT_COOLDOWN_MS) throw Object.assign(new Error('Tunggu sebentar sebelum mengirim pesan lagi.'), { status: 400 });
+      // v5.0.1: validasi artikel DULU sebelum cooldown — artikel yang
+      // tidak ada adalah request yang salah apa pun jedanya; pemain harus
+      // mendapat "Artikel tidak ditemukan.", bukan "Tunggu sebentar...".
       let articleId = null;
       if (article_id) {
         const a = await t.one('SELECT id FROM articles WHERE id = ?', [article_id]);
-        if (a) articleId = a.id;
+        // v5.0.1 (laporan Vincent): article_id yang tidak ketemu JANGAN
+        // diam-diam dibuang jadi null — pesan terkirim tanpa pratinjau dan
+        // pemain mengira bagikannya gagal. Gagalkan dengan 400 yang jelas.
+        if (!a) throw Object.assign(new Error('Artikel tidak ditemukan.'), { status: 400 });
+        articleId = a.id;
       }
+      const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
+      if (Date.now() - (locked.last_chat_at || 0) < CHAT_COOLDOWN_MS) throw Object.assign(new Error('Tunggu sebentar sebelum mengirim pesan lagi.'), { status: 400 });
       const msg = await t.run('INSERT INTO chat_messages (room, citizen_id, content, article_id, created_at) VALUES (?,?,?,?,?) RETURNING id',
         [room, c.id, text, articleId, Date.now()]);
       await t.run('UPDATE citizens SET last_chat_at = ?, chat_today = chat_today + 1 WHERE id = ?', [Date.now(), c.id]);

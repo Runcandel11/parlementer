@@ -3718,6 +3718,56 @@ async function main() {
   check('Shift ADMIN: USD pekerja TIDAK berubah', Math.abs(t4UsdA - t4UsdB) < 0.01, `pekerja ${t4UsdB} -> ${t4UsdA}`);
   dbS34.close();
 
+  console.log('\n[35] v5.0.1 — Bagikan artikel ke chat + lowongan duplikat ditolak (laporan Vincent)');
+  const H1 = new Client(); const H2 = new Client();
+  H1.extraHeaders = { 'X-Forwarded-For': '127.0.0.71' };
+  H2.extraHeaders = { 'X-Forwarded-For': '127.0.0.72' };
+  r = await H1.post('/api/auth/register', { email: 'h1@test.local', password: 'rahasia123', username: 'h_satu' });
+  check('H1 terdaftar', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await H2.post('/api/auth/register', { email: 'h2@test.local', password: 'rahasia123', username: 'h_dua' });
+  check('H2 terdaftar', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const dbS35 = new DatabaseSync(DB_PATH);
+  const meH1 = (await H1.get('/api/me')).data.citizen;
+  const meH2 = (await H2.get('/api/me')).data.citizen;
+  dbS35.prepare('UPDATE citizens SET gold = 1000, usd = 10000 WHERE id = ?').run(meH1.id);
+  // H2 tinggal di wilayah H1 supaya bisa melamar lowongan perusahaan H1.
+  dbS35.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(meH1.region_id, meH1.region_id, meH2.id);
+  r = await H1.post('/api/press/newspaper', { name: 'Koran H1' });
+  check('H1 mendirikan koran', r.status === 200 && !!r.data.newspaperId, `status=${r.status} ${r.data.error || ''}`);
+  const npH = r.data.newspaperId;
+  r = await H1.post('/api/press/articles', { newspaper_id: npH, title: 'Berita H1 Penting', content: 'Isi artikel H1 yang cukup panjang untuk lolos validasi minimal dua puluh karakter.', topic: 'Pengumuman' });
+  check('H1 menerbitkan artikel', r.status === 200 && !!r.data.articleId, `status=${r.status} ${r.data.error || ''}`);
+  const artH = r.data.articleId;
+  r = await H1.post('/api/chat/global', { content: 'Baca artikel ini: Berita H1 Penting', article_id: artH });
+  check('Bagikan artikel ke Global: 200', r.status === 200 && !!r.data.messageId, `status=${r.status} ${r.data.error || ''}`);
+  r = await H1.get('/api/chat/global');
+  const sharedH = (r.data.messages || []).find((m) => m.article_id === artH);
+  check('Pesan share ada di Global + pratinjau (article_id + judul)', !!sharedH && sharedH.article_title === 'Berita H1 Penting', sharedH ? `judul=${sharedH.article_title}` : 'pesan tidak ditemukan');
+  r = await H1.post('/api/chat/global', { content: 'Baca artikel ini: Berita H1 Penting', article_id: artH });
+  check('Bagikan lagi <5 detik: 400 cooldown', r.status === 400 && /Tunggu sebentar/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  r = await H1.post('/api/chat/global', { content: 'Baca artikel ini: Hantu', article_id: 999999 });
+  check('Bagikan artikel tak ada: 400 "Artikel tidak ditemukan." (bukan diam-diam tanpa pratinjau)', r.status === 400 && /Artikel tidak ditemukan/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  r = await H1.post('/api/companies', { type: 'resource', name: 'PT H1', resource: 'Besi Mentah' });
+  check('H1 mendirikan perusahaan', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
+  const coH = r.data.companyId;
+  r = await H1.post(`/api/companies/${coH}/job`, { title: 'Kerja', salary: 100, salary_type: 'fixed', seats: 4 });
+  check('Buka lowongan Kerja $100', r.status === 200 && !!r.data.jobId, `status=${r.status} ${r.data.error || ''}`);
+  const jobH1 = r.data.jobId;
+  r = await H1.post(`/api/companies/${coH}/job`, { title: 'Kerja', salary: 100, salary_type: 'fixed', seats: 4 });
+  check('Buka lowongan identik: 400 sudah terbuka', r.status === 400 && /sudah terbuka/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  r = await H1.post(`/api/companies/${coH}/job`, { title: 'Kerja', salary: 150, salary_type: 'fixed', seats: 4 });
+  check('Buka lowongan judul sama gaji beda: 200', r.status === 200 && !!r.data.jobId, `status=${r.status} ${r.data.error || ''}`);
+  const jobH2 = r.data.jobId;
+  r = await H1.patch(`/api/jobs/${jobH2}`, { salary: 100 });
+  check('Edit upah jadi duplikat lowongan terbuka: 400', r.status === 400 && /sama dengan/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  r = await H1.patch(`/api/jobs/${jobH2}`, { salary: 120 });
+  check('Edit upah jadi 120 (tidak duplikat): 200', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await H2.post('/api/jobs/apply', { job_id: jobH1 });
+  check('H2 melamar lowongan pertama (pemegang tidak boleh hilang saat dedup)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const jobsAfter = (await H1.get('/api/jobs')).data.jobs || [];
+  check('Lowongan pertama tetap ada setelah H2 melamar', jobsAfter.some((j) => j.id === jobH1), `jobH1=${jobH1}`);
+  dbS35.close();
+
   setDayO(1);
 
   dbS6.close();

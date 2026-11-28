@@ -226,6 +226,23 @@ async function main() {
     await sleep(600);
     check('editor artikel: input sampul + tombol sisipkan gambar tampil', !!document.querySelector('#art-cover-file') && !!document.querySelector('#btn-art-inline'));
 
+    // [H] v5.0.1 (laporan Vincent, Discord #bugs 28 Nov 2026): bagikan
+    // artikel → langsung masuk Obrolan Global dan pesan + pratinjau
+    // artikelnya langsung terlihat di sana (dulu hanya toast, pemain harus
+    // membuka chat sendiri dan tidak menemukan pesannya).
+    window.location.hash = '#/press/' + artJson.articleId;
+    window.route();
+    await sleep(800);
+    check('halaman artikel tampil lagi (tombol bagikan ada)', !!document.querySelector('#btn-share-article'));
+    check('tidak ada id ganda: 1 #btn-share (HUD) + 1 #btn-share-article', document.querySelectorAll('#btn-share').length === 1 && !!document.querySelector('#btn-share-article'));
+    document.querySelector('#btn-share-article')?.click();
+    await sleep(1200);
+    check('klik Bagikan: langsung pindah ke Obrolan Global', window.location.hash === '#/chat', `hash=${window.location.hash}`);
+    const sharedMsgs = [...document.querySelectorAll('#chat-list .msg')].map((m) => m.textContent);
+    check('pesan share tampil di chat Global', sharedMsgs.some((t) => t.includes('Baca artikel ini:')), `n=${sharedMsgs.length}`);
+    const preview = document.querySelector('#chat-list .msg .article-preview');
+    check('pesan share membawa pratinjau artikel (judul + ARTIKEL)', !!preview && /ARTIKEL/.test(preview.textContent) && preview.textContent.includes('Artikel Gambar ChatDom'), preview?.textContent.slice(0, 80) || 'tidak ada pratinjau');
+
     // [G] Redesain dunia: tab WILAYAH (bukan NEGARA) + room region_<id>.
     window.location.hash = '#/chat';
     window.route();
