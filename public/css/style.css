@@ -155,6 +155,34 @@ a.btn-gold { display: inline-block; text-decoration: none; }
   .energy-bar { grid-column: 2; }
 }
 
+/* ---------- bottom navigation (HP) ---------- */
+/* Saran pemain ricky.s888 via Threads (27 Nov 2026): menu utama di bawah
+   layar HP ala Rival Regions. Default SEMBUNYI — di desktop (lebar
+   >=900px, breakpoint yang sama dengan .drawer) drawer tampil sebagai
+   sidebar permanen, jadi bar bawah tidak dipakai. */
+.bottom-nav { display: none; }
+@media (max-width: 899px) {
+  .bottom-nav {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    background: rgba(10, 15, 28, .92); border-top: 1px solid var(--line);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    padding: 6px 2px calc(6px + env(safe-area-inset-bottom, 0px));
+  }
+  .bottom-nav-item {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    align-items: center; gap: 2px; background: transparent; border: none;
+    color: var(--muted); font-family: 'Oswald', sans-serif; font-size: 11px;
+    letter-spacing: .04em; text-transform: uppercase; padding: 4px 0;
+  }
+  .bottom-nav-item .bn-ico { font-size: 20px; line-height: 1; color: var(--gold); }
+  .bottom-nav-item.active { color: var(--gold-bright); }
+  .bottom-nav-item.active .bn-ico { color: var(--gold-bright); }
+  /* Bar energi mengambang naik di atas bottom nav supaya tidak tertutup. */
+  .energy-bar { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+  /* Konten halaman butuh ruang ekstra di bawah supaya tidak tertutup bar. */
+  .page { padding-bottom: 240px; }
+}
+
 /* ---------- halaman ---------- */
 .page { max-width: 860px; margin: 0 auto; padding: 16px 14px 180px; }
 .page h2 { font-size: 26px; margin: 4px 0 2px; }
@@ -296,6 +324,7 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 #app.banned { display: block; }
 #app.banned .hud,
 #app.banned .energy-bar,
+#app.banned .bottom-nav,
 #app.banned .drawer,
 #app.banned .drawer-overlay { display: none !important; }
 

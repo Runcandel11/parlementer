@@ -458,6 +458,18 @@ const NAV = [
   ]},
 ];
 
+// Bottom navigation HP (saran pemain ricky.s888 via Threads, 27 Nov 2026):
+// menu utama di bawah layar ala Rival Regions, menggantikan keharusan
+// membuka drawer geser kiri. 5 tab utama + tombol Menu yang membuka drawer
+// yang sudah ada untuk semua bagian lain. [slug, label, ikon]
+const BOTTOM_NAV = [
+  ['dashboard', 'Dashboard', '▦'],
+  ['jobs', 'Pekerjaan', '💼'],
+  ['market', 'Pasar', '🏪'],
+  ['chat', 'Obrolan', '💬'],
+  ['profile', 'Profil', '👤'],
+];
+
 function buildNav() {
   const adminGroup = ME?.citizen?.is_admin ? `
     <div class="nav-group">ADMIN</div>
@@ -482,6 +494,21 @@ function buildNav() {
   });
   $('#nav-logout').onclick = logout;
   updateWarBanner();
+  // Bottom navigation HP: 5 tab utama + tombol Menu (buka drawer).
+  const bn = $('#bottom-nav');
+  if (bn) {
+    bn.innerHTML = BOTTOM_NAV.map(([slug, label, ico]) => `
+      <button class="bottom-nav-item" data-route="${slug}" type="button" aria-label="${label}">
+        <span class="bn-ico" aria-hidden="true">${ico}</span><span class="bn-label">${label}</span>
+      </button>`).join('') + `
+      <button class="bottom-nav-item" id="bottom-nav-menu" type="button" aria-label="Menu">
+        <span class="bn-ico" aria-hidden="true">☰</span><span class="bn-label">Menu</span>
+      </button>`;
+    $$('#bottom-nav .bottom-nav-item[data-route]').forEach((b) => {
+      b.onclick = () => { location.hash = '#/' + b.dataset.route; };
+    });
+    $('#bottom-nav-menu').onclick = openDrawer;
+  }
 }
 
 // Banner perang di bawah menu (gaya Parlamentum): HANYA bila /api/me
@@ -743,6 +770,8 @@ function route() {
   }
   $('#app').classList.remove('banned');
   $$('#drawer-nav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.route === slug));
+  // Bottom navigation HP: tab aktif mengikuti route yang sama.
+  $$('#bottom-nav .bottom-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.route === slug));
   const fn = ROUTES[slug] || ROUTES.dashboard;
   // Skeleton loading (Tahap 3, §7): ganti "Memuat…" polos dengan shimmer
   // supaya perpindahan halaman terasa instan, bukan kosong.

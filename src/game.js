@@ -60,7 +60,9 @@
 // dalam 5 menit terakhir, atau "Terakhir online X jam Y menit lalu" bila
 // offline; ambang 5 menit jadi satu konstanta ONLINE_WINDOW_MS di bawah,
 // dipakai juga countOnline() di api-core.js (dulu literal tersendiri).
-export const VERSION = '4.3.0';
+// Update kecil v4.3.1 = bottom navigation di HP (saran ricky.s888 via
+// Threads, 28 Nov 2026): menu utama di bawah layar ala Rival Regions.
+export const VERSION = '4.3.1';
 
 // --- Satuan waktu dasar (Tahap 7) ---
 // Satu sumber kebenaran untuk "sehari" dalam milidetik — semua konstanta
