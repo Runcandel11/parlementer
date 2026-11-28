@@ -384,6 +384,9 @@ CREATE TABLE IF NOT EXISTS citizens (
   -- URL publik /s/<kode>; NULL sampai warga pertama kali membuka halaman
   -- Bagikan Link (dibuat malas di GET /api/share).
   share_code TEXT,
+  -- Tutorial overlay (v5.2.0): 0 = belum pernah menyelesaikan/melewati
+  -- tutorial awal; 1 = sudah selesai atau dilewati (tidak muncul lagi).
+  tutorial_done INTEGER NOT NULL DEFAULT 0,
   energy_spent_today INTEGER NOT NULL DEFAULT 0,
   chat_today INTEGER NOT NULL DEFAULT 0,
   last_chat_at BIGINT NOT NULL DEFAULT 0,
@@ -1256,6 +1259,7 @@ export async function initDb() {
     await migrateShareColumns(t);
     await migrateWageRollback(t);
     await migrateJobDedup(t);
+    await migrateTutorialColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1334,7 +1338,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 24;
+const SCHEMA_VERSION = 25;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1956,6 +1960,38 @@ async function migrateShareColumns(t) {
   };
   await addCol('citizens', 'share_code', 'TEXT');
   await t.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_share_code ON citizens(share_code) WHERE share_code IS NOT NULL');
+}
+
+// Tutorial overlay (v5.2.0): kolom penanda tutorial awal di citizens.
+// DB baru sudah punya kolomnya di schema(); migrasi ini menambahkannya ke
+// DB lama + menandai SEMUA warga yang sudah ada sebagai selesai (backfill
+// tutorial_done = 1) — jadi pemain LAMA tidak pernah melihat overlay;
+// hanya warga yang mendaftar SETELAH migrasi (default 0) yang melihatnya.
+// Backfill dijaga penanda db_meta (sekali saja): migrasi yang diulang
+// paksa (mis. reset versi di tes) TIDAK menandai warga baru sebagai selesai.
+const TUTORIAL_BACKFILL_KEY = 'tutorial_backfill_2026_11_28';
+async function migrateTutorialColumns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('citizens', 'tutorial_done', 'INTEGER NOT NULL DEFAULT 0');
+  const marked = await t.one('SELECT value FROM db_meta WHERE key = ?', [TUTORIAL_BACKFILL_KEY]);
+  if (marked) {
+    console.log('[migrasi tutorial] backfill sudah pernah jalan — dilewati.');
+    return;
+  }
+  // Backfill: warga lama = sudah selesai (tidak melihat overlay).
+  await t.run('UPDATE citizens SET tutorial_done = 1 WHERE tutorial_done = 0');
+  const done = await t.one('SELECT COUNT(*) AS n FROM citizens WHERE tutorial_done = 1');
+  const existing = await t.one('SELECT value FROM db_meta WHERE key = ?', [TUTORIAL_BACKFILL_KEY]);
+  if (existing) await t.run('UPDATE db_meta SET value = ? WHERE key = ?', [String(Number(done?.n || 0)), TUTORIAL_BACKFILL_KEY]);
+  else await t.run('INSERT INTO db_meta (key, value) VALUES (?, ?)', [TUTORIAL_BACKFILL_KEY, String(Number(done?.n || 0))]);
+  console.log(`[migrasi tutorial] warga lama ditandai selesai: ${Number(done?.n || 0)}`);
 }
 
 // v5.0.0 (28 Nov 2026) — rollback exploit gaji perusahaan.

@@ -909,6 +909,16 @@ export function registerCore(app) {
     res.json({ ok: true });
   }));
 
+  // ---------- TUTORIAL AWAL (overlay, v5.2.0) ----------
+  // Tandai tutorial awal selesai ATAU dilewati — keduanya menutup overlay
+  // secara permanen. Tersimpan di SERVER (citizens.tutorial_done) supaya
+  // pemain baru yang login di perangkat lain tetap tidak melihatnya lagi.
+  // Idempotent: sudah 1 tetap 1; tanpa hadiah, tanpa efek lain.
+  app.post('/api/tutorial/done', authRequired, citizenRequired, r(async (req, res) => {
+    await run('UPDATE citizens SET tutorial_done = 1 WHERE id = ?', [req.citizen.id]);
+    res.json({ ok: true });
+  }));
+
   // ---------- PETA: koordinat ibu kota + kunjungan kronik ----------
   // /api/regions menyertakan coords (REGION_COORDS) supaya peta besar di
   // klien bisa menaruh penanda KAMU + label di posisi geografis nyata.

@@ -168,13 +168,13 @@ npm run test:stage7-dom # DOM integrasi Tahap 7 (jsdom): 28 pemeriksaan
 npm run test:load    # stress test lokal (20 + 50 VU): hasil mentah docs/loadtest-2026-11-28.json
 npm run test:recovery # uji pemulihan (SIGKILL di tengah burst): 13 pemeriksaan
 # Suite DOM lain: test:chat-dom (48), test:market-dom (14),
-# test:ui-batch2 (53), test:landing-glass (40), test:photo-upload (32),
+# test:ui-batch2 (53), test:landing-glass (73), test:photo-upload (32),
 # test:profile-admin (52), test:ssl (6), test:jobs-region (27),
 # test:ui-icons (18), test:company-dom (25), test:map-dom (47),
 # test:credit-dom (22), test:ticket-dom (56), test:stage6-dom (27),
 # test:bottom-nav (29), test:ads (20), test:offside (24),
-# test:topbar (31), test:share (28), test:xp-rollback (49).
-# Total seluruh suite: 2291 pemeriksaan (+ 13 uji pemulihan).
+# test:topbar (31), test:share (28), test:tutorial-dom (43), test:xp-rollback (49).
+# Total seluruh suite: 2350 pemeriksaan (+ 13 uji pemulihan).
 ```
 
 Hasil terakhir (28 Nov 2026, v5.1.0 kartu preview + rombak landing ala Parlementum + logo P MERAH): **e2e 1113/1113 lolos,
@@ -188,6 +188,18 @@ menghitung 907/907 (satu check kondisional yang kadang tereksekusi,
 Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lamar
 kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara ~48,40 USD; USD tidak
 berubah) → pasar (jual/beli, pajak 2%) → makan → valas (cetak 1 emas = 10 USD)
+
+Hasil terakhir (28 Nov 2026, v5.2.0 overlay tutorial pemain baru + AdSense): **e2e 1119/1119 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 240/240 lolos,
+pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, tutorial-dom 43/43 lolos,
+landing-glass-dom 73/73 lolos** — dan semua suite DOM lain hijau (21 suite DOM = 852/852,
+xp-rollback 49/49, ssl 6/6; total 2350/2350, 0 gagal). Tutorial: overlay 7 langkah muncul otomatis
+di dashboard saat login pertama pemain baru (tutorial_done = 0, tersimpan di server; warga lama
+di-backfill 1 saat migrasi skema 25), tombol Lewati selalu ada, selesai/lewati menutup permanen,
+replay dari Buku Panduan/Pengaturan; pemain baru yang masuk lewat deep link tidak dibajak —
+overlay baru muncul begitu ia sampai di dashboard. AdSense: script verifikasi
+ca-pub-2013457230013617 di &lt;head&gt; + public/ads.txt (google.com, pub-2013457230013617, DIRECT,
+f08c47fec0942fa0) — dicek landing-glass-dom (script ada di HTML, /ads.txt 200 + isi persis).
 → perjalanan (1 Tiket) → chat + lapor + blokir → aturan dunia (partai Level 10,
 pasar 0) → daily tick (hari 1 → 2, energi pulih 100) → logout → **referral
 (bonus cair di Level 3, maks 5/hari) + admin bootstrap (email admin tanpa kode

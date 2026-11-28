@@ -305,6 +305,14 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .report-reasons button.selected { border-color: var(--gold); color: var(--gold-bright); }
 .modal-actions { display: flex; gap: 10px; margin-top: 14px; }
 .modal-actions > * { flex: 1; }
+/* Tutorial awal (v5.2.0): kartu menempel di bawah supaya halaman di
+   belakangnya tetap terlihat — tur berjalan di atas UI asli, bukan di
+   atas layar hitam penuh. */
+.modal.tutorial-modal { align-items: flex-end; padding-bottom: 76px; background: rgba(0,0,0,.45); }
+.tutorial-dots { display: flex; gap: 6px; margin: 14px 0 2px; }
+.tutorial-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.tutorial-dot.active { background: #ffd700; }
+.tutorial-dot.done { background: var(--teal); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 84px; z-index: 90; background: #12203a; border: 1px solid var(--gold-dim); color: var(--text); border-radius: 10px; padding: 10px 16px; font-size: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.5); max-width: 90vw; text-align: center; }
 .party-tag { color: var(--gold-bright); font-family: 'Oswald', sans-serif; }
 .premium-name { color: var(--gold-bright); }

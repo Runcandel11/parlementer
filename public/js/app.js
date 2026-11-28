@@ -679,6 +679,7 @@ async function showApp() {
   $('#btn-crate').onclick = claimDaily;
   window.addEventListener('hashchange', route);
   route();
+  maybeShowTutorial();
   maybeShowAnnouncement();
   // Polling hemat (Tahap 5 — lag): saat tab tidak aktif, jangan membebani
   // server dengan polling /api/me tiap 30 detik + chat tiap 5 detik.
@@ -906,6 +907,10 @@ function route() {
     // tidak memanggil route(), jadi fokus tidak dicuri saat mengetik.
     const h = $('#page h2');
     if (h) h.focus({ preventScroll: true });
+    // Tutorial awal (v5.2.0): cek tiap pindah halaman — pemain baru yang
+    // masuk lewat deep link (bukan dashboard) tetap melihat tutorial
+    // begitu sampai di dashboard; di halaman lain tidak dibajak.
+    maybeShowTutorial();
   }).catch((e) => {
     $('#page').innerHTML = `<div class="panel"><h3>Terjadi kesalahan</h3><p class="muted">${esc(e.message)}</p>
       <button class="btn-gold" data-reload="1">Muat Ulang</button></div>`;
@@ -1692,6 +1697,10 @@ ROUTES.settings = async () => {
     <p class="muted small">Suara ketukan halus setiap kali menekan tombol. Preferensi tersimpan di perangkat ini.</p>
     <button class="btn-gold" id="btn-sound-toggle">${soundEnabled() ? '🔊 Suara: NYALA — ketuk untuk mematikan' : '🔇 Suara: MATI — ketuk untuk menyalakan'}</button>
   </div>
+  <div class="panel"><h3>🎓 TUTORIAL AWAL</h3>
+    <p class="muted small">Putar ulang tur pengenalan game untuk pemain baru.</p>
+    <button class="btn-gold" type="button" data-replay-tutorial>▶ LIHAT TUTORIAL LAGI</button>
+  </div>
   <div class="panel"><h3>👤 AKUN</h3>
     <div class="kv"><span class="k">ID Pemain</span><span class="v"><b>${esc(pubId(ME.user.id))}</b></span></div>
     <div class="kv"><span class="k">Email</span><span class="v">${esc(c.email)}</span></div>
@@ -1719,6 +1728,7 @@ ROUTES.settings = async () => {
     catch (e) { toast(e.message); }
   };
   $('#btn-logout').onclick = logout;
+  $$('[data-replay-tutorial]').forEach((b) => { b.onclick = () => showTutorial(); });
 };
 
 // ---------- PANEL ADMIN ----------
@@ -4441,6 +4451,10 @@ ROUTES.book = async () => {
   let ann = { announcements: [] };
   try { ann = await api('/api/announcements'); } catch { /* panduan tetap tampil walau pengumuman gagal dimuat */ }
   $('#page').innerHTML = page('BUKU PANDUAN', 'Cara bermain Parlementer.', `
+  <div class="panel"><h3>🎓 TUTORIAL AWAL</h3>
+    <p class="muted small">Tur singkat pengenalan game untuk pemain baru. Bisa diputar ulang kapan saja — tidak mengubah progresmu.</p>
+    <button class="btn-gold" type="button" data-replay-tutorial>▶ LIHAT TUTORIAL LAGI</button>
+  </div>
   <div class="panel"><h3>🎯 ALUR INTI</h3>
     <p>1) Habiskan energi untuk bekerja (shift) atau berperang.<br>
     2) Makan roti + ambil pasokan harian.<br>
@@ -4464,6 +4478,7 @@ ROUTES.book = async () => {
       </div>`).join('')
       : '<p class="muted">Belum ada pengumuman.</p>'}
   </div>`);
+  $$('[data-replay-tutorial]').forEach((b) => { b.onclick = () => showTutorial(); });
 };
 
 // ---------- MODAL LAPOR ----------
@@ -4512,6 +4527,10 @@ async function maybeShowAnnouncement() {
   try { data = await api('/api/announcements'); } catch { return; }
   const unread = (data.announcements || []).filter((a) => !a.read);
   if (!unread.length) return;
+  // Tutorial awal lebih dulu (v5.2.0): bila overlay tutorial sedang
+  // terbuka, pengumuman tidak menumpuk di atasnya — muncul lagi di sesi
+  // berikut karena belum ditandai dibaca.
+  if (!$('#tutorial-modal')?.hidden) return;
   const a = unread[0]; // terbaru dulu (server mengurutkan DESC)
   $('#announce-modal-sub').textContent = `Update #${a.num} · ${fmtDate(a.created_at)} — ${a.title}`;
   $('#announce-modal-body').textContent = a.body;
@@ -4524,6 +4543,69 @@ async function maybeShowAnnouncement() {
   $('#announce-modal-later').onclick = () => { $('#announce-modal').hidden = true; };
   $('#announce-modal').addEventListener('click', (e) => { if (e.target.id === 'announce-modal') e.target.hidden = true; }, { once: true });
 }
+
+// ---------- TUTORIAL AWAL (overlay pemain baru, v5.2.0) ----------
+// Muncul OTOMATIS saat login pertama setelah registrasi — HANYA bila
+// citizens.tutorial_done = 0 (warga lama di-backfill 1 saat migrasi, jadi
+// tidak pernah melihatnya). Tur 7 langkah tentang loop inti game; tiap
+// langkah mengarahkan halaman ke konteksnya (modal tetap di atas, di luar
+// #page). "Lewati" SELALU terlihat; selesai ATAU lewati sama-sama menutup
+// permanen (POST /api/tutorial/done, tersimpan di server — login di
+// perangkat lain tetap tidak melihatnya). Overlay TIDAK memaksa 20 tugas
+// Kronik — hanya memperkenalkan awal permainan dan mengarahkan ke Kronik.
+// Bisa diputar ulang dari Buku Panduan / Pengaturan ("Lihat Tutorial Lagi").
+const TUTORIAL_STEPS = [
+  { title: 'Selamat datang di Parlementer!', text: 'Kamu warga baru di dunia yang dijalankan para pemain — bukan bot. Tur singkat ini mengenalkan alur inti game. Bisa dilewati kapan saja dengan tombol Lewati.', route: '#/dashboard' },
+  { title: 'Energi adalah bahan bakarmu', text: 'Bar energi di bawah pulih +2 per menit. Bekerja, berlatih, dan berperang memakai energi. Habis? Makan roti atau ambil pasokan harian.', route: '#/dashboard' },
+  { title: 'Ambil pasokan harianmu', text: 'Ketuk 📦 di atas setiap hari: +5 emas, +Rp915.000, +40 XP. Roti mengisi energi — jatah harianmu ada di dashboard.', route: '#/dashboard' },
+  { title: 'Cari pekerjaan, kerjakan shift', text: 'Di halaman Pekerjaan ada lowongan ADMIN (dibayar bahan mentah) dan perusahaan pemain (dibayar Rupiah dari uang pemilik). Satu shift = gaji + XP.', route: '#/jobs' },
+  { title: 'Jual beli di pasar', text: 'Pasar Lokal memakai Rupiah, Pasar Global memakai emas. Jual hasil kerjamu, beli bahan, pantau harga — semua harga ditentukan pemain.', route: '#/market' },
+  { title: 'Kronikmu: misi berbabak', text: 'Ikuti 5 babak Kronik — selesaikan tugasnya, klaim hadiah emas. Kronik ada di dashboard dan halaman KRONIKMU. Tidak wajib diselesaikan sekarang.', route: '#/chronicle' },
+  { title: 'Naik level, gabung partai, dirikan negara', text: 'Naik level lewat XP. Gabung partai, dirikan perusahaan, dan saat Level 10 kamu bisa mendirikan negaramu sendiri. Selamat bermain!', route: '#/profile' },
+];
+let tutorialStep = 0;
+let __tutorialShown = false;
+function renderTutorialStep() {
+  const step = TUTORIAL_STEPS[tutorialStep];
+  const last = tutorialStep === TUTORIAL_STEPS.length - 1;
+  $('#tutorial-title').textContent = step.title;
+  $('#tutorial-step-label').textContent = `Langkah ${tutorialStep + 1} dari ${TUTORIAL_STEPS.length} · Tutorial Awal`;
+  $('#tutorial-text').textContent = step.text;
+  $('#tutorial-next').textContent = last ? 'MULAI BERMAIN' : 'Lanjut';
+  $('#tutorial-dots').innerHTML = TUTORIAL_STEPS.map((_, i) => `<span class="tutorial-dot${i === tutorialStep ? ' active' : ''}${i < tutorialStep ? ' done' : ''}"></span>`).join('');
+  // Arahkan halaman ke konteks langkah (modal tetap di atas, di luar #page).
+  if (step.route && location.hash !== step.route) location.hash = step.route;
+}
+function showTutorial() {
+  tutorialStep = 0;
+  renderTutorialStep();
+  $('#tutorial-modal').hidden = false;
+  // Bila modal pengumuman sempat terbuka, tutup — tutorial lebih dulu;
+  // pengumuman yang belum dibaca muncul lagi di sesi berikut.
+  const am = $('#announce-modal'); if (am) am.hidden = true;
+}
+async function finishTutorial(via) {
+  try { await post('/api/tutorial/done', { via }); } catch { /* tutup tetap jalan walau server gagal */ }
+  if (ME?.citizen) ME.citizen.tutorial_done = 1;
+  $('#tutorial-modal').hidden = true;
+}
+function maybeShowTutorial() {
+  if (__tutorialShown || ME?.user?.is_banned) return;
+  if (!ME?.citizen || ME.citizen.tutorial_done) return;
+  // Hanya muncul otomatis di dashboard (tempat login pertama mendarat) —
+  // jangan membajak pemain yang sedang bekerja di halaman lain (mis.
+  // mengunggah foto perusahaan): route() memanggil lagi tiap pindah
+  // halaman, jadi tutorial tetap muncul begitu ia sampai di dashboard.
+  const h = location.hash || '#/dashboard';
+  if (h !== '#/dashboard' && h !== '#/' && h !== '') return;
+  __tutorialShown = true;
+  showTutorial();
+}
+$('#tutorial-next').onclick = () => {
+  if (tutorialStep < TUTORIAL_STEPS.length - 1) { tutorialStep++; renderTutorialStep(); }
+  else finishTutorial('complete');
+};
+$('#tutorial-skip').onclick = () => finishTutorial('skip');
 
 // ---------- ROUTE KHUSUS: press/:id & chat sub-room ----------
 const _route = route;

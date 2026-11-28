@@ -45,6 +45,7 @@
     "test:offside": "node test/offside-dom.js",
     "test:topbar": "node test/topbar-dom.js",
     "test:share": "node test/share-dom.js",
+    "test:tutorial": "node test/tutorial-dom.js",
     "test:load": "node scripts/loadtest.mjs",
     "test:recovery": "node scripts/recovery-test.mjs"
   },

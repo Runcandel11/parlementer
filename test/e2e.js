@@ -3768,6 +3768,25 @@ async function main() {
   check('Lowongan pertama tetap ada setelah H2 melamar', jobsAfter.some((j) => j.id === jobH1), `jobH1=${jobH1}`);
   dbS35.close();
 
+  console.log('\n[36] v5.2.0 — Tutorial awal: overlay pemain baru, skip, simpan server');
+  const tut = new Client();
+  // IP berbeda (seperti H1/H2 di [35]): registrasi dibatasi per IP —
+  // tanpa ini, pendaftaran ke-40+ dari 127.0.0.1 kena 429.
+  tut.extraHeaders = { 'X-Forwarded-For': '127.0.0.73' };
+  r = await tut.post('/api/auth/register', { email: 'tut1@test.local', password: 'rahasia123', username: 'tut_satu' });
+  check('tut terdaftar', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const meTut = (await tut.get('/api/me')).data.citizen;
+  check('Warga baru: /api/me tutorial_done = 0', meTut?.tutorial_done === 0, `tutorial_done=${meTut?.tutorial_done}`);
+  r = await tut.post('/api/tutorial/done', { via: 'skip' });
+  check('POST /api/tutorial/done (skip): 200', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  const meTut2 = (await tut.get('/api/me')).data.citizen;
+  check('Sesudah skip: /api/me tutorial_done = 1', meTut2?.tutorial_done === 1, `tutorial_done=${meTut2?.tutorial_done}`);
+  r = await tut.post('/api/tutorial/done', { via: 'complete' });
+  check('POST /api/tutorial/done kedua: 200 (idempotent)', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const tutAnon = new Client();
+  r = await tutAnon.post('/api/tutorial/done', {});
+  check('POST /api/tutorial/done tanpa login: 401', r.status === 401, `status=${r.status}`);
+
   setDayO(1);
 
   dbS6.close();

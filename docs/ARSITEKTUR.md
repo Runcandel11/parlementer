@@ -180,6 +180,19 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   parameter `w` yang sama yang di-render ke DOM — field yang diambil
   dari `/api/world` lain (mis. front di-render dari `w.front` tapi
   persentase dari field lain) mudah tertinggal saat API berubah.
+- **Tutorial awal + AdSense v5.2.0 (28 Nov 2026, perintah pemilik):**
+  overlay 7 langkah untuk pemain baru (`citizens.tutorial_done`, skema 25,
+  backfill warga lama = 1; `POST /api/tutorial/done` idempotent) — muncul
+  otomatis HANYA di dashboard saat login pertama; tombol Lewati selalu ada;
+  selesai/lewati menutup permanen (tersimpan di server); replay dari Buku
+  Panduan/Pengaturan; overlay TIDAK memaksa 20 tugas Kronik, hanya
+  mengarahkan ke sana. Pelajaran: jangan biarkan overlay menavigasi paksa
+  (`location.hash` di langkah 1) saat pemain masuk lewat deep link —
+  `maybeShowTutorial()` dijaga ke rute dashboard dan dipanggil ulang dari
+  `route()`, jadi pemain yang sedang bekerja di halaman lain tidak dibajak.
+  AdSense: script verifikasi `ca-pub-2013457230013617` di `<head>`
+  (public/index.html) + `public/ads.txt` (satu baris, `google.com,
+  pub-2013457230013617, DIRECT, f08c47fec0942fa0`) — dicek landing-glass-dom.
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

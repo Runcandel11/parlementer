@@ -54,6 +54,10 @@
   }
 }
 </script>
+<!-- Verifikasi Google AdSense (28 Nov 2026, akun bos sudah ada — Publisher ID
+     pub-2013457230013617): script ini wajib ada di <head> sebelum situs
+     bisa diminta peninjauan di AdSense. JANGAN hapus/pindah. -->
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2013457230013617" crossorigin="anonymous"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -376,6 +380,25 @@
       <button class="btn-gold" id="ref-modal-copy" type="button">Salin Link</button>
     </div>
     <button class="btn-text" id="ref-modal-close" type="button" style="width:100%;margin-top:6px">TUTUP</button>
+  </div>
+</div>
+
+<!-- ============ MODAL TUTORIAL AWAL (v5.2.0) ============ -->
+<!-- Tur terpandu pemain baru: muncul otomatis saat login pertama setelah
+     registrasi (hanya bila citizens.tutorial_done = 0). "Lewati" selalu
+     ada di tiap langkah; selesai/lepas sama-sama menutup permanen
+     (POST /api/tutorial/done). Bisa diputar ulang dari Buku Panduan /
+     Pengaturan ("Lihat Tutorial Lagi"). -->
+<div id="tutorial-modal" class="modal tutorial-modal" hidden role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
+  <div class="modal-card">
+    <h3 id="tutorial-title"></h3>
+    <p class="modal-sub" id="tutorial-step-label"></p>
+    <p id="tutorial-text"></p>
+    <div class="tutorial-dots" id="tutorial-dots" aria-hidden="true"></div>
+    <div class="modal-actions">
+      <button class="btn-text" id="tutorial-skip" type="button">Lewati</button>
+      <button class="btn-gold" id="tutorial-next" type="button">Lanjut</button>
+    </div>
   </div>
 </div>
 
