@@ -12,11 +12,13 @@
 #   - pg-verify + pg-concurrency butuh Postgres 16 asli (service container);
 #     pg-test + xp-rollback memakai pg-mem (tanpa Postgres sungguhan).
 #   - Suite DOM berbagi port (3471 dipakai 3 suite, 3472 dipakai 2 suite),
-#     jadi di dalam satu runner harus BERURUTAN; matrix 6 shard membagi
-#     25 suite ke 6 runner terpisah supaya cepat tanpa tabrakan.
+#     jadi di dalam satu runner harus BERURUTAN; matrix 17 shard membagi
+#     25 suite ke 17 runner terpisah supaya cepat tanpa tabrakan.
 #     (Maksimalkan 28 Nov 2026 20:36 WIB — perintah pemilik "maksimalkan":
-#     shard 3 -> 6; total 9 job/run, masih di bawah batas 20 job bersamaan
-#     akun GitHub Free; npm cache sudah aktif di semua job via setup-node.)
+#     shard 3 -> 6; 20:40 WIB — "habisin aja": shard 6 -> 17, total
+#     20 job/run = batas maksimal akun GitHub Free; npm cache sudah aktif
+#     di semua job via setup-node. Bila beberapa branch push bersamaan,
+#     run-runnya antre bergelombang dalam batas 20 itu.)
 #   - ssl-warning hanya menguji logika konfigurasi SSL (URL dummy).
 #
 # Trigger: push ke semua branch + pull_request. Tanpa secrets.
@@ -92,7 +94,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -105,10 +107,10 @@ jobs:
         shell: bash
         run: |
           files=(test/*-dom.js)
-          echo "Total suite DOM: ${#files[@]} (shard ${{ matrix.shard }} dari 6)"
+          echo "Total suite DOM: ${#files[@]} (shard ${{ matrix.shard }} dari 17)"
           i=0
           for f in "${files[@]}"; do
-            if (( i % 6 == ${{ matrix.shard }} )); then
+            if (( i % 17 == ${{ matrix.shard }} )); then
               echo "=== $f ==="
               node "$f" || exit 1
             fi
