@@ -9,7 +9,7 @@
 //   (4) TIDAK ada skrip AdinPlay yang dimuat saat ID kosong;
 //   (5) POST /api/ads/start ditolak 503 saat iklan belum aktif;
 //   (6) /api/me melaporkan ads.enabled=false + rewardGold 30;
-//   (7) VERSI: /api/world melaporkan 4.5.0.
+//   (7) VERSI: /api/world melaporkan 4.5.1.
 // Alur berhadiah lengkap (start → reward +30, single-use, kedaluwarsa,
 // jeda minimum, tanpa cap) diuji di test/e2e.js [30] dengan server yang
 // di-boot memakai ADINPLAY_PROPERTY_ID test.
@@ -23,7 +23,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3471;
 const DB_PATH = '/tmp/parlementer-ads-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '4.5.0';
+const EXPECTED_VERSION = '4.5.1';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -90,7 +90,7 @@ async function main() {
 
     // (7) Versi dulu (tanpa login).
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 4.5.0', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 4.5.1', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     const jar = makeJar();
     const r = await api(jar, '/api/auth/register', { email: 'domAds@test.local', password: 'rahasia123', username: 'warga_ads' });

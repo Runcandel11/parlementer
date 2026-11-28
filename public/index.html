@@ -158,17 +158,24 @@
       <span class="hud-shield-big" id="hud-lv">1</span>
       <span class="hud-shield-badge" id="hud-xp">0</span>
     </div>
-    <div class="hud-identity">
-      <div class="hud-name" id="hud-name">—</div>
-      <div class="hud-region" id="hud-region">—</div>
-    </div>
-    <div class="hud-wallet">
-      <div class="hud-usd"><span id="hud-usd">500</span></div>
-      <div class="hud-gold">🪙 <span id="hud-gold">50</span></div>
+    <!-- v4.5.1: identitas + dompet dibungkus .hud-mid — di desktop
+         display:contents (ikut baris utama seperti dulu), di HP jadi
+         baris kedua sendiri: nama/wilayah di kiri, dua pill uang+emas
+         di kanan, sejajar dan tidak menumpuk. -->
+    <div class="hud-mid">
+      <div class="hud-identity">
+        <div class="hud-name" id="hud-name">—</div>
+        <div class="hud-region" id="hud-region">—</div>
+      </div>
+      <div class="hud-wallet">
+        <span class="hud-pill hud-pill-usd">💵 <span id="hud-usd">500</span></span>
+        <span class="hud-pill hud-pill-gold">🪙 <span id="hud-gold">50</span></span>
+      </div>
     </div>
     <div class="hud-actions">
       <button class="hud-icon" id="btn-chat" type="button" aria-label="Obrolan">💬<span class="badge" id="badge-chat" hidden>0</span></button>
       <button class="hud-icon" id="btn-notif" type="button" aria-label="Notifikasi">🔔<span class="badge" id="badge-notif" hidden>0</span></button>
+      <button class="hud-icon" id="btn-ads" type="button" aria-label="Nonton Iklan" title="Nonton Iklan" data-goto="#/ads">🎬</button>
       <button class="hud-icon" id="btn-settings" type="button" aria-label="Pengaturan">⚙️</button>
     </div>
   </header>

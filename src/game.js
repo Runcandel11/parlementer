@@ -81,7 +81,9 @@
 // Update sedang v4.5.0 = perbaikan bug roti Premium + jatah roti Premium
 // 25/hari + perbaikan teks meluber (Buku/Notifikasi/countdown) + kerja
 // otomatis Premium 24 jam yang jalan di server walau aplikasi ditutup.
-export const VERSION = '4.5.0';
+// Update kecil v4.5.1 = tombol Nonton Iklan di top bar + dompet HUD jadi
+// dua pill uang+emas yang sejajar (perintah pemilik 28 Nov 2026).
+export const VERSION = '4.5.1';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum

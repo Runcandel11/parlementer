@@ -126,9 +126,15 @@ label input, label select, label textarea { margin-top: 6px; text-transform: non
 .hud-identity { flex: 1; min-width: 0; }
 .hud-name { font-family: 'Oswald', sans-serif; font-size: 17px; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hud-region { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hud-wallet { text-align: right; flex: none; }
-.hud-usd { font-weight: 700; font-size: 19px; }
-.hud-gold { color: var(--gold-bright); font-weight: 700; font-size: 16px; }
+/* Dompet HUD (v4.5.1): uang + emas sebagai DUA PILL sejajar, bukan dua
+   baris teks menumpuk di tengah bar. .hud-mid membungkus identitas +
+   dompet: di desktop display:contents (keduanya ikut baris utama
+   seperti dulu); di HP jadi baris kedua sendiri (lihat akhir file). */
+.hud-mid { display: contents; }
+.hud-wallet { display: flex; gap: 6px; flex: none; align-items: center; }
+.hud-pill { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 10px; background: #0a0f1c; border: 1px solid var(--line); border-radius: 999px; font-weight: 700; font-size: 15px; line-height: 1; white-space: nowrap; }
+.hud-pill-usd { color: #fff; }
+.hud-pill-gold { color: var(--gold-bright); }
 .hud-actions { display: flex; gap: 6px; flex: none; }
 
 /* ---------- drawer ---------- */
@@ -600,7 +606,6 @@ button.food-card:disabled { cursor: default; }
   .hud-identity { order: 5; flex: 1 1 100%; }
   .hud-name { font-size: 15px; }
   .hud-region { font-size: 11px; }
-  .hud-usd, .hud-gold { font-size: 15px; }
   .hud-actions { gap: 4px; }
   .page { padding: 12px 14px 180px; }
   .page h2 { font-size: 22px; }
@@ -867,4 +872,35 @@ body {
   .hud-shield-big { font-size: 16px; }
   .landing-title { font-size: clamp(40px, 12vw, 56px); }
   .landing-sub { font-size: 15px; }
+}
+
+/* ========== TOP BAR v4.5.1 (28 Nov 2026, perintah pemilik) ==========
+   (1) Tombol Nonton Iklan di .hud-actions (HTML) — tanpa CSS khusus,
+       memakai .hud-icon yang sama; kliknya didelegasikan data-goto.
+   (2) Dompet jadi dua pill sejajar. Di HP (≤560px) baris pertama tidak
+       muat menampung semuanya sekaligus (avatar+menu+peti + perisai +
+       4 tombol aksi + dua pill butuh ~480px, layar 360px hanya 332px),
+       jadi header HP ditata ulang dua baris:
+       - Baris 1: avatar+menu+peti BERBARIS horizontal (bukan kolom lagi)
+         + perisai + 4 tombol aksi. Header jadi LEBIH PENDEK dari
+         sebelumnya (kolom kiri 3×36px ≈ 116px tinggi → baris 36px).
+       - Baris 2 (.hud-mid): nama+wilayah di kiri (flex 1, ellipsis bila
+         kepanjangan), dua pill uang+emas di kanan.
+   Diukur di lebar 360px: baris 1 = 116 (sisi) + 6 + 40 (perisai) + 6 +
+   140 (aksi) = 308px ≤ 332px; baris 2 = identitas ±160px + pill ±166px.
+   Layar ≤400px: ikon diperkecil lagi supaya lebar 320px tetap muat. */
+@media (max-width: 560px) {
+  .hud-side { flex-direction: row; }
+  .hud-mid { display: flex; order: 5; flex: 1 1 100%; gap: 6px; align-items: center; min-width: 0; }
+  .hud-identity { order: 0; flex: 1 1 0; min-width: 0; }
+  .hud-wallet { flex: none; }
+  .hud-pill { height: 32px; padding: 0 8px; font-size: 13px; }
+}
+@media (max-width: 400px) {
+  .hud { gap: 4px; padding: 8px 10px 8px 12px; }
+  .hud-avatar { width: 32px; height: 32px; }
+  .hud-side .hud-icon, .hud-side .crate-btn { width: 32px; height: 32px; font-size: 15px; }
+  .hud-shield { width: 38px; height: 44px; }
+  .hud-icon { width: 28px; height: 28px; font-size: 14px; }
+  .hud-pill { height: 30px; padding: 0 7px; font-size: 12px; }
 }
