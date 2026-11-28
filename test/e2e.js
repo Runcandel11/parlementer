@@ -4294,6 +4294,46 @@ async function main() {
   check('Pemilu presiden tetap vote KANDIDAT (200)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
   db41.close();
 
+  console.log('\n[42] v5.7.1 — Clueless: total upah bahan + kartu ajakan partai di chat');
+  const db42 = new DatabaseSync(DB_PATH);
+  // (a) Total upah bahan: warga baru W42 lamar ADMIN + shift. Shift ADMIN
+  // dibayar bahan mentah — total_salary HARUS tetap 0 (bukan bug), dan
+  // nilai setara Rupiah-nya tercatat di total_goods_usd (kasus
+  // RudraSyailendra: 3 shift, "Total gaji Rp0").
+  const W42 = new Client();
+  W42.extraHeaders = { 'X-Forwarded-For': '127.0.0.42' };
+  r = await W42.post('/api/auth/register', { email: 'clueless@test.local', password: 'rahasia123', username: 'warga_clueless' });
+  check('W42 mendaftar', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const w42Id = (await W42.get('/api/me')).data.citizen.id;
+  const me42 = await W42.get('/api/me');
+  r = await W42.get('/api/jobs');
+  const job42 = r.data.jobs.find((j) => j.is_admin === 1 && j.region_id === me42.data.citizen.region_id);
+  check('Lowongan ADMIN ada di wilayah W42', !!job42, `region=${me42.data.citizen.region_id}`);
+  r = await W42.post('/api/jobs/apply', { job_id: job42.id });
+  check('W42 melamar ADMIN (200)', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  r = await W42.post('/api/jobs/shift');
+  check('Shift ADMIN selesai dibayar bahan', r.status === 200 && (r.data.goodsQty || 0) > 0, `goods=${r.data.goods}`);
+  const me42b = await W42.get('/api/me');
+  check('Shift ADMIN: total_salary tetap 0 (bukan bug — dibayar bahan)', me42b.data.citizen.total_salary === 0, `total_salary=${me42b.data.citizen.total_salary}`);
+  check('Shift ADMIN: total_goods_usd tercatat > 0', (me42b.data.citizen.total_goods_usd || 0) > 0, `total_goods_usd=${me42b.data.citizen.total_goods_usd}`);
+  r = await W42.get('/api/profile/warga_clueless');
+  check('Profil menampilkan total upah bahan', r.status === 200 && (r.data.profile.total_goods_usd || 0) > 0, `total_goods_usd=${r.data.profile?.total_goods_usd}`);
+  // (b) Kartu ajakan partai: M6 (pemilik Partai Kedua dari [41]) bagikan
+  // ke Obrolan Global — pesan membawa party_id + info partai.
+  r = await M6.post('/api/chat/global', { content: 'Gabung partaiku: Partai Kedua [KED] — gabung langsung!', party_id: partyY });
+  check('Bagikan partai ke Obrolan Global (200)', r.status === 200 && !!r.data.messageId, `status=${r.status} ${r.data.error || ''}`);
+  r = await M6.get('/api/chat/global');
+  const shared42 = r.data.messages.find((m) => m.party_id === partyY);
+  check('Pesan chat membawa kartu partai (nama + tag + jenis)', !!shared42 && shared42.party_name === 'Partai Kedua' && shared42.party_tag_shared === 'KED', shared42 ? JSON.stringify({ name: shared42.party_name, tag: shared42.party_tag_shared, type: shared42.party_type, members: shared42.party_members }) : 'tidak ditemukan');
+  // party_id tidak dikenal -> 400 (pola yang sama seperti article_id v5.0.1).
+  r = await W41.post('/api/chat/global', { content: 'Partai palsu', party_id: 999999 });
+  check('Bagikan party_id tidak dikenal ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  // Gabung langsung dari kartu: W42 join lewat endpoint yang sama dengan
+  // tombol GABUNG di kartu (partai 'application' -> lamaran pending).
+  r = await W42.post(`/api/parties/${partyY}/join`);
+  check('W42 gabung partai dari kartu ajakan (200, lamaran pending)', r.status === 200 && r.data.role === 'pending', `status=${r.status} role=${r.data.role}`);
+  db42.close();
+
   setDayO(1);
 
   dbS6.close();

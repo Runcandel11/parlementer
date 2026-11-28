@@ -1860,7 +1860,11 @@ export function registerCivic(app) {
         (SELECT COUNT(*) FROM article_comments WHERE article_id = m.article_id) AS article_comments,
         (SELECT title FROM articles WHERE id = m.article_id) AS article_title,
         (SELECT likes FROM articles WHERE id = m.article_id) AS article_likes,
-        (SELECT np.name FROM articles a JOIN newspapers np ON np.id = a.newspaper_id WHERE a.id = m.article_id) AS article_source
+        (SELECT np.name FROM articles a JOIN newspapers np ON np.id = a.newspaper_id WHERE a.id = m.article_id) AS article_source,
+        (SELECT name FROM parties WHERE id = m.party_id) AS party_name,
+        (SELECT tag FROM parties WHERE id = m.party_id) AS party_tag_shared,
+        (SELECT type FROM parties WHERE id = m.party_id) AS party_type,
+        (SELECT COUNT(*) FROM party_members WHERE party_id = m.party_id AND role != 'pending') AS party_members
        FROM chat_messages m JOIN citizens c ON c.id = m.citizen_id JOIN users u ON u.id = c.user_id
        LEFT JOIN parties p ON p.id = c.party_id`;
     const blocked = `AND m.citizen_id NOT IN (SELECT blocked_id FROM blocked WHERE blocker_id = ?)`;
@@ -1919,7 +1923,7 @@ export function registerCivic(app) {
     const room = req.params.room;
     const roomErr = await validateRoom(room, req.citizen);
     if (roomErr) return res.status(404).json({ error: roomErr });
-    const { content, article_id } = req.body || {};
+    const { content, article_id, party_id } = req.body || {};
     const text = (content || '').trim();
     if (!text || text.length > 500) return res.status(400).json({ error: 'Pesan 1–500 karakter.' });
     const c = req.citizen;
@@ -1945,10 +1949,20 @@ export function registerCivic(app) {
         if (!a) throw Object.assign(new Error('Artikel tidak ditemukan.'), { status: 400 });
         articleId = a.id;
       }
+      // v5.7.1 (Clueless): kartu ajakan partai di obrolan — pola yang sama
+      // seperti article_id: party_id yang tidak ada digagalkan 400, bukan
+      // diam-diam dibuang (pesan tanpa kartu = ajakan kosong seperti yang
+      // membingungkan RudraSyailendra).
+      let partyId = null;
+      if (party_id) {
+        const p = await t.one('SELECT id FROM parties WHERE id = ?', [party_id]);
+        if (!p) throw Object.assign(new Error('Partai tidak ditemukan.'), { status: 400 });
+        partyId = p.id;
+      }
       const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [c.id]);
       if (Date.now() - (locked.last_chat_at || 0) < CHAT_COOLDOWN_MS) throw Object.assign(new Error('Tunggu sebentar sebelum mengirim pesan lagi.'), { status: 400 });
-      const msg = await t.run('INSERT INTO chat_messages (room, citizen_id, content, article_id, created_at) VALUES (?,?,?,?,?) RETURNING id',
-        [room, c.id, text, articleId, Date.now()]);
+      const msg = await t.run('INSERT INTO chat_messages (room, citizen_id, content, article_id, party_id, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
+        [room, c.id, text, articleId, partyId, Date.now()]);
       await t.run('UPDATE citizens SET last_chat_at = ?, chat_today = chat_today + 1 WHERE id = ?', [Date.now(), c.id]);
       // Misi harian: minimal 3 kata, jeda 30 detik sejak pesan terakhir yang dihitung.
       // (Tahap 7) Progres + penanda waktu terakhir dihitung kini baris di

@@ -265,6 +265,30 @@ async function main() {
     await sleep(1500);
     const hero3 = dom.window.document.querySelector('.profile-hero');
     check('Bernegara: hero halaman profil juga merah (tanpa free)', !!hero3 && !hero3.classList.contains('free') && !!dom.window.document.querySelector('.profile-hero .dot-red'));
+
+    // (8) v5.7.1 — Clueless: shift ADMIN dibayar bahan → profil menampilkan
+    // "Total upah bahan" + penjelasan bahwa "Total gaji Rp0" bukan bug.
+    // warga_a sudah bekerja dari seksi sebelumnya (apply ditolak "sudah
+    // bekerja") — pindahkan pekerjaannya ke ADMIN via DB (alur lamar
+    // sendiri sudah dites di e2e [5]), lalu shift via API.
+    r = await api(jarA, '/api/jobs');
+    const job8 = r.data.jobs.find((j) => j.is_admin === 1 && j.region_id === meA.citizen.region_id);
+    check('Lowongan ADMIN ada di wilayah warga_a', !!job8, `region=${meA.citizen.region_id}`);
+    {
+      const db8 = new DatabaseSync(DB_PATH);
+      db8.prepare('UPDATE citizens SET job_id = ?, energy = 100, energy_updated_at = ? WHERE id = ?').run(job8.id, Date.now(), meA.citizen.id);
+      db8.close();
+    }
+    r = await api(jarA, '/api/jobs/shift', {});
+    check('warga_a shift ADMIN dibayar bahan', r.status === 200 && (r.data.goodsQty || 0) > 0, `goods=${r.data.goods}`);
+    r = await api(jarA, '/api/profile/warga_a');
+    check('API profil: total_goods_usd > 0 setelah shift ADMIN', (r.data.profile.total_goods_usd || 0) > 0, `total_goods_usd=${r.data.profile.total_goods_usd}`);
+    check('API profil: total_salary tetap 0 (dibayar bahan, bukan bug)', r.data.profile.total_salary === 0, `total_salary=${r.data.profile.total_salary}`);
+    dom.window.location.hash = '#/profile';
+    await sleep(1500);
+    const profTxt = pageText(dom);
+    check('Profil: baris "Total upah bahan" tampil', profTxt.includes('Total upah bahan'), profTxt.slice(0, 200));
+    check('Profil: penjelasan "Total gaji Rp0 bukan bug" tampil', profTxt.includes('bukan Rupiah') && profTxt.includes('bukan bug'), profTxt.slice(0, 400));
   } finally {
     if (dom) dom.window.close();
     stop();

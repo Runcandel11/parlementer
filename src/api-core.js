@@ -1121,7 +1121,7 @@ export function registerCore(app) {
     // Kolom eksplisit (bukan `c.*`): `id` ada di users DAN citizens —
     // `SELECT *` membuat `u.id` ambigu (driver menyimpan kolom terakhir).
     const q = `SELECT c.id AS citizen_id, u.id AS user_id, u.username, u.avatar, u.premium_until, u.referral_code, u.is_banned,
-      c.level, c.xp, c.bio, c.shifts, c.total_salary, c.total_damage, c.attacks, c.frontline_attacks,
+      c.level, c.xp, c.bio, c.shifts, c.total_salary, c.total_goods_usd, c.total_damage, c.attacks, c.frontline_attacks,
       c.attr_str, c.attr_edu, c.attr_eco, c.created_at, c.last_seen_at, c.party_id, c.home_region_id, c.credit_score, c.credit_updated_at, c.trades_completed
       FROM users u JOIN citizens c ON c.user_id = u.id WHERE `;
     let u = await one(q + 'u.username = ?', [req.params.username]);
@@ -1150,7 +1150,7 @@ export function registerCore(app) {
     res.json({ profile: {
       citizen_id: u.citizen_id, user_id: u.user_id, username: u.username, avatar: u.avatar,
       publicId: publicId(u.user_id), level: u.level, xp: u.xp, bio: u.bio,
-      shifts: u.shifts, total_salary: u.total_salary,
+      shifts: u.shifts, total_salary: u.total_salary, total_goods_usd: u.total_goods_usd,
       total_damage: u.total_damage, attacks: u.attacks, frontline_attacks: u.frontline_attacks,
       attr_str: u.attr_str, attr_edu: u.attr_edu, attr_eco: u.attr_eco,
       created_at: u.created_at, last_seen_at: u.last_seen_at,
@@ -1529,9 +1529,16 @@ export function registerCore(app) {
         const panenMult = worldEvent.key === 'panen' ? 1.2 : 1;
         const qty = Math.floor((job.pay_qty || 0) * fatigueMult(s.fatigue) * adminPayMult * panenMult * s.fraction);
         if (qty > 0) await addItem(c.id, com.id, 1, qty, t);
-        return { ...s, qty };
+        // v5.7.1 (Clueless): nilai setara Rupiah dari upah bahan dicatat
+        // ke total_goods_usd (atomik dengan shift) — total_salary TIDAK
+        // ikut naik karena shift ADMIN memang tidak membayar Rupiah.
+        // Tanpa ini, profil pemain ADMIN murni menampilkan "Total gaji
+        // Rp0" padahal ia sudah bekerja berkali-kali (kasus RudraSyailendra).
+        const usdValue = Math.round(qty * com.ref_usd * 100) / 100;
+        if (usdValue > 0) await t.run('UPDATE citizens SET total_goods_usd = total_goods_usd + ? WHERE id = ?', [usdValue, c.id]);
+        return { ...s, qty, usdValue };
       });
-      const usdValue = Math.round(spent.qty * com.ref_usd * 100) / 100;
+      const usdValue = spent.usdValue;
       const note = `${shiftPrefix(spent)}Dibayar ${spent.qty}× ${job.resource} (setara ~${fmtRp(usdValue)}).`;
       const xp = await rewardShift(spent);
       return { ok: true, gross: usdValue, net: 0, tax: 0, goods: `${spent.qty}× ${job.resource}`, goodsQty: spent.qty, goodsName: job.resource, note: note + xpNoteSuffix(xp), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100), companyShortage: false };
@@ -1570,6 +1577,10 @@ export function registerCore(app) {
           }
         }
         if (units > 0) await addItem(c.id, com.id, 1, units, t);
+        // v5.7.1 (Clueless): seperti shift ADMIN, bagi hasil dibayar BARANG
+        // — nilainya dicatat ke total_goods_usd, bukan total_salary.
+        const goodsUsd = Math.round(units * com.ref_usd * 100) / 100;
+        if (goodsUsd > 0) await t.run('UPDATE citizens SET total_goods_usd = total_goods_usd + ? WHERE id = ?', [goodsUsd, c.id]);
         const bonus = await grantCompanyShiftBonus(t, job, s, c);
         return { ...s, gross, units, cost, bonus, ownJob: co.owner_id === c.id };
       });

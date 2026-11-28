@@ -61,8 +61,10 @@ Ditulis di Tahap 7 (v4.1.0, 28 Nov 2026). Perilaku game yang lengkap ada di
   peringkat / daftar partai). Role: ketua (`leader`) | sekretaris
   (`secretary`) | anggota (`member`) | lamaran (`pending`). Hanya ketua
   yang bisa mengangkat/mencopot sekretaris; sekretaris membantu
-  menyetujui/menolak lamaran sama seperti ketua; hanya ketua yang bisa
-  mengeluarkan anggota/membubarkan partai. Semua hak dicek di server
+  menyetujui/menolak lamaran sama seperti ketua. **KOREKSI (28 Nov 2026):
+  mengeluarkan anggota / membubarkan partai BELUM ADA di kode**
+  (pengumuman #27 sempat mengklaimnya — salah); keduanya direncanakan
+  v5.7.2, ketua saja. Semua hak dicek di server
   (`partyCanManage`), bukan cuma di client. Lamaran pending hanya terlihat
   oleh ketua/sekretaris partai itu. Kolom `party_members.role` tidak punya
   CHECK constraint, jadi role `secretary` tidak butuh migrasi skema.
@@ -390,6 +392,46 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   presiden tanpa gate), pg-verify [31] (migrasi 29→30, reset nama dari
   kolom NOT NULL lama, 6 tabel + 6 kolom baru, DEFAULT kind, UNIQUE
   aliansi/petisi, idempotensi).
+- **Pemain baru "Clueless" v5.7.1 (28 Nov 2026, perintah pemilik):**
+  pemain baru bingung "harus ngapain dulu" (pola hari itu: Firdan, wony,
+  papa_emeritus, Diah, Mubeeanna, RudraSyailendra "Clueless" 17:05 WIB).
+  **Checklist awal di ATAS dashboard** (`#dash-starter`): 3 langkah dari
+  DATA NYATA — sudah kerja (punya pekerjaan / shifts > 0), sudah punya
+  roti (`bread_today` > 0 atau Makanan di inventaris — dicek ulang saat
+  inventaris termuat), sudah berpartai — + tombol 📖 CARA MAIN (→
+  `#/book`) + baris "Parlemen dibuka malam ini 28 Nov jam 20.00 WIB";
+  semua selesai → panel jadi ucapan selamat. **Kartu ajakan partai di
+  chat:** `chat_messages.party_id` (nullable; `POST /api/chat/:room`
+  menerima `party_id`, yang tidak dikenal ditolak 400 seperti
+  `article_id` v5.0.1); `GET /api/chat/:room` mengembalikan
+  `party_name` / `party_tag_shared` / `party_type` / `party_members`;
+  pesan merender kartu 🚩 PARTAI (nama + tag + jenis + jumlah anggota)
+  + tombol GABUNG PARTAI (`POST /api/parties/:id/join`, disembunyikan
+  bila sudah jadi anggota partai itu); tombol 🔗 Bagikan ke Obrolan di
+  halaman detail partai mem-post ke Global lalu pindah ke `#/chat`.
+  **Penjelasan partai ≠ pindah wilayah** di halaman Partai + Peta
+  (bepergian = kunjungan, 1 Tiket, ~2–30 menit, kewarganegaraan tetap;
+  pindah kewarganegaraan gratis, cooldown 7 hari — aturan travel yang
+  sudah ada, tidak ada aturan baru). **FAQ di atas Obrolan Global**
+  (`<details open class="chat-faq">`, hanya room global): 3 jawaban
+  berulang — cara main langkah pertama, beli roti di Pasar Global, cara
+  kerja/shift (termasuk: shift ADMIN dibayar bahan, bukan Rupiah).
+  **Total upah bahan:** `citizens.total_goods_usd` (skema 30→31,
+  `migrateV571Columns` idempotent) — nilai setara Rupiah dari upah bahan
+  (shift ADMIN + bagi hasil) yang TIDAK masuk `total_salary`; dicatat
+  atomik di dalam tx shift; profil menampilkan "Total upah bahan
+  ~RpX (setara)" + penjelasan bila > 0. **Hasil pengecekan anomali
+  "3 shift, Total gaji Rp0": BUKAN bug** — cabang 'goods' di
+  `performShift` memang hanya `addItem` bahan + tidak menyentuh
+  `usd`/`total_salary` (aturan gaji TIDAK diubah); nilai lama tidak
+  bisa di-backfill (tidak ada riwayat shift) — terakumulasi mulai
+  v5.7.1. Dicek e2e [42] (shift ADMIN → total_salary 0 +
+  total_goods_usd > 0 + tampil di profil; bagikan partai → kartu di
+  chat; party_id palsu 400; gabung dari kartu), pg-verify [32] (migrasi
+  30→31, 2 kolom baru, default 0, idempotensi), chat-dom [M]/[N]
+  (checklist + CARA MAIN + baris parlemen; FAQ; kartu partai + tombol
+  gabung; penjelasan Partai/Peta), profile-admin-dom (8) (shift ADMIN →
+  profil tampil "Total upah bahan" + penjelasan).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

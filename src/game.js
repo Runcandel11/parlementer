@@ -95,7 +95,7 @@
 // absurd hasil exploit di-rollback (migrasi clamp). Plus perbaikan bug
 // share link: shareStatsFor tidak lagi memakai `? IS NULL` (Postgres
 // 42P18 — hanya gagal di live, lolos di SQLite).
-export const VERSION = '5.7.0';
+export const VERSION = '5.7.1';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum

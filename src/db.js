@@ -409,6 +409,7 @@ CREATE TABLE IF NOT EXISTS citizens (
   bio TEXT NOT NULL DEFAULT '',
   shifts INTEGER NOT NULL DEFAULT 0,
   total_salary REAL NOT NULL DEFAULT 0,
+  total_goods_usd REAL NOT NULL DEFAULT 0,
   total_damage INTEGER NOT NULL DEFAULT 0,
   attacks INTEGER NOT NULL DEFAULT 0,
   frontline_attacks INTEGER NOT NULL DEFAULT 0,
@@ -965,6 +966,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   content TEXT NOT NULL,
   article_id INTEGER,
+  party_id INTEGER,
   created_at BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chat_reports (
@@ -1393,6 +1395,7 @@ export async function initDb() {
     await migrateFirstShiftColumn(t);
     await migratePasswordResetColumns(t);
     await migrateV570Columns(t);
+    await migrateV571Columns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1471,7 +1474,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 30;
+const SCHEMA_VERSION = 31;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -2226,6 +2229,26 @@ async function migrateV570Columns(t) {
   await t.run("UPDATE db_meta SET value = ? WHERE key = 'parliament_opens_at' AND value = ?",
     [String(Date.parse('2026-11-28T20:00:00+07:00')), String(Date.parse('2026-12-02T00:00:00+07:00'))]);
   if (nameNullable) await t.run('UPDATE country SET name = NULL WHERE name IS NOT NULL');
+}
+
+// Migrasi v5.7.1 (skema 30 → 31) — "Clueless": (1) chat_messages.party_id
+// untuk kartu ajakan partai di obrolan (nama partai + tombol gabung);
+// (2) citizens.total_goods_usd — nilai setara Rupiah dari upah bahan
+// (shift ADMIN + bagi hasil) yang TIDAK masuk total_salary, supaya profil
+// tidak lagi menampilkan "Total gaji Rp0" yang menyesatkan untuk pemain
+// yang selama ini bekerja di lowongan ADMIN. Nilai lama tidak bisa
+// di-backfill (tidak ada riwayat shift) — terakumulasi mulai v5.7.1.
+async function migrateV571Columns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('chat_messages', 'party_id', 'INTEGER');
+  await addCol('citizens', 'total_goods_usd', 'REAL NOT NULL DEFAULT 0');
 }
 
 // Jejak baca chat (v5.4.0): tabel chat_read untuk lencana pesan belum dibaca

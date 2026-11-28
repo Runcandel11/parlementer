@@ -384,6 +384,52 @@ async function main() {
     check('dashboard: kartu MILITER menampilkan jumlah/batas unit', new RegExp(`0/${expCap} unit`).test(milCard), milCard.slice(0, 120));
     check('dashboard: kartu MILITER tidak menampilkan undefined', !/undefined/.test(milCard), milCard.slice(0, 120));
 
+    // [M] v5.7.1 — Clueless: checklist "Mulai di Sini" di ATAS dashboard +
+    // tombol CARA MAIN + baris parlemen 28 Nov 20.00 WIB. Warga tes Level 1
+    // tanpa pekerjaan/partai/roti: ketiga langkah masih belum selesai.
+    const starter = document.querySelector('#dash-starter')?.textContent || '';
+    check('dashboard: kartu MULAI DI SINI tampil di atas', starter.includes('MULAI DI SINI') && starter.includes('3 LANGKAH PERTAMA'), starter.slice(0, 120));
+    check('dashboard: tombol CARA MAIN ada', !!document.querySelector('#dash-starter [data-goto="#/book"]'), starter.slice(0, 120));
+    check('dashboard: checklist menampilkan 3 langkah (kerja/roti/partai)', starter.includes('1. Kerja') && starter.includes('2. Beli roti') && starter.includes('3. Gabung partai'), starter.slice(0, 300));
+    check('dashboard: baris parlemen 28 Nov jam 20.00 WIB (bukan 2 Des)', starter.includes('28 Nov jam 20.00 WIB') && !starter.includes('2 Des'), starter.slice(0, 200));
+
+    // [N] v5.7.1 — Clueless: FAQ di atas Obrolan Global + kartu ajakan
+    // partai + penjelasan partai ≠ pindah wilayah (halaman Partai & Peta).
+    window.location.hash = '#/chat';
+    window.route();
+    await sleep(1000);
+    const faq = document.querySelector('.chat-faq')?.textContent || '';
+    check('chat Global: kartu FAQ tampil di atas chat', faq.includes('PERTANYAAN YANG SERING DITANYA'), faq.slice(0, 100));
+    check('chat Global: FAQ menjawab cara main + beli roti + cara kerja', faq.includes('Baru main') && faq.includes('Beli roti') && faq.includes('Cara kerja'), faq.slice(0, 200));
+    // Partai: naikkan level warga tes via DB, dirikan partai, bagikan ke chat.
+    {
+      const db = new DatabaseSync(DB_PATH);
+      db.prepare('UPDATE citizens SET level = 10, gold = 500 WHERE id = ?').run(citizenId);
+      db.close();
+    }
+    const partyRes = await (await jarFetch(BASE + '/api/parties', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Partai ChatDom', tag: 'CHD', ideology: 'Progresif', type: 'open' }) })).json();
+    check('dirikan partai tes (200)', !!partyRes.partyId, JSON.stringify(partyRes));
+    // Cooldown chat 5 detik (bagikan artikel di atas memakai warga yang
+    // sama) — tunggu lewat dulu supaya bagikan partai tidak kena 400.
+    await sleep(6000);
+    const shareRes = await jarFetch(BASE + '/api/chat/global', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: 'Gabung partaiku: Partai ChatDom [CHD]!', party_id: partyRes.partyId }) });
+    check('bagikan partai ke Obrolan Global (200)', shareRes.status === 200, `status=${shareRes.status}`);
+    await window.renderChatRoom('global');
+    await sleep(300);
+    const partyCard = document.querySelector('#chat-list .msg .article-preview');
+    check('chat: kartu ajakan partai tampil dengan nama partai', !!partyCard && partyCard.textContent.includes('Partai ChatDom'), partyCard?.textContent.slice(0, 120) || '');
+    check('chat: kartu partai punya tombol GABUNG PARTAI', !!document.querySelector('#chat-list [data-join-party]'), (document.querySelector('#chat-list')?.textContent || '').slice(-200));
+    window.location.hash = '#/parties';
+    window.route();
+    await sleep(1000);
+    const partiesTxt = document.querySelector('#page')?.textContent || '';
+    check('halaman Partai: penjelasan gabung partai ≠ pindah wilayah', partiesTxt.includes('GABUNG PARTAI ≠ PINDAH WILAYAH'), partiesTxt.slice(0, 200));
+    window.location.hash = '#/map';
+    window.route();
+    await sleep(1000);
+    const mapTxt = document.querySelector('#page')?.textContent || '';
+    check('halaman Peta: penjelasan pindah ke Jakarta (bepergian vs pindah kewarganegaraan)', mapTxt.includes('MAU PINDAH KE JAKARTA?') && mapTxt.includes('Bepergian') && mapTxt.includes('Pindah kewarganegaraan'), mapTxt.slice(0, 200));
+
     dom.window.close();
     console.log(`\n[chat-dom] SELESAI: ${passed} lolos, ${failed} gagal`);
     process.exitCode = failed ? 1 : 0;

@@ -1097,7 +1097,28 @@ ROUTES.dashboard = async () => {
   const heroCountry = ME.region?.country_name || ME.country?.name || '';
   let kronikHidden = false;
   try { kronikHidden = localStorage.getItem('parlementer_kronik_hide') === '1'; } catch { /* abaikan */ }
+  // v5.7.1 (Clueless): kartu panduan awal DI ATAS dashboard — pemain baru
+  // ("Clueless", "ini gue harus ngapain dulu?") tidak menemukan KRONIKMU
+  // yang terkubur di bawah dashboard. Checklist 1-2-3 dari DATA NYATA:
+  // sudah kerja (punya pekerjaan / shifts > 0), sudah punya roti
+  // (bread_today > 0 atau Makanan di inventaris — dicek ulang saat
+  // inventaris termuat), sudah berpartai. Semua selesai → panel mengecil
+  // jadi ucapan selamat, tombol CARA MAIN tetap ada.
+  const stepWorkDone = !!ME.job || (c.shifts || 0) > 0;
+  const stepBreadDone = (c.bread_today || 0) > 0;
+  const stepPartyDone = !!ME.party;
+  const starterAllDone = stepWorkDone && stepBreadDone && stepPartyDone;
   $('#page').innerHTML = page('DASHBOARD', `Hari ${ME.world.day} · Populasi dunia: ${fmt(ME.population)} warga · <span title="Pemain aktif dalam 5 menit terakhir">🟢 ${fmt(ME.onlineCount ?? 0)} online</span>`, `
+  <div class="panel" id="dash-starter">
+    <div class="panel-head"><h3>🧭 MULAI DI SINI — 3 LANGKAH PERTAMA</h3><button class="btn-gold btn-sm" type="button" data-goto="#/book">📖 CARA MAIN</button></div>
+    ${starterAllDone
+      ? '<p class="teal-text" style="margin:6px 0">✅ 3 langkah awal selesai — selamat bermain! Naikkan level, kumpulkan emas, dan rebut kursi parlemen.</p>'
+      : `<p class="muted small" style="margin:6px 0">Baru main? Ikuti 3 langkah ini — tidak perlu scroll ke bawah.</p>
+    <div class="kv"><span class="k">${stepWorkDone ? '✅' : '⬜'} <b>1. Kerja</b> — lamar pekerjaan ADMIN di menu Pekerjaan, lalu tekan KERJAKAN SATU GILIRAN</span><span class="v"><button class="btn-ghost btn-sm" type="button" data-goto="#/jobs">Buka Pekerjaan ›</button></span></div>
+    <div class="kv"><span class="k"><span id="step-bread-ico">${stepBreadDone ? '✅' : '⬜'}</span> <b>2. Beli roti &amp; makan</b> — beli Makanan di Pasar Global, makan biar energi penuh</span><span class="v"><button class="btn-ghost btn-sm" type="button" data-goto="#/market">Buka Pasar ›</button></span></div>
+    <div class="kv"><span class="k">${stepPartyDone ? '✅' : '⬜'} <b>3. Gabung partai</b> — atau pindah wilayah lewat Peta</span><span class="v"><button class="btn-ghost btn-sm" type="button" data-goto="#/parties">Buka Partai ›</button></span></div>`}
+    <p class="muted small" style="margin:8px 0 0">🏛️ Parlemen dibuka <b>malam ini 28 Nov jam 20.00 WIB</b> — sambil menunggu, naikkan level, kerja, dan gabung partai.</p>
+  </div>
   ${ME.activeWars.length ? `<div class="panel"><h3>⚔️ SEDANG TERJADI</h3>
     ${ME.activeWars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}
     <button class="btn-gold btn-sm" data-goto="#/war">Lihat Perang</button></div>` : ''}
@@ -1315,6 +1336,12 @@ ROUTES.dashboard = async () => {
     if (!el) return;
     const foods = inv.items.filter((i) => i.name === 'Makanan');
     const foodQty = (t) => foods.find((f) => f.tier === t)?.qty || 0;
+    // v5.7.1 (Clueless): langkah 2 checklist "Mulai di Sini" ikut
+    // tercoret bila inventaris sudah berisi Makanan (roti).
+    if (foods.some((f) => (f.qty || 0) > 0)) {
+      const ico = $('#step-bread-ico');
+      if (ico) ico.textContent = '✅';
+    }
     el.innerHTML = [1, 2, 3, 4, 5].map((t) => {
       const q = foodQty(t);
       return `<button class="food-card ${q ? '' : 'empty'}" type="button" data-eat="${t}" ${q ? '' : 'disabled'} aria-label="Makan Makanan T${t}, tambah ${t * 10} energi">
@@ -1654,6 +1681,8 @@ ROUTES.profile = async (username) => {
   <div class="panel"><h3>💼 CATATAN KERJA</h3>
     <div class="kv"><span class="k">Shift dikerjakan</span><span class="v">${pr.shifts}</span></div>
     <div class="kv"><span class="k">Total gaji</span><span class="v">${fmtRp(pr.total_salary)}</span></div>
+    <div class="kv"><span class="k">Total upah bahan</span><span class="v">~${fmtRp(pr.total_goods_usd || 0)} (setara)</span></div>
+    ${(pr.total_goods_usd || 0) > 0 ? '<p class="muted small">Shift ADMIN &amp; bagi hasil dibayar bahan mentah, bukan Rupiah — nilai di atas dihitung dari harga acuan bahan. Jadi "Total gaji Rp0" bukan bug: gajimu dibayar bahan.</p>' : ''}
     <div class="kv"><span class="k">Perusahaan dikelola</span><span class="v">${pr.companies.length}</span></div>
   </div>
   ${pr.companies.length ? `<div class="panel"><h3>🏭 PERUSAHAAN</h3>${pr.companies.map((c) => `<div class="kv"><span class="k">${esc(c.name)}</span><span class="v">${esc(c.type)}</span></div>`).join('')}</div>` : ''}
@@ -2972,6 +3001,9 @@ ROUTES.map = async () => {
     <input id="map-search" placeholder="Cari wilayah..." autocomplete="off">
     <p class="muted small" id="map-search-count" style="margin:6px 0 0"></p>
   </div>
+  <div class="panel"><h3>🧭 MAU PINDAH KE JAKARTA?</h3>
+    <p class="muted small">Klik wilayah di peta untuk detailnya. <b>Bepergian</b> = kunjungan saja (1 Tiket, perjalanan ~2–30 menit, kewarganegaraanmu tetap di wilayah asal). <b>Pindah kewarganegaraan</b> = negara, pajak, dan hak memilihmu ikut pindah ke wilayah itu — gratis, bisa pindah lagi setelah 7 hari. Gabung partai <b>tidak</b> memindahkan kewarganegaraanmu — itu dua hal berbeda.</p>
+  </div>
   <div class="panel big-map-panel">
     <div class="map-zoom">
       <button class="btn-ghost btn-sm" id="map-zoom-out" type="button" aria-label="Perkecil peta">−</button>
@@ -3499,6 +3531,9 @@ ROUTES.parties = async (arg) => {
       <button class="btn-gold big" id="btn-new-party" style="margin-top:12px">+ DIRIKAN PARTAI</button>
       <div id="party-form"></div>`}
   </div>
+  <div class="panel"><h3>❓ GABUNG PARTAI ≠ PINDAH WILAYAH</h3>
+    <p class="muted small">Gabung partai = masuk kelompok politik (untuk pemilu parlemen &amp; kursi). <b>Kewarganegaraanmu TIDAK ikut pindah</b> — kewarganegaraan diatur lewat Peta: kunjungi wilayah lain dengan BEPERGIAN (1 Tiket, beberapa menit perjalanan), atau pindah kewarganegaraan dengan PINDAH KEWARGANEGARAAN di halaman wilayah (gratis, bisa pindah lagi setelah 7 hari). Jadi ajakan "masuk Jakarta dan gabung partaiku" itu <b>dua langkah berbeda</b>.</p>
+  </div>
   <div class="panel"><h3>🗺️ PETA KEKUATAN</h3>
     ${data.parties.length ? data.parties.map((p) => `
       <div class="card"><div class="panel-head"><h4>${esc(p.name)} [${esc(p.tag)}]</h4><span class="chip">${p.seats} kursi</span></div>
@@ -3540,6 +3575,10 @@ ROUTES.parties = async (arg) => {
     try { await post(`/api/parties/${data.mine.id}/approve`, { citizen_id: Number(b.dataset.approve) }); toast('Lamaran disetujui.'); route(); }
     catch (e) { toast(e.message); }
   });
+  $$('[data-approve]').forEach((b) => b.onclick = async () => {
+    try { await post(`/api/parties/${data.mine.id}/approve`, { citizen_id: Number(b.dataset.approve) }); toast('Lamaran disetujui.'); route(); }
+    catch (e) { toast(e.message); }
+  });
   $$('[data-reject]').forEach((b) => b.onclick = async () => {
     try { await post(`/api/parties/${data.mine.id}/reject`, { citizen_id: Number(b.dataset.reject) }); toast('Lamaran ditolak.'); route(); }
     catch (e) { toast(e.message); }
@@ -3568,6 +3607,8 @@ async function partyDetail(id) {
     ${d.myRole ? `<p class="muted small">Jabatanmu: ${PARTY_ROLE_LABEL[d.myRole] || d.myRole}</p>` : ''}
     ${!d.myRole ? `<button class="btn-gold btn-sm" data-join="${p.id}">${p.type === 'application' ? 'KIRIM LAMARAN' : 'GABUNG'}</button>` : ''}
     ${d.myRole === 'pending' ? `<p class="muted small">Lamaranmu sedang menunggu persetujuan ketua/sekretaris.</p>` : ''}
+    <button class="btn-ghost btn-sm" id="btn-share-party" style="margin-top:6px">🔗 Bagikan ke Obrolan</button>
+    <p class="muted small">Bagikan partaimu ke Obrolan Global — kartunya menampilkan nama partai + tombol gabung langsung.</p>
     ${(d.myRole === 'member' || d.myRole === 'secretary') ? `<button class="btn-ghost btn-sm" data-leave="${p.id}">Keluar dari Partai</button>` : ''}
   </div>
   <div class="panel"><h3>👥 DAFTAR MEMBER (${d.members.length})</h3>
@@ -3583,6 +3624,16 @@ async function partyDetail(id) {
   $$('[data-join]').forEach((b) => b.onclick = async () => {
     try { const r = await post(`/api/parties/${b.dataset.join}/join`); toast(r.role === 'pending' ? 'Lamaran dikirim. Menunggu persetujuan ketua.' : 'Kamu resmi bergabung dengan partai!'); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
+  });
+  // v5.7.1 (Clueless): bagikan partai ke Obrolan Global — pola yang sama
+  // seperti "Bagikan ke Obrolan" artikel (v5.0.1): berhasil → langsung ke
+  // #/chat supaya kartu ajakannya terlihat; gagal (mis. cooldown 5 detik)
+  // → toast berisi alasan sebenarnya, tetap di halaman partai.
+  $('#btn-share-party')?.addEventListener('click', async () => {
+    try {
+      await post('/api/chat/global', { content: `Gabung partaiku: ${p.name} [${p.tag}] — ${p.type === 'open' ? 'gabung langsung' : p.type === 'application' ? 'lewat lamaran' : 'tertutup'}!`, party_id: p.id });
+      location.hash = '#/chat';
+    } catch (e) { toast(e.message); }
   });
   $$('[data-leave]').forEach((b) => b.onclick = async () => {
     if (!confirm('Keluar dari partai ini? Kamu kehilangan keanggotaan dan jabatan di partai bila ada.')) return;
@@ -4354,6 +4405,10 @@ async function renderChatRoom(room) {
             ${m.article_id ? `<a class="article-preview" href="#/press/${m.article_id}">
               <div class="ap-tag">📰 ARTIKEL</div><div class="ap-title">${esc(m.article_title || 'Artikel')}</div>
               <div class="ap-meta">${m.article_source ? esc(m.article_source) + ' · ' : ''}👍 ${m.article_likes || 0} · 💬 ${m.article_comments || 0} komentar</div></a>` : ''}
+            ${m.party_id ? `<a class="article-preview" href="#/parties/${m.party_id}">
+              <div class="ap-tag">🚩 PARTAI</div><div class="ap-title">${esc(m.party_name || 'Partai')}</div>
+              <div class="ap-meta">${m.party_tag_shared ? '[' + esc(m.party_tag_shared) + '] · ' : ''}${m.party_type === 'open' ? 'Terbuka — gabung langsung' : m.party_type === 'application' ? 'Lewat lamaran' : 'Tertutup'} · ${m.party_members || 0} anggota</div></a>
+              ${!(ME.party && ME.party.id === m.party_id) ? `<button class="btn-gold btn-sm" type="button" data-join-party="${m.party_id}" style="margin-top:6px">GABUNG PARTAI</button>` : ''}` : ''}
           </div>
           <div class="msg-actions">
             <button data-report="${m.id}" type="button" title="Laporkan pesan" aria-label="Laporkan pesan">🚩</button>
@@ -4367,6 +4422,12 @@ async function renderChatRoom(room) {
     $$('[data-report]').forEach((b) => b.onclick = () => openReport(Number(b.dataset.report)));
     $$('[data-block]').forEach((b) => b.onclick = async () => {
       try { await post('/api/chat/block', { citizen_id: Number(b.dataset.block) }); toast('Warga diblokir. Pesannya tidak akan terlihat lagi.'); route(); }
+      catch (e) { toast(e.message); }
+    });
+    // v5.7.1 (Clueless): tombol GABUNG di kartu ajakan partai — gabung
+    // langsung dari chat, tanpa harus membuka halaman partai dulu.
+    $$('[data-join-party]').forEach((b) => b.onclick = async () => {
+      try { const r = await post(`/api/parties/${b.dataset.joinParty}/join`); toast(r.role === 'pending' ? 'Lamaran dikirim. Menunggu persetujuan ketua.' : 'Kamu resmi bergabung dengan partai!'); await refreshMe(); }
       catch (e) { toast(e.message); }
     });
     // Scroll: muat awal / sudah di bawah → lompat ke bawah; sedang baca ke
@@ -4444,6 +4505,12 @@ ROUTES.chat = async (sub) => {
       return `<button class="tab chat-tab ${room === r || (r === 'wilayah' && room.startsWith('region_')) ? 'active' : ''}" data-room="${r}" data-goto="#/chat${r === 'global' ? '' : '/' + r}">${label}${badge}</button>`;
     }).join('')}
   </div>
+  ${room === 'global' ? `<details class="panel chat-faq" open style="margin-top:10px"><summary style="cursor:pointer"><b>❓ PERTANYAAN YANG SERING DITANYA</b> <span class="muted small">— klik untuk buka/tutup</span></summary>
+    <div class="small" style="margin-top:8px">
+    <p><b>Baru main, harus ngapain dulu?</b><br>1) Lamar pekerjaan ADMIN di menu Pekerjaan → 2) tekan KERJAKAN SATU GILIRAN → 3) beli Makanan (roti) di Pasar Global lalu makan → 4) gabung partai di menu Partai. Panduan lengkap: tombol 📖 CARA MAIN di atas dashboard.</p>
+    <p><b>Beli roti di mana?</b><br>Pasar Global → cari Makanan → beli → makan dari Inventaris (atau kartu MAKANAN di dashboard). Jatah roti harian 10 (Premium 25).</p>
+    <p><b>Cara kerja / shift gimana?</b><br>Lamar pekerjaan dulu (Kantor Ketenagakerjaan), lalu tekan KERJAKAN SATU GILIRAN — 100 energi = 1 shift penuh. Shift ADMIN dibayar bahan mentah (bukan Rupiah); shift perusahaan dibayar Rupiah dari uang pemilik perusahaan.</p>
+    </div></details>` : ''}
   <h2 class="chat-title">${title}${room.startsWith('war_') ? '<span class="chat-live">● LANGSUNG</span>' : ''}</h2>
   <p class="page-sub">${esc(subLabel)}</p>
   <div id="chat-status" class="chat-status" hidden></div>
