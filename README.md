@@ -201,6 +201,8 @@ Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lama
 kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara ~48,40 USD; USD tidak
 berubah) → pasar (jual/beli, pajak 2%) → makan → valas (cetak 1 emas = 10 USD)
 
+Hasil terakhir (28 Nov 2026, v5.7.3 "Latar ambient" — branch lane8-bugs-opt; CATATAN: nomor 5.7.3 bertabrakan dengan v5.7.3 "Kronik" di master, parent menomori ulang saat merge): **ambient-bg-dom 11/11 lolos, ui-batch2-dom 53/53 lolos** (suite terdampak, diverifikasi lokal 20:51 WIB; full suite menyusul di GitHub Actions setelah push). Latar ambient: 3 lapis radial-gradient emas/teal/navy + animasi ambient-drift 28 dtk, prefers-reduced-motion. Perbaikan tes: cek "countdown parlemen tetap tampil" di ui-batch2-dom kini menerima tampil-sebelum-dibuka / tersembunyi-setelah-dibuka (parlemen dibuka 28 Nov 20:00 WIB; app.js memang menyembunyikan #parliament-countdown bila ME.parliamentOpen, by design — bukan regresi).
+
 Hasil terakhir (28 Nov 2026, v5.7.2 "Kick & Bubarkan Partai"): **e2e 1301/1301 lolos,
 pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 287/287 lolos,
 pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, tutorial-dom 43/43 lolos,
