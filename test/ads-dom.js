@@ -10,7 +10,7 @@
 //   (4) TIDAK ada skrip AdinPlay yang dimuat saat ID kosong;
 //   (5) POST /api/ads/start ditolak 503 saat iklan belum aktif;
 //   (6) /api/me melaporkan ads.enabled=false + rewardGold 30;
-//   (7) VERSI: /api/world melaporkan 5.6.0;
+//   (7) VERSI: /api/world melaporkan 5.7.0;
 //   (8) Banner (slot kosong): /api/me melaporkan banner.enabled=false +
 //       rewardGold 15 + dailyCap 10 + viewMs 10000; halaman #/ads
 //       menampilkan panel banner + placeholder "belum tersedia" + TIDAK
@@ -35,7 +35,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3471;
 const DB_PATH = '/tmp/parlementer-ads-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.6.0';
+const EXPECTED_VERSION = '5.7.0';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -102,7 +102,7 @@ async function main() {
 
     // (7) Versi dulu (tanpa login).
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.6.0', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.7.0', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     const jar = makeJar(BASE);
     const r = await api(jar, '/api/auth/register', { email: 'domAds@test.local', password: 'rahasia123', username: 'warga_ads' });

@@ -11,7 +11,7 @@ import {
   requireCredit, creditScoreSettled,
 } from './util.js';
 import { dbRateLimit } from './rate-limit.js';
-import { getMyCountry, getIncomeTaxRate, getImportTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary, militaryPowerOf, militaryUnitsOf } from './api-civic.js';
+import { getMyCountry, getIncomeTaxRate, getImportTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary, countryDisplayName, militaryPowerOf, militaryUnitsOf } from './api-civic.js';
 import {
   VERSION, WA_TOPUP_URL, MINT_RATE, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
   xpForLevel, isDoubleXpHour, xpGainForShiftEnergy, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
@@ -182,15 +182,21 @@ export function registerCore(app) {
   // masuk kas negara — melainkan langsung ke panglima perang (controller_id)
   // dalam mata uang yang sama + notifikasi. Bila wilayah bebas/bernegara,
   // pajak masuk kas negara penjual seperti biasa (recordTreasury).
+  // (v5.7.0) Wilayah DIJAJAH: pajak masuk kas negara PENJAJAH
+  // (occupied_by), bukan kas negara asal.
   async function paySellerTax(t, currency, amount, note, seller, sellerCountry) {
     const a = round2(amount);
     if (a <= 0) return;
-    const region = await t.one('SELECT controller, controller_id FROM regions WHERE id = ?', [seller.region_id]);
+    const region = await t.one('SELECT controller, controller_id, occupied_by FROM regions WHERE id = ?', [seller.region_id]);
     if (region?.controller === 'pemberontak' && region.controller_id) {
       const col = currency === 'gold' ? 'gold' : 'usd';
       await t.run(`UPDATE citizens SET ${col} = ${col} + ? WHERE id = ?`, [a, region.controller_id]);
       await notify(region.controller_id, 'EKONOMI', 'Pajak wilayah taklukan',
         `Pajak penjualan ${note} di wilayah yang kamu kuasai: +${a} ${currency === 'gold' ? 'emas' : 'Rupiah'}.`, t);
+      return;
+    }
+    if (region?.occupied_by) {
+      await recordTreasury(t, currency, amount, note, region.occupied_by);
       return;
     }
     await recordTreasury(t, currency, amount, note, sellerCountry?.id || null);
@@ -405,11 +411,11 @@ export function registerCore(app) {
       try { await run('UPDATE citizens SET last_seen_at = ? WHERE id = ?', [Date.now(), c.id]); }
       catch (e) { console.error('[online] heartbeat gagal:', e.message); }
     }
-    const region = await one('SELECT r.*, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [c.region_id]);
+    const region = await one("SELECT r.*, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?", [c.region_id]);
     const country = await getMyCountry({ one }, c);
     // Wilayah asal / kewarganegaraan (27 Nov 2026): bisa berbeda dari
     // region (lokasi saat ini) bila warga sedang berkunjung ke wilayah lain.
-    const homeRegion = c.home_region_id ? await one('SELECT r.*, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [c.home_region_id]) : null;
+    const homeRegion = c.home_region_id ? await one("SELECT r.*, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?", [c.home_region_id]) : null;
     // Status perjalanan yang sedang berjalan: null bila tidak bepergian.
     // arrivesAt/remainingMs dipakai hitung mundur di UI. Bila jam tiba
     // sudah lewat, settleTravel di loadCitizen sudah menyelesaikan
@@ -1123,7 +1129,7 @@ export function registerCore(app) {
     if (!u) return res.status(404).json({ error: 'Warga tidak ditemukan.' });
     // Profil menunjukkan wilayah ASAL (kewarganegaraan, home_region_id) —
     // bukan lokasi kunjungan saat ini.
-    const region = await one('SELECT r.name, c.name AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?', [u.home_region_id]);
+    const region = await one("SELECT r.name, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?", [u.home_region_id]);
     const party = u.party_id ? await one('SELECT name, tag FROM parties WHERE id = ?', [u.party_id]) : null;
     const companies = await sql('SELECT id, name, type FROM companies WHERE owner_id = ?', [u.citizen_id]);
     const articles = await sql('SELECT id, title, created_at FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT 5', [u.citizen_id]);
@@ -2408,11 +2414,12 @@ export function registerCore(app) {
   // ---------- PETA ----------
   app.get('/api/regions', authRequired, citizenRequired, r(async (req, res) => {
     const rows = await sql(
-      `SELECT r.*, c.name AS country_name,
+      `SELECT r.*, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name,
         (SELECT COUNT(*) FROM citizens WHERE region_id = r.id) AS population,
         (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
         (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion,
-        (SELECT u.username FROM citizens ci JOIN users u ON u.id = ci.user_id WHERE ci.id = r.controller_id) AS controller_name
+        (SELECT u.username FROM citizens ci JOIN users u ON u.id = ci.user_id WHERE ci.id = r.controller_id) AS controller_name,
+        (SELECT COALESCE(o.name, 'Belum Dinamai') FROM country o WHERE o.id = r.occupied_by) AS occupied_by_name
        FROM regions r LEFT JOIN country c ON c.id = r.country_id ORDER BY r.id`);
     // Waktu tempuh dari LOKASI SAAT INI (27 Nov 2026) + biaya perjalanan
     // dari NEGARA PEMANGGIL (kewarganegaraan, 1 atau 2 Tiket). `home` =
@@ -2429,11 +2436,12 @@ export function registerCore(app) {
 
   app.get('/api/regions/:id', authRequired, citizenRequired, r(async (req, res) => {
     const reg = await one(
-      `SELECT r.*, c.name AS country_name,
+      `SELECT r.*, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name,
         (SELECT COUNT(*) FROM citizens WHERE region_id = r.id) AS population,
         (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
         (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion,
-        (SELECT u.username FROM citizens ci JOIN users u ON u.id = ci.user_id WHERE ci.id = r.controller_id) AS controller_name
+        (SELECT u.username FROM citizens ci JOIN users u ON u.id = ci.user_id WHERE ci.id = r.controller_id) AS controller_name,
+        (SELECT COALESCE(o.name, 'Belum Dinamai') FROM country o WHERE o.id = r.occupied_by) AS occupied_by_name
        FROM regions r LEFT JOIN country c ON c.id = r.country_id WHERE r.id = ?`, [req.params.id]);
     if (!reg) return res.status(404).json({ error: 'Wilayah tidak ditemukan.' });
     const war = await one("SELECT * FROM wars WHERE region_id = ? AND status = 'active' ORDER BY created_at DESC", [reg.id]);
@@ -2533,8 +2541,8 @@ export function registerCore(app) {
       [target.id, Date.now(), c.id, target.id, target.id, Date.now() - MOVE_COOLDOWN_MS]);
     if (!upd.changes) return res.status(400).json({ error: 'Tidak bisa pindah kewarganegaraan sekarang. Pastikan kamu sudah tiba, sedang berada di wilayah tujuan, dan jeda 7 hari sudah lewat.' });
     const country = await getMyCountry({ one }, { ...c, home_region_id: target.id });
-    await notify(c.id, 'SISTEM', 'Kewarganegaraan pindah', `Kewarganegaraanmu kini ${target.name}${country ? ` — kamu kini warga ${country.name}.` : ' (belum bernegara).'}`);
-    res.json({ ok: true, region: target.name, country: country ? country.name : null });
+    await notify(c.id, 'SISTEM', 'Kewarganegaraan pindah', `Kewarganegaraanmu kini ${target.name}${country ? ` — kamu kini warga ${countryDisplayName(country)}.` : ' (belum bernegara).'}`);
+    res.json({ ok: true, region: target.name, country: country ? countryDisplayName(country) : null });
   }));
 
   app.post('/api/regions/rebel', authRequired, citizenRequired, r(async (req, res) => {
@@ -2546,6 +2554,15 @@ export function registerCore(app) {
       const reg = await t.one(forUpdate('SELECT * FROM regions WHERE id = ?'), [region_id]);
       if (!reg) throw Object.assign(new Error('Wilayah tidak ditemukan.'), { status: 404 });
       const c = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      // Pemberontakan HANYA di wilayah DIJAJAH (v5.7.0, Tugas 3):
+      // wilayah bebas (tidak bernegara) tidak ada yang dilawan; wilayah
+      // bernegara yang damai tidak bisa diberontak; wilayah pemberontak
+      // sudah direbut — bukan dijajah negara.
+      if (!reg.occupied_by) {
+        if (!reg.country_id) throw Object.assign(new Error('Wilayah ini merdeka — tidak ada yang bisa diberontak.'), { status: 400 });
+        if (reg.controller === 'pemberontak') throw Object.assign(new Error('Wilayah ini sudah dikuasai pemberontak — bukan dijajah negara.'), { status: 400 });
+        throw Object.assign(new Error('Wilayah ini bernegara dan damai — pemberontakan hanya bisa dimulai di wilayah yang dijajah negara lain.'), { status: 400 });
+      }
       const existing = await t.one('SELECT * FROM war_support WHERE region_id = ? AND citizen_id = ?', [region_id, c.id]);
       if (existing) throw Object.assign(new Error('Kamu sudah mendukung pemberontakan di wilayah ini.'), { status: 400 });
       const cost = reg.name === REBEL_CAPITAL_NAME ? REBEL_COST_CAPITAL : REBEL_COST; // ibu kota lebih mahal
@@ -2558,18 +2575,19 @@ export function registerCore(app) {
       const count = await t.one('SELECT COUNT(*) AS n FROM war_support WHERE region_id = ?', [region_id]);
       let warStarted = false;
       if (Number(count.n) >= 5) {
-        // Pembela = nama negara pemilik wilayah, atau 'Pembela <Wilayah>'
-        // bila wilayah merdeka (redesain dunia — tidak ada lagi RI).
-        // Tahap 6: bila wilayah dikuasai pemberontak, pembelanya adalah
-        // panglima perang yang sedang berkuasa (namanya).
+        // Pembela = negara PENJAJAH (wilayah dijajah — pemberontakan ini
+        // jenis 'liberation'); bila bukan jajahan, pembelanya nama negara
+        // pemilik / panglima perang / 'Pembela <Wilayah>' seperti dulu.
         const ownerCountry = reg.country_id ? await t.one('SELECT name FROM country WHERE id = ?', [reg.country_id]) : null;
+        const occupier = reg.occupied_by ? await t.one('SELECT name FROM country WHERE id = ?', [reg.occupied_by]) : null;
         const warlord = reg.controller === 'pemberontak' && reg.controller_id
           ? await t.one('SELECT u.username FROM citizens ci JOIN users u ON u.id = ci.user_id WHERE ci.id = ?', [reg.controller_id])
           : null;
-        const defenderLabel = warlord?.username || ownerCountry?.name || `Pembela ${reg.name}`;
+        const defenderLabel = occupier ? countryDisplayName(occupier) : warlord?.username || (ownerCountry ? countryDisplayName(ownerCountry) : `Pembela ${reg.name}`);
+        const kind = reg.occupied_by ? 'liberation' : 'rebellion';
         await t.run(
-          `INSERT INTO wars (name, region_id, attacker_label, defender_label, ends_at, created_at) VALUES (?,?,?,?,?,?) RETURNING id`,
-          [`Pemberontakan ${reg.name}`, region_id, `Pemberontak ${reg.name}`, defenderLabel, Date.now() + WAR_DURATION_MS, Date.now()]);
+          `INSERT INTO wars (name, region_id, attacker_label, defender_label, kind, defender_country_id, ends_at, created_at) VALUES (?,?,?,?,?,?,?,?) RETURNING id`,
+          [`Pemberontakan ${reg.name}`, region_id, `Pemberontak ${reg.name}`, defenderLabel, kind, reg.occupied_by || null, Date.now() + WAR_DURATION_MS, Date.now()]);
         await t.run('DELETE FROM war_support WHERE region_id = ?', [region_id]);
         warStarted = true;
       }
@@ -2677,7 +2695,7 @@ export function registerCore(app) {
     const feed = [];
     const warRows = await sql(`SELECT w.attacker_label, w.defender_label, r.name AS region_name, w.created_at FROM wars w JOIN regions r ON r.id = w.region_id ORDER BY w.created_at DESC LIMIT 2`);
     for (const x of warRows) feed.push({ icon: '⚔️', text: `Perang di ${x.region_name} — ${x.attacker_label} melawan ${x.defender_label}`, at: x.created_at });
-    const elRows = await sql(`SELECT e.type, e.status, c.name AS country_name, e.created_at FROM elections e LEFT JOIN country c ON c.id = e.country_id WHERE e.country_id IS NOT NULL ORDER BY e.created_at DESC LIMIT 2`);
+    const elRows = await sql(`SELECT e.type, e.status, COALESCE(c.name, 'Belum Dinamai') AS country_name, e.created_at FROM elections e LEFT JOIN country c ON c.id = e.country_id WHERE e.country_id IS NOT NULL ORDER BY e.created_at DESC LIMIT 2`);
     for (const x of elRows) {
       const typeLabel = x.type === 'president' ? 'Presiden' : x.type === 'parliament' ? 'Parlemen' : x.type;
       const st = x.status === 'open' ? 'sedang berlangsung' : x.status === 'closed' ? 'selesai' : 'dijadwalkan';
@@ -2729,13 +2747,13 @@ export function registerCore(app) {
     const freeRegions = await one('SELECT COUNT(*) AS n FROM regions WHERE country_id IS NULL');
     // "PEMIMPIN TIAP DAFTAR" mengikuti KEWARGANEGARAAN (home_region_id):
     // Level Tertinggi menampilkan wilayah asal + negara asal pemain.
-    const topLevel = (await sql(`SELECT u.username, c.level, c.xp, c.last_seen_at, r.name AS region_name, co.name AS country_name
+    const topLevel = (await sql(`SELECT u.username, c.level, c.xp, c.last_seen_at, r.name AS region_name, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(co.name, 'Belum Dinamai') END AS country_name
       FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.home_region_id
       LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 3`))
       // Status online per warga (v4.3.0, saran LIO): tiap baris membawa
       // flag online + label siap tampil, seperti /api/profile.
       .map((x) => ({ ...x, ...onlineStatus(x.last_seen_at) }));
-    const topRegions = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, co.name AS country_name
+    const topRegions = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(co.name, 'Belum Dinamai') END AS country_name
       FROM regions r LEFT JOIN citizens c ON c.home_region_id = r.id LEFT JOIN country co ON co.id = r.country_id
       GROUP BY r.id, r.name, r.type, co.name ORDER BY citizens DESC, r.name ASC LIMIT 3`);
     const topParties = await sql(`SELECT p.id, p.name, p.tag, COUNT(pm.citizen_id) AS members
@@ -2743,7 +2761,7 @@ export function registerCore(app) {
       GROUP BY p.id, p.name, p.tag ORDER BY members DESC, p.name ASC LIMIT 3`);
     // Kartu wilayahku (dashboard): skor kota, peringkat, infrastruktur,
     // kapasitas, bonus sumber daya, dukungan pemberontakan aktif.
-    const myRegion = await one(`SELECT r.*, c.name AS country_name,
+    const myRegion = await one(`SELECT r.*, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name,
       (SELECT COUNT(*) FROM citizens WHERE region_id = r.id) AS population,
       (SELECT COUNT(*) FROM companies WHERE region_id = r.id) AS companies,
       (SELECT COUNT(*) FROM war_support WHERE region_id = r.id) AS rebellion
@@ -2758,12 +2776,12 @@ export function registerCore(app) {
     const full = req.query.full;
     let fullList = null;
     if (full === 'level') {
-      fullList = (await sql(`SELECT u.username, c.level, c.xp, c.last_seen_at, r.name AS region_name, co.name AS country_name
+      fullList = (await sql(`SELECT u.username, c.level, c.xp, c.last_seen_at, r.name AS region_name, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(co.name, 'Belum Dinamai') END AS country_name
         FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.home_region_id
         LEFT JOIN country co ON co.id = r.country_id ORDER BY c.level DESC, c.xp DESC LIMIT 50`))
         .map((x) => ({ ...x, ...onlineStatus(x.last_seen_at) }));
     } else if (full === 'regions') {
-      fullList = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, co.name AS country_name
+      fullList = await sql(`SELECT r.id, r.name, r.type, COUNT(c.id) AS citizens, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(co.name, 'Belum Dinamai') END AS country_name
         FROM regions r LEFT JOIN citizens c ON c.home_region_id = r.id LEFT JOIN country co ON co.id = r.country_id
         GROUP BY r.id, r.name, r.type, co.name ORDER BY citizens DESC, r.name ASC LIMIT 50`);
     } else if (full === 'parties') {

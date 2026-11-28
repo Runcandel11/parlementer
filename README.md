@@ -64,14 +64,26 @@ Satu akun = satu warga. Satu dunia dipakai semua pemain.
   Warga bisa menyumbang emas / Rupiah / bahan ke kas negaranya sendiri
   (tercatat di arus kas).
 - **Partai:** dirikan butuh Level 10 + 50 emas; gabung langsung / lamaran / tertutup.
-- **Parlemen:** dibuka **2 Desember 2026** (sebelumnya terkunci); 60 kursi,
+- **Parlemen:** dibuka **28 November 2026 20:00 WIB** (sebelumnya terkunci); 60 kursi,
   mayoritas 31, usul UU (Level 5 + 5 emas), voting 7 hari. UU bisa mengubah
   pajak penghasilan, pajak impor, upah ADMIN, biaya perjalanan,
-  ideologi, dan sistem pemerintahan.
+  ideologi, dan sistem pemerintahan. Parlemen juga menetapkan NAMA negara
+  (mosi nama, voting 7 hari, lolos bila YA ≥ 31) dan bisa mendeklarasikan
+  perang antar-negara (mosi perang, voting 3 hari, lolos bila YA ≥ 31).
 - **Pemilu:** presiden (hak pilih Level 5 + 3 hari jadi warga; calon hanya
-  lewat nominasi ketua partai) & parlemen (kursi dibagi proporsional).
+  lewat nominasi ketua partai) & parlemen (warga memilih PARTAI langsung,
+  kursi dibagi proporsional dari suara partai). Pemilu parlemen hanya dibuka
+  bila tiap wilayah di negara itu punya ≥ 5 warga pendukung (petisi pembuka,
+  baru tiap siklus pemilu); pemilu presiden tidak kena gate petisi.
 - **Perang + Militer:** front aktif, serang dari garis depan (harus di
-  wilayah perang, 10 energi + 1 senjata). Rekrut 3 unit — Infanteri,
+  wilayah perang, energi 10–50 pilihan penyerang + 1 senjata tier 1–5).
+  Rumus damage baru: `(20 + 5×Kekuatan) × (1 + 0,15×(tier−1)) ×
+  (1 + 0,02×(energi−10)) × (Drone? 1,5 : 1) × (wilayah asal? 1,15 : 1)`.
+  Perang antar-negara hanya bisa dideklarasikan Menteri Pertahanan atau
+  lewat mosi parlemen; negara sekutu (aliansi) tidak bisa diserang. Wilayah
+  yang kalah perang jadi DIJAJAH (pajaknya mengalir ke negara penjajah);
+  pemberontakan hanya bisa dimulai di wilayah jajahan dan bila menang
+  wilayah dibebaskan ke negara asalnya. Rekrut 3 unit — Infanteri,
   Drone Perang, Kendaraan Berat — yang menaikkan pengali kerusakan perang
   (maks ×1,5) + perawatan harian; wilayah yang kalah perang berpindah
   pengendali (pajaknya mengalir ke panglima perang).
@@ -189,17 +201,17 @@ Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lama
 kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara ~48,40 USD; USD tidak
 berubah) → pasar (jual/beli, pajak 2%) → makan → valas (cetak 1 emas = 10 USD)
 
-Hasil terakhir (28 Nov 2026, v5.5.0 "Lupa Password"): **e2e 1171/1171 lolos,
-pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 270/270 lolos,
+Hasil terakhir (28 Nov 2026, v5.7.0 "Pemberontakan, Perang Antar-Negara & Parlemen 20:00 WIB"): **e2e 1257/1257 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 282/282 lolos,
 pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, tutorial-dom 43/43 lolos,
-landing-glass-dom 79/79 lolos, ads-dom 44/44 lolos, conversion-dom 20/20 lolos, chat-dom 70/70 lolos, password-reset-dom 23/23 lolos** — dan semua suite DOM lain hijau (23 suite DOM = 947/947,
-xp-rollback 49/49, ssl 6/6; total 2527/2527, 0 gagal). Lupa Password: link di layar login → permintaan masuk kotak masuk admin (ACC/TOLAK) → kalau ACC, pemain mengecek status di halaman login lalu tombol sekali pakai "Masuk & Buat Password Baru" membawanya ke halaman buat password baru; token sekali pakai (hash SHA-256 tersimpan, nilai mentah tak pernah keluar server), kedaluwarsa 7 hari (pending) / 3 hari (setelah ACC), tanpa email — sepenuhnya in-app; pesan generik agar tidak bocor apakah email terdaftar atau tidak. Chat kini kolom sempit di tengah (maks 680px, panel berbingkai) ala Parlementum: tab Global/Indonesia/Wilayah bergaris bawah emas + lencana jumlah pesan belum dibaca (batas +99, dari tabel chat_read), gelembung pesan + avatar 48px + nama emas + jam, ikon laporkan/blokir di samping gelembung, tombol KIRIM emas, modal Laporkan Konten tetap sama. Kartu MILITER dashboard tidak lagi "0/undefined unit" — /api/me kini mengirim cap (50+10×level). DM auto-scroll ke pesan terbaru saat dibuka dan saat pesan baru masuk (tiket LIO #47). Tutorial (v5.2.0): overlay 7 langkah muncul otomatis
+landing-glass-dom 79/79 lolos, ads-dom 44/44 lolos, conversion-dom 20/20 lolos, chat-dom 70/70 lolos, password-reset-dom 23/23 lolos, party-dom 24/24 lolos** — dan semua suite DOM lain hijau (24 suite DOM = 971/971,
+xp-rollback 49/49, ssl 6/6; total 2649/2649, 0 gagal). Lupa Password: link di layar login → permintaan masuk kotak masuk admin (ACC/TOLAK) → kalau ACC, pemain mengecek status di halaman login lalu tombol sekali pakai "Masuk & Buat Password Baru" membawanya ke halaman buat password baru; token sekali pakai (hash SHA-256 tersimpan, nilai mentah tak pernah keluar server), kedaluwarsa 7 hari (pending) / 3 hari (setelah ACC), tanpa email — sepenuhnya in-app; pesan generik agar tidak bocor apakah email terdaftar atau tidak. Chat kini kolom sempit di tengah (maks 680px, panel berbingkai) ala Parlementum: tab Global/Indonesia/Wilayah bergaris bawah emas + lencana jumlah pesan belum dibaca (batas +99, dari tabel chat_read), gelembung pesan + avatar 48px + nama emas + jam, ikon laporkan/blokir di samping gelembung, tombol KIRIM emas, modal Laporkan Konten tetap sama. Kartu MILITER dashboard tidak lagi "0/undefined unit" — /api/me kini mengirim cap (50+10×level). DM auto-scroll ke pesan terbaru saat dibuka dan saat pesan baru masuk (tiket LIO #47). Tutorial (v5.2.0): overlay 7 langkah muncul otomatis
 di dashboard saat login pertama pemain baru (tutorial_done = 0, tersimpan di server; warga lama
 di-backfill saat migrasi skema 25), tombol Lewati selalu ada, selesai/lewati menutup permanen,
 replay dari Buku Panduan/Pengaturan; pemain baru yang masuk lewat deep link tidak dibajak —
 overlay baru muncul begitu ia sampai di dashboard. AdSense: script verifikasi
 ca-pub-2013457230013617 di &lt;head&gt; + public/ads.txt (google.com, pub-2013457230013617, DIRECT,
-f08c47fec0942fa0) — dicek landing-glass-dom (script ada di HTML, /ads.txt 200 + isi persis).
+f08c47fec0942fa0) — dicek landing-glass-dom (script ada di HTML, /ads.txt 200 + isi persis). v5.7.0: parlemen buka 28 Nov 2026 20:00 WIB; perang antar-negara hanya via Menteri Pertahanan atau mosi parlemen (tidak bisa serang aliansi), wilayah kalah jadi dijajah; pemberontakan hanya di wilayah dijajah (menang = bebas ke negara asal); nama negara ditetapkan parlemen (nama lama direset jadi "Belum Dinamai"); rumus damage baru — tier senjata, energi 10–50 yang dipilih penyerang, senjata yang dikonsumsi (Senjata/Drone), level Kekuatan, bonus wilayah asal +15%; pemilu parlemen butuh petisi ≥5 warga pendukung per wilayah dan warga memilih PARTAI langsung (60 kursi proporsional dari suara partai), pemilu presiden tetap vote kandidat; skema 29→30 (tabel aliansi, mosi perang/nama, petisi pemilu + kolom wars/regions/election_votes).
 → perjalanan (1 Tiket) → chat + lapor + blokir → aturan dunia (partai Level 10,
 pasar 0) → daily tick (hari 1 → 2, energi pulih 100) → logout → **referral
 (bonus cair di Level 3, maks 5/hari) + admin bootstrap (email admin tanpa kode

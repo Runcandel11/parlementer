@@ -95,7 +95,7 @@
 // absurd hasil exploit di-rollback (migrasi clamp). Plus perbaikan bug
 // share link: shareStatsFor tidak lagi memakai `? IS NULL` (Postgres
 // 42P18 — hanya gagal di live, lolos di SQLite).
-export const VERSION = '5.6.0';
+export const VERSION = '5.7.0';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
@@ -372,11 +372,27 @@ export const MOVE_COOLDOWN_MS = 7 * DAY_MS;
 // Makan: Makanan T1..T5 memberi 10/20/30/40/50 energi. Batas harian 10 unit.
 export function foodEnergy(tier) { return tier * 10; }
 
-// Kerusakan perang: dasar 20 + 5 per level Kekuatan; Drone x1.5.
-export function warDamage(strength, ammo) {
-  let d = 20 + 5 * strength;
-  if (ammo === 'Drone') d = Math.round(d * 1.5);
-  return d;
+// Kerusakan perang (v5.7.0 — perintah pemilik 28 Nov 2026): dihitung
+// dari LIMA masukan — level senjata (tier amunisi yang dikonsumsi),
+// energi yang dikonsumsi (penyerang memilih 10–50 per serangan),
+// senjata yang dikonsumsi (Senjata vs Drone), level Kekuatan, dan bonus
+// wilayah (bertarung di wilayah asal = +15%).
+//   dasar = (20 + 5 × Kekuatan) × (1 + 0,15 × (tier − 1))
+//           × (1 + 0,02 × (energi − 10)) × (Drone ? 1,5 : 1)
+//           × (wilayah asal ? 1,15 : 1), dibulatkan.
+// Nilai default (tier 1, energi 10, bukan wilayah asal) = rumus lama
+// (20 + 5×Kekuatan, Drone ×1,5) — pemanggil lama tanpa argumen baru
+// tidak berubah hasilnya.
+export const WAR_ATTACK_ENERGY_MIN = 10;
+export const WAR_ATTACK_ENERGY_MAX = 50;
+export const WAR_HOME_BONUS_MULT = 1.15;
+export function warDamage(strength, ammo, tier = 1, energy = WAR_ATTACK_ENERGY_MIN, home = false) {
+  const t = Math.min(5, Math.max(1, Math.round(Number(tier) || 1)));
+  const e = Math.min(WAR_ATTACK_ENERGY_MAX, Math.max(WAR_ATTACK_ENERGY_MIN, Number(energy) || WAR_ATTACK_ENERGY_MIN));
+  let d = (20 + 5 * strength) * (1 + 0.15 * (t - 1)) * (1 + 0.02 * (e - WAR_ATTACK_ENERGY_MIN));
+  if (ammo === 'Drone') d = d * 1.5;
+  if (home) d = d * WAR_HOME_BONUS_MULT;
+  return Math.round(d);
 }
 
 // Pemberontakan (Tahap 7): biaya emas untuk memulai pemberontakan di satu
@@ -768,13 +784,14 @@ export const ENERGY_DRINK_NAME = 'Minuman Energi';
 export const ENERGY_DRINK_PRICE_GOLD = 0.10;
 export const ENERGY_DRINK_ENERGY = 1;
 
-// --- Redesain dunia (27 Nov 2026): tanpa negara awal + parlemen 2 Des ---
+// --- Redesain dunia (27 Nov 2026): tanpa negara awal + parlemen 28 Nov ---
 // Dunia mulai TERPECAH: semua wilayah merdeka (tidak bernegara). Warga yang
 // membentuk negara; wilayah bisa bergabung (unifikasi) lewat voting warga
-// wilayah itu. Parlemen sebagai fitur dibuka 2 Desember 2026 00:00 WIB —
-// tanggal buka disimpan di db_meta ('parliament_opens_at') supaya bisa
-// diubah admin tanpa deploy; konstanta ini hanya nilai SEED-nya.
-export const PARLIAMENT_OPENS_AT_DEFAULT = Date.parse('2026-12-02T00:00:00+07:00');
+// wilayah itu. Parlemen sebagai fitur dibuka 28 November 2026 20:00 WIB
+// (dipercepat dari 2 Des 2026 — perintah pemilik 28 Nov 2026) — tanggal
+// buka disimpan di db_meta ('parliament_opens_at') supaya bisa diubah
+// admin tanpa deploy; konstanta ini hanya nilai SEED-nya.
+export const PARLIAMENT_OPENS_AT_DEFAULT = Date.parse('2026-11-28T20:00:00+07:00');
 export function parliamentOpen(now = Date.now(), opensAt = PARLIAMENT_OPENS_AT_DEFAULT) { return now >= opensAt; }
 // Format sisa waktu sampai parlemen dibuka, gaya "4 hari 11 jam 30 mnt".
 export function parliamentCountdownText(now = Date.now(), opensAt = PARLIAMENT_OPENS_AT_DEFAULT) {
@@ -787,6 +804,28 @@ export function parliamentCountdownText(now = Date.now(), opensAt = PARLIAMENT_O
   if (h > 0) return `${h} jam ${mm} mnt`;
   return `${mm} mnt`;
 }
+
+// --- Perang antar-negara + pendudukan + mosi parlemen (v5.7.0) ---
+// Mayoritas parlemen = 31 dari 60 kursi — dipakai mosi nama negara +
+// mosi perang (UU biasa tetap lolos bila YA > TIDAK, lihat tick.js).
+export const PARLIAMENT_MAJORITY = 31;
+// Mosi perang divoting 3 hari (seperti anggaran/pemakzulan — perang itu
+// mendesak); mosi nama negara divoting 7 hari (seperti UU).
+export const WAR_MOTION_VOTE_DAYS = 3;
+export const NAME_MOTION_VOTE_DAYS = 7;
+// Petisi pembuka pemilu parlemen (v5.7.0, Tugas 6): tiap wilayah di sebuah
+// negara butuh minimal 5 warga pendukung (level >= 5 + usia akun >= 3
+// hari — syarat yang sama dengan hak pilih) sebelum pemilu parlemen
+// negara itu dibuka tick. Pemilu presiden TIDAK kena gate ini.
+export const PARLIAMENT_PETITION_PER_REGION = 5;
+// Nama negara: pendiri TIDAK memilih nama lagi (v5.7.0) — negara baru
+// dibuat tanpa nama (NULL) dan nama ditetapkan parlemen lewat mosi.
+// Placeholder tampil di semua tempat yang merender nama negara.
+export const COUNTRY_NAME_PLACEHOLDER = 'Belum Dinamai';
+export const COUNTRY_NAME_MIN = 3;
+export const COUNTRY_NAME_MAX = 40;
+// Biaya notaris mosi parlemen (nama negara / perang): 5 emas, seperti UU.
+export const MOTION_COST_GOLD = 5;
 
 // --- Ideologi negara (dipilih presiden ATAU lewat UU jenis 'ideology') ---
 // Efeknya NYATA (bukan teks): klaim harian, upah ADMIN, pajak, kerusakan
@@ -833,7 +872,7 @@ export const COUNTRY_JOIN_MIN_LEVEL = 5;
 export const COUNTRY_JOIN_VOTE_DAYS = 3;
 export const COUNTRY_JOIN_MIN_YES = 3;
 // Jadwal pemilu pertama sebuah negara baru: presiden 7 hari setelah
-// didirikan; parlemen paling cepat saat parlemen dibuka (2 Des 2026),
+// didirikan; parlemen paling cepat saat parlemen dibuka (28 Nov 2026 20:00 WIB),
 // atau 3 hari setelah didirikan bila negara itu baru dibentuk sesudahnya.
 export const PRESIDENT_ELECTION_DELAY_DAYS = 7;
 export const PARLIAMENT_ELECTION_DELAY_DAYS = 3;

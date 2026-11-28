@@ -423,7 +423,10 @@ CREATE TABLE IF NOT EXISTS citizens (
 );
 CREATE TABLE IF NOT EXISTS country (
   id ${id},
-  name TEXT NOT NULL,
+  -- Nama negara (v5.7.0): NULL = belum dinamai — nama DITENTUKAN parlemen
+  -- lewat mosi (bukan dipilih pendiri). Tampilan memakai placeholder
+  -- 'Belum Dinamai' (COUNTRY_NAME_PLACEHOLDER di game.js).
+  name TEXT,
   -- Ideologi + sistem pemerintahan (redesain dunia 27 Nov 2026): tiap
   -- negara punya keduanya; dipilih presiden ATAU lewat UU. CHECK menjaga
   -- nilainya tetap dalam daftar game.js (COUNTRY_IDEOLOGIES /
@@ -471,6 +474,13 @@ CREATE TABLE IF NOT EXISTS regions (
   -- ke panglima perang, bukan ke kas negara.
   controller TEXT NOT NULL DEFAULT 'bebas' CHECK (controller IN ('bebas','negara','pemberontak')),
   controller_id INTEGER,
+  -- Pendudukan (v5.7.0): wilayah DIJAJAH bila occupied_by terisi — negara
+  -- penyerang yang merebut wilayah ini lewat perang antar-negara.
+  -- country_id TETAP negara asal (kewarganegaraan warga tidak berubah);
+  -- occupied_from menyimpan negara asal itu juga (jejak untuk pembebasan).
+  -- Pajak pasar wilayah jajahan mengalir ke kas negara penjajah.
+  occupied_by INTEGER,
+  occupied_from INTEGER,
   city_score INTEGER NOT NULL DEFAULT 7,
   capacity INTEGER NOT NULL DEFAULT 100,
   health INTEGER NOT NULL DEFAULT 7,
@@ -782,7 +792,22 @@ CREATE TABLE IF NOT EXISTS election_candidates (
 CREATE TABLE IF NOT EXISTS election_votes (
   election_id INTEGER NOT NULL REFERENCES elections(id),
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
-  candidate_id INTEGER NOT NULL,
+  -- Suara presiden memakai candidate_id; suara parlemen (v5.7.0) memakai
+  -- party_id — warga memilih PARTAI langsung, bukan kandidat. Tepat satu
+  -- dari keduanya terisi per baris.
+  candidate_id INTEGER,
+  party_id INTEGER,
+  UNIQUE(election_id, citizen_id)
+);
+-- Petisi pembuka pemilu parlemen (v5.7.0, Tugas 6): dukungan warga agar
+-- pemilu parlemen dibuka. Satu warga = satu dukungan per pemilu (siklus);
+-- dukungan tidak terbawa ke pemilu berikutnya. region_id = wilayah asal
+-- pendukung saat mendukung (kewarganegaraan = wilayah asal).
+CREATE TABLE IF NOT EXISTS election_petitions (
+  election_id INTEGER NOT NULL REFERENCES elections(id),
+  region_id INTEGER NOT NULL REFERENCES regions(id),
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  created_at BIGINT NOT NULL,
   UNIQUE(election_id, citizen_id)
 );
 CREATE TABLE IF NOT EXISTS wars (
@@ -793,6 +818,15 @@ CREATE TABLE IF NOT EXISTS wars (
   -- Pembela: nama negara pemilik wilayah, atau 'Pembela <Wilayah>' bila
   -- wilayah merdeka. Diisi saat perang dimulai (bukan default negara).
   defender_label TEXT NOT NULL DEFAULT '',
+  -- Jenis perang (v5.7.0): 'rebellion' = pemberontakan lama (lahir dari
+  -- POST /api/regions/rebel — kini hanya di wilayah dijajah, lihat
+  -- 'liberation'), 'country_war' = perang antar-negara (dideklarasi
+  -- Kemenhan/mosi parlemen), 'liberation' = pemberontakan di wilayah
+  -- jajahan (menang = wilayah dibebaskan ke negara asal). Negara penyerang
+  -- / bertahan (NULL untuk perang pemberontakan lama).
+  kind TEXT NOT NULL DEFAULT 'rebellion',
+  attacker_country_id INTEGER,
+  defender_country_id INTEGER,
   score_a INTEGER NOT NULL DEFAULT 0 CHECK (score_a >= 0),
   score_d INTEGER NOT NULL DEFAULT 0 CHECK (score_d >= 0),
   status TEXT NOT NULL DEFAULT 'active',
@@ -824,6 +858,62 @@ CREATE TABLE IF NOT EXISTS war_support (
   region_id INTEGER NOT NULL REFERENCES regions(id),
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   UNIQUE(region_id, citizen_id)
+);
+-- Aliansi antar-negara (v5.7.0): dua negara bersekutu tidak bisa saling
+-- serang. Pasangan disimpan terurut (a < b) + UNIQUE supaya tidak ada
+-- aliansi ganda. status: 'pending' (menunggu presiden target menerima)
+-- atau 'active'. proposer_id = presiden pengusul.
+CREATE TABLE IF NOT EXISTS country_alliances (
+  id ${id},
+  country_a_id INTEGER NOT NULL REFERENCES country(id),
+  country_b_id INTEGER NOT NULL REFERENCES country(id),
+  proposer_id INTEGER NOT NULL REFERENCES citizens(id),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','active')),
+  created_at BIGINT NOT NULL,
+  UNIQUE(country_a_id, country_b_id)
+);
+-- Mosi perang parlemen (v5.7.0): usul menyerang wilayah negara lain.
+-- Lolos bila YA >= 31 (mayoritas 60 kursi) dalam 3 hari — lalu perang
+-- antar-negara dideklarasikan (bila wilayahnya masih valid saat ditutup).
+-- Satu mosi perang aktif per negara pengusul.
+CREATE TABLE IF NOT EXISTS war_motions (
+  id ${id},
+  proposer_id INTEGER NOT NULL REFERENCES citizens(id),
+  country_id INTEGER NOT NULL REFERENCES country(id),
+  target_country_id INTEGER NOT NULL REFERENCES country(id),
+  region_id INTEGER NOT NULL REFERENCES regions(id),
+  yes INTEGER NOT NULL DEFAULT 0 CHECK (yes >= 0),
+  no INTEGER NOT NULL DEFAULT 0 CHECK (no >= 0),
+  status TEXT NOT NULL DEFAULT 'voting' CHECK (status IN ('voting','passed','failed')),
+  ends_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS war_motion_votes (
+  motion_id INTEGER NOT NULL REFERENCES war_motions(id),
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  vote TEXT NOT NULL,
+  UNIQUE(motion_id, citizen_id)
+);
+-- Mosi penetapan nama negara (v5.7.0): nama DITENTUKAN parlemen, bukan
+-- pendiri. Lolos bila YA >= 31 (mayoritas 60 kursi) dalam 7 hari — lalu
+-- country.name diisi (bila nama itu masih bebas saat ditutup). Satu mosi
+-- nama aktif per negara.
+CREATE TABLE IF NOT EXISTS name_motions (
+  id ${id},
+  proposer_id INTEGER NOT NULL REFERENCES citizens(id),
+  country_id INTEGER NOT NULL REFERENCES country(id),
+  name TEXT NOT NULL,
+  yes INTEGER NOT NULL DEFAULT 0 CHECK (yes >= 0),
+  no INTEGER NOT NULL DEFAULT 0 CHECK (no >= 0),
+  status TEXT NOT NULL DEFAULT 'voting' CHECK (status IN ('voting','passed','failed')),
+  ends_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS name_motion_votes (
+  motion_id INTEGER NOT NULL REFERENCES name_motions(id),
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  vote TEXT NOT NULL,
+  UNIQUE(motion_id, citizen_id)
 );
 CREATE TABLE IF NOT EXISTS newspapers (
   id ${id},
@@ -1302,6 +1392,7 @@ export async function initDb() {
     await migrateBannerAdKind(t);
     await migrateFirstShiftColumn(t);
     await migratePasswordResetColumns(t);
+    await migrateV570Columns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1363,7 +1454,7 @@ async function runDataFixups() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'company_stock', 'share_clicks', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'chat_read', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'password_resets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'company_stock', 'share_clicks', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'election_petitions', 'wars', 'war_attacks', 'war_support', 'country_alliances', 'war_motions', 'war_motion_votes', 'name_motions', 'name_motion_votes', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'chat_read', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'password_resets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -1380,7 +1471,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 29;
+const SCHEMA_VERSION = 30;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -2086,6 +2177,57 @@ async function migratePasswordResetColumns(t) {
   }
 }
 
+// Perang antar-negara + pendudukan + nama negara + parlemen 28 Nov (v5.7.0).
+//  - regions.occupied_by / occupied_from: penanda wilayah DIJAJAH.
+//  - wars.kind / attacker_country_id / defender_country_id: jenis perang.
+//  - country.name boleh NULL (hanya Postgres yang butuh ALTER — SQLite
+//    memakai skema baru dari schema(); DB SQLite lama yang masih NOT NULL
+//    dilewati reset namanya supaya initDb tidak crash — tidak ada DB
+//    SQLite persisten di jalur produksi).
+//  - db_meta parliament_opens_at: 2 Des 2026 -> 28 Nov 2026 20:00 WIB,
+//    hanya bila nilainya masih default lama (nilai yang diubah admin
+//    manual tidak ditimpa).
+//  - Reset nama semua negara jadi NULL (ditetapkan parlemen lewat mosi).
+// Idempotent: ADD COLUMN IF NOT EXISTS / cek PRAGMA; UPDATE reset hanya
+// mengubah baris yang namanya masih terisi.
+async function migrateV570Columns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('regions', 'occupied_by', 'INTEGER');
+  await addCol('regions', 'occupied_from', 'INTEGER');
+  await addCol('wars', 'kind', "TEXT NOT NULL DEFAULT 'rebellion'");
+  await addCol('wars', 'attacker_country_id', 'INTEGER');
+  await addCol('wars', 'defender_country_id', 'INTEGER');
+  // Pemilu parlemen — vote partai (v5.7.0, Tugas 6): kolom party_id di
+  // election_votes + candidate_id boleh NULL (suara partai tidak punya
+  // kandidat). Pola yang sama seperti country.name di atas (hanya
+  // Postgres yang butuh ALTER; DB SQLite lama tidak ada di produksi).
+  await addCol('election_votes', 'party_id', 'INTEGER');
+  if (isPg) {
+    const col = await t.one(`SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'election_votes' AND column_name = 'candidate_id'`);
+    if (col?.is_nullable === 'NO') await t.exec('ALTER TABLE election_votes ALTER COLUMN candidate_id DROP NOT NULL');
+  }
+  // country.name -> boleh NULL.
+  let nameNullable = false;
+  if (isPg) {
+    const col = await t.one(`SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'country' AND column_name = 'name'`);
+    nameNullable = col?.is_nullable === 'YES';
+    if (!nameNullable) { await t.exec('ALTER TABLE country ALTER COLUMN name DROP NOT NULL'); nameNullable = true; }
+  } else {
+    const cols = await t.sql('PRAGMA table_info(country)');
+    nameNullable = !cols.some((c) => c.name === 'name' && c.notnull === 1);
+  }
+  await t.run("UPDATE db_meta SET value = ? WHERE key = 'parliament_opens_at' AND value = ?",
+    [String(Date.parse('2026-11-28T20:00:00+07:00')), String(Date.parse('2026-12-02T00:00:00+07:00'))]);
+  if (nameNullable) await t.run('UPDATE country SET name = NULL WHERE name IS NOT NULL');
+}
+
 // Jejak baca chat (v5.4.0): tabel chat_read untuk lencana pesan belum dibaca
 // di tab chat ala Parlementum. Idempotent (CREATE TABLE IF NOT EXISTS) —
 // tanpa backfill: warga lama tanpa baris dianggap belum pernah membaca
@@ -2288,8 +2430,9 @@ export async function migrateJobDedup(t) {
   return summary;
 }
 
-// Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di
-// db_meta supaya bisa diubah tanpa deploy; nilai awal = 2 Des 2026 00:00
+// Tanggal parlemen dibuka (redesain dunia 27 Nov 2026, dipercepat ke
+// 28 Nov 2026 20:00 WIB — v5.7.0): disimpan di
+// db_meta supaya bisa diubah tanpa deploy; nilai awal = 28 Nov 2026 20:00
 // WIB (PARLIAMENT_OPENS_AT_DEFAULT di game.js). Dipakai gate parlemen +
 // penjadwalan pemilu parlemen pertama tiap negara.
 export async function getParliamentOpensAt() {

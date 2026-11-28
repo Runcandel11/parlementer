@@ -20,7 +20,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3472;
 const DB_PATH = '/tmp/parlementer-offside-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.6.0';
+const EXPECTED_VERSION = '5.7.0';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -86,7 +86,7 @@ async function main() {
     await sleep(1200);
 
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.6.0', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.7.0', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // --- Warga Premium (P) + admin untuk grant premium.
     const jarP = makeJar();
@@ -114,7 +114,7 @@ async function main() {
     const pcd = dom.window.document.querySelector('#parliament-countdown');
     check('Banner countdown parlemen ada', !!pcd);
     check('Countdown: tanggal dipisah ke baris kedua (<br>)', (pcd?.innerHTML || '').includes('<br>'), (pcd?.innerHTML || '').slice(0, 160));
-    check('Countdown: tetap menyebut "2 Des 2026"', (pcd?.textContent || '').includes('2 Des 2026'), (pcd?.textContent || '').slice(0, 120));
+    check('Countdown: tetap menyebut "28 Nov 2026"', (pcd?.textContent || '').includes('28 Nov 2026'), (pcd?.textContent || '').slice(0, 120));
 
     // --- (4) Dashboard Premium: jatah roti /25.
     const foodHead = [...dom.window.document.querySelectorAll('#page .stat-head')].find((el) => el.textContent.includes('Sisa roti hari ini'));

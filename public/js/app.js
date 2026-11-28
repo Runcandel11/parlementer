@@ -788,7 +788,7 @@ function renderHUD() {
     } else banner.hidden = true;
   }
   // Countdown parlemen (redesain dunia): tampil di ATAS sampai parlemen
-  // dibuka 2 Des 2026. Diperbarui tiap refresh /api/me (30 detik).
+  // dibuka 28 Nov 2026 20:00 WIB. Diperbarui tiap refresh /api/me (30 detik).
   const pcd = $('#parliament-countdown');
   if (pcd) {
     if (ME.parliamentOpen) pcd.hidden = true;
@@ -797,7 +797,7 @@ function renderHUD() {
       // (v4.5.0, perbaikan offside): tanggal dipisah ke baris kedua —
       // dulu "· 2" menggantung di ujung baris pertama saat countdown
       // melipat di layar HP sempit.
-      pcd.innerHTML = `<b>🏛️ Parlemen dibuka ${fmtCountdown(Number(ME.parliamentOpensAt) - Date.now())} lagi</b><br><span class="muted small">2 Des 2026</span>`;
+      pcd.innerHTML = `<b>🏛️ Parlemen dibuka ${fmtCountdown(Number(ME.parliamentOpensAt) - Date.now())} lagi</b><br><span class="muted small">28 Nov 2026 20:00 WIB</span>`;
     }
   }
   // Tombol peti pasokan harian (rombak UI): di bawah hamburger; berdenyut
@@ -3116,6 +3116,7 @@ ROUTES.regions = async (id) => {
       <div class="kv"><span class="k">Negara</span><span class="v">${r.country_name ? esc(r.country_name) : 'Belum Bernegara'}</span></div>
       <div class="kv"><span class="k">Penguasa wilayah</span><span class="v">${r.controller === 'pemberontak' ? `⚔️ Panglima Perang: ${esc(r.controller_name || '—')}` : r.controller === 'negara' ? esc(r.country_name || '—') : 'Bebas — tidak ada yang menguasai'}</span></div>
       ${r.controller === 'pemberontak' ? '<p class="muted small">Wilayah ini dikuasai pemberontak — pajak pasarnya mengalir ke panglima perang, bukan ke kas negara.</p>' : ''}
+      ${r.occupied_by ? `<div class="kv"><span class="k">Status pendudukan</span><span class="v red-text">⚔️ Dijajah oleh ${esc(r.occupied_by_name || '—')}</span></div><p class="muted small">Wilayah ini dijajah — pajak pasarnya mengalir ke kas negara penjajah. Pemberontakan di sini bisa membebaskannya ke negara asal.</p>` : ''}
       <div class="kv"><span class="k">Pajak penghasilan</span><span class="v">${d.taxIncome ?? 0}%${r.country_name ? '' : ' · wilayah yang belum bernegara tidak memungut pajak'}</span></div>
       <div class="kv"><span class="k">Pajak produksi</span><span class="v">1%</span></div>
       <div class="kv"><span class="k">Pajak impor / ekspor</span><span class="v">2% / 2%</span></div>
@@ -3142,11 +3143,13 @@ ROUTES.regions = async (id) => {
             : `<button class="btn-gold" id="btn-travel">BEPERGIAN KE SINI (~${d.travelMinutes} mnt · ${d.travelTickets || 1} 🎫)</button><p class="muted small">Bepergian hanya kunjungan — kewarganegaraanmu tetap di wilayah asal.</p>`}
     </div>
     <div class="panel"><h3>🔥 PEMBERONTAKAN</h3>
-      <p class="muted small">5 warga berbeda harus mendukung untuk menyulut perang pemberontakan di wilayah ini. Dukunganmu hangus (tidak kembali).</p>
+      <p class="muted small">Pemberontakan hanya bisa di wilayah yang dijajah negara lain. 5 warga berbeda harus mendukung untuk menyulut perang pembebasan di wilayah ini. Dukunganmu hangus (tidak kembali).</p>
       ${d.war ? `<p>⚔️ Perang aktif: <b>${esc(d.war.name)}</b> — ${fmt(d.war.score_a)} vs ${fmt(d.war.score_d)}</p>
         <button class="btn-gold" data-goto="#/war/${d.war.id}">Buka Front Perang</button>`
-        : `<p>Dukungan saat ini: <b>${r.rebellion}/5</b></p>
-        <button class="btn-gold" id="btn-rebel" ${d.mySupport ? 'disabled' : ''}>${d.mySupport ? '✓ Sudah Mendukung' : 'DUKUNG PEMBERONTAKAN · 50 emas hangus'}</button>`}
+        : r.occupied_by ? `<p>Dukungan saat ini: <b>${r.rebellion}/5</b></p>
+        <p class="muted small">Menang = wilayah ini dibebaskan ke negara asalnya.</p>
+        <button class="btn-gold" id="btn-rebel" ${d.mySupport ? 'disabled' : ''}>${d.mySupport ? '✓ Sudah Mendukung' : 'DUKUNG PEMBERONTAKAN · 50 emas hangus'}</button>`
+        : `<p class="muted">Pemberontakan hanya bisa dimulai di wilayah yang dijajah negara lain. Wilayah ini ${!r.country_id ? 'merdeka — tidak ada yang dilawan' : r.controller === 'pemberontak' ? 'sudah dikuasai pemberontak' : 'bernegara dan damai'}.</p>`}
     </div>`);
     $('#btn-travel')?.addEventListener('click', async () => {
       try { const res = await post('/api/regions/travel', { region_id: r.id }); toast(`Dalam perjalanan ke ${res.region} — tiba dalam ~${res.travelMinutes} menit.`); await refreshMe(); route(); }
@@ -3174,6 +3177,8 @@ ROUTES.regions = async (id) => {
 // negara + form dirikan negara + usulan unifikasi untuk wilayahku).
 ROUTES.country = async () => {
   const d = await api('/api/country');
+  let regionsData = { regions: [] };
+  try { regionsData = await api('/api/regions'); } catch (e) { /* tetap tampil tanpa daftar wilayah */ }
   const c = d.countryFull;
   const rules = d.formationRules || { minLevel: 10, costGold: 100, joinMinLevel: 5, joinVoteDays: 3, joinMinYes: 3 };
   const ideLabel = (id) => (d.ideologies || []).find((x) => x.id === id) || { id, label: id, desc: '' };
@@ -3198,6 +3203,17 @@ ROUTES.country = async () => {
     <div class="kv"><span class="k">Ibu kota</span><span class="v">${esc(c.capital)}</span></div>
     <div class="kv"><span class="k">Didirikan</span><span class="v">${esc(c.founded)}</span></div>
     <div class="kv"><span class="k">Wilayah anggota</span><span class="v">${d.memberRegions.map((r) => esc(r.name)).join(', ') || '—'}</span></div>
+  </div>
+  <div class="panel"><h3>🤝 ALIANSI ANTAR-NEGARA</h3>
+    <p class="muted small">Negara yang bersekutu tidak bisa saling serang. Presiden mengusulkan, presiden negara lain menerima.</p>
+    ${d.alliances?.length ? d.alliances.map((a) => `<div class="kv"><span class="k">${esc(a.otherName)}</span><span class="v">${a.status === 'active' ? '✅ Sekutu' : a.outgoing ? '⏳ Menunggu jawaban' : '📩 Usulan masuk'} ${a.status === 'active' ? `<button class="btn-danger btn-sm" data-ally-dissolve="${a.id}">BUBARKAN</button>` : !a.outgoing && a.status === 'pending' ? `<button class="btn-gold btn-sm" data-ally-respond="${a.id}|yes">TERIMA</button> <button class="btn-danger btn-sm" data-ally-respond="${a.id}|no">TOLAK</button>` : ''}</span></div>`).join('') : '<p class="muted">Belum ada aliansi.</p>'}
+    ${d.isPresident ? `<label style="margin-top:10px">USULKAN ALIANSI KE NEGARA<select id="ally-target">${d.countries.filter((x) => x.id !== c.id).map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
+    <button class="btn-gold btn-sm" id="btn-ally">USULKAN ALIANSI</button>` : '<p class="muted small">Hanya presiden yang bisa mengusulkan aliansi.</p>'}
+  </div>
+  <div class="panel"><h3>⚔️ PERANG ANTAR-NEGARA</h3>
+    <p class="muted small">Menang perang = wilayah target DIJAJAH negaramu. Kalah = wilayah tetap milik negara asal. Tidak bisa menyerang sekutu.</p>
+    ${d.myMinisterRole === 'defense' ? `<label>SERANG WILAYAH (NEGARA LAIN)<select id="declare-region">${(regionsData.regions || []).filter((r) => r.country_id && r.country_id !== c.id && !r.occupied_by).map((r) => `<option value="${r.id}">${esc(r.name)} — ${esc(r.country_name)}</option>`).join('')}</select></label>
+    <button class="btn-danger btn-sm" id="btn-declare-war">DEKLARASIKAN PERANG</button>` : '<p class="muted small">Perang antar-negara hanya bisa dideklarasikan oleh Menteri Pertahanan (Kemenhan) — atau lewat mosi parlemen (halaman Parlemen).</p>'}
   </div>
   <div class="panel"><h3>👑 PEMERINTAHAN</h3>
     <div class="kv"><span class="k">${esc(d.presidentTitle)}</span><span class="v">${esc(d.president)}</span></div>
@@ -3286,8 +3302,8 @@ ROUTES.country = async () => {
     }).join('')}
   </div>` : ''}
   <div class="panel"><h3>🏴 DIRIKAN NEGARA</h3>
-    <p class="muted small">Syarat: Level ${rules.minLevel} + ${rules.costGold} emas. Wilayahmu (${esc(d.myRegion?.name || '')}) jadi ibu kota + wilayah pertama. Pendiri BUKAN otomatis presiden — presiden dipilih lewat pemilu (calon lewat kepala partai). Pemilu presiden pertama 7 hari setelah didirikan; pemilu parlemen paling cepat saat parlemen dibuka (2 Des 2026).</p>
-    <label>NAMA NEGARA<input id="country-name" placeholder="cth: Federasi Nusantara"></label>
+    <p class="muted small">Syarat: Level ${rules.minLevel} + ${rules.costGold} emas. Wilayahmu (${esc(d.myRegion?.name || '')}) jadi ibu kota + wilayah pertama. Pendiri BUKAN otomatis presiden — presiden dipilih lewat pemilu (calon lewat kepala partai). Pemilu presiden pertama 7 hari setelah didirikan; pemilu parlemen paling cepat saat parlemen dibuka (28 Nov 2026 20:00 WIB).</p>
+    <p class="muted small">Nama negara TIDAK dipilih pendiri — parlemen yang akan menetapkan namanya lewat mosi (nama sementara: "Belum Dinamai").</p>
     <label>IDEOLOGI<select id="country-ideology-new">
       ${d.ideologies.map((x) => `<option value="${esc(x.id)}">${esc(x.label)} — ${esc(x.desc)}</option>`).join('')}
     </select></label>
@@ -3343,12 +3359,31 @@ ROUTES.country = async () => {
   $('#btn-found-country')?.addEventListener('click', async () => {
     if (!confirm(`Dirikan negara baru dengan ibu kota ${d.myRegion?.name || ''}? Biaya ${rules.costGold} emas.`)) return;
     try {
-      await post('/api/countries', { name: $('#country-name').value.trim(), ideology: $('#country-ideology-new').value, system: $('#country-system-new').value });
+      await post('/api/countries', { ideology: $('#country-ideology-new').value, system: $('#country-system-new').value });
       toast('Negaramu berdiri!'); await refreshMe(); route();
     } catch (e) { toast(e.message); }
   });
   $$('[data-join-country]').forEach((b) => b.onclick = async () => {
     try { await post(`/api/countries/${b.dataset.joinCountry}/join`); toast('Usulan unifikasi dibuat! Voting warga wilayahmu 3 hari.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-ally-respond]').forEach((b) => b.onclick = async () => {
+    const [id, ans] = b.dataset.allyRespond.split('|');
+    try { await post(`/api/alliances/${id}/respond`, { accept: ans === 'yes' }); toast(ans === 'yes' ? 'Aliansi disetujui!' : 'Usulan aliansi ditolak.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-ally-dissolve]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Bubarkan aliansi ini? Kedua negara bisa saling serang lagi.')) return;
+    try { await post(`/api/alliances/${b.dataset.allyDissolve}/dissolve`, {}); toast('Aliansi dibubarkan.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-ally')?.addEventListener('click', async () => {
+    try { await post(`/api/countries/${$('#ally-target').value}/ally`, {}); toast('Usulan aliansi dikirim!'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-declare-war')?.addEventListener('click', async () => {
+    if (!confirm('Deklarasikan perang antar-negara? Perang berlangsung 24 jam. Menang = wilayah target dijajah negaramu.')) return;
+    try { const r = await post('/api/wars/declare', { region_id: Number($('#declare-region').value) }); toast('Perang dideklarasikan!'); location.hash = '#/war/' + r.warId; }
     catch (e) { toast(e.message); }
   });
   $$('[data-jvote]').forEach((b) => b.onclick = async () => {
@@ -3576,16 +3611,20 @@ async function partyDetail(id) {
 // ---------- PARLEMEN ----------
 ROUTES.parliament = async () => {
   const d = await api('/api/parliament');
-  // Parlemen TERKUNCI sampai dibuka 2 Des 2026 (redesain dunia): tampilkan
+  // Parlemen TERKUNCI sampai dibuka 28 Nov 2026 20:00 WIB (redesain dunia): tampilkan
   // countdown + penjelasan, bukan daftar UU kosong.
   if (!d.parliamentOpen) {
     $('#page').innerHTML = page('PARLEMEN', 'Parlemen belum dibuka.', `
     <div class="panel"><div class="empty"><div class="big-ico">🏛️</div>
     <h3>PARLEMEN DIBUKA ${fmtCountdown(Number(d.parliamentOpensAt) - Date.now()).toUpperCase()} LAGI</h3>
-    <p class="muted">Parlemen dibuka <b>2 Desember 2026</b>. Sampai saat itu, UU, anggaran, dan pemakzulan terkunci — tapi kamu sudah bisa mendirikan negara, membentuk partai, dan bersiap untuk pemilu parlemen pertama.</p>
+    <p class="muted">Parlemen dibuka <b>28 November 2026 20:00 WIB</b>. Sampai saat itu, UU, anggaran, pemakzulan, mosi perang, dan mosi nama terkunci — tapi kamu sudah bisa mendirikan negara, membentuk partai, dan bersiap untuk pemilu parlemen pertama.</p>
     <div class="row" style="justify-content:center"><button class="btn-gold" data-goto="#/country">Lihat Negaramu</button><button class="btn-ghost" data-goto="#/parties">Lihat Partai</button></div></div></div>`);
     return;
   }
+  // Daftar wilayah dipakai panel mosi perang — gagal fetch tidak boleh
+  // mengosongkan seluruh halaman parlemen (mock tes / gangguan jaringan).
+  let regionsData = { regions: [] };
+  try { regionsData = await api('/api/regions'); } catch (e) { /* tetap tampil tanpa daftar wilayah */ }
   const seatColors = ['#3b82f6', '#f59e0b', '#ef4444', '#10b981', '#a855f7', '#ec4899', '#14b8a6', '#eab308'];
   const dots = [];
   for (let i = 0; i < d.totalSeats; i++) {
@@ -3654,6 +3693,34 @@ ROUTES.parliament = async () => {
       </div>`;
     }).join('') : '<p class="muted">Belum ada undang-undang. Jadilah pengusul pertama!</p>'}
   </div>
+  <div class="panel"><h3>⚔️ MOSI PERANG</h3>
+    <p class="muted small">Usulkan perang antar-negara ke wilayah negara lain. Voting parlemen 3 hari · lolos bila YA ≥ 31 · biaya 5 emas. Tidak bisa menyerang negara sekutu. Menang perang = wilayah target DIJAJAH.</p>
+    <label>SERANG WILAYAH<select id="war-motion-region">
+      ${(regionsData.regions || []).filter((r) => r.country_id && d.country && r.country_id !== d.country.id && !r.occupied_by).map((r) => `<option value="${r.id}">${esc(r.name)} — ${esc(r.country_name)}</option>`).join('')}
+    </select></label>
+    <button class="btn-gold" id="btn-war-motion">USULKAN MOSI PERANG · 5 EMAS</button>
+    ${d.warMotions?.length ? d.warMotions.map((m) => {
+      const myVote = d.myWarMotionVotes[m.id];
+      return `<div class="card" style="margin-top:10px"><h4>Perang atas ${esc(m.region_name)} (vs ${esc(m.target_name)})</h4>
+      <p class="muted small">Pengusul: ${esc(m.proposer_name)} · ${esc(m.status)} ${m.status === 'voting' ? '· berakhir ' + fmtDate(m.ends_at) : ''}</p>
+      <div class="kv"><span class="k">Ya ${m.yes} · Tidak ${m.no}</span><span class="v">butuh ≥ 31 Ya</span></div>
+      ${m.status === 'voting' ? (myVote ? `<p class="teal-text small">✓ Kamu memilih: ${myVote === 'yes' ? 'Ya' : 'Tidak'}</p>`
+        : `<div class="row"><button class="btn-gold btn-sm" data-wmvote="${m.id}|yes">YA</button><button class="btn-danger btn-sm" data-wmvote="${m.id}|no">TIDAK</button></div>`) : ''}</div>`;
+    }).join('') : '<p class="muted">Belum ada mosi perang.</p>'}
+  </div>
+  <div class="panel"><h3>📛 PENETAPAN NAMA NEGARA</h3>
+    <p class="muted small">Nama negara DITENTUKAN parlemen. Nama saat ini: <b>${d.country ? esc(d.country.name) : '—'}</b>${d.country?.nameUnset ? ' (belum dinamai)' : ''}. Voting 7 hari · lolos bila YA ≥ 31 · biaya 5 emas (gratis untuk Menteri Ekonomi).</p>
+    <label>NAMA YANG DIUSULKAN<input id="name-motion-name" placeholder="cth: Federasi Nusantara" maxlength="40"></label>
+    <button class="btn-gold" id="btn-name-motion">USULKAN NAMA · 5 EMAS</button>
+    ${d.nameMotions?.length ? d.nameMotions.map((m) => {
+      const myVote = d.myNameMotionVotes[m.id];
+      return `<div class="card" style="margin-top:10px"><h4>"${esc(m.name)}"</h4>
+      <p class="muted small">Pengusul: ${esc(m.proposer_name)} · ${esc(m.status)} ${m.status === 'voting' ? '· berakhir ' + fmtDate(m.ends_at) : ''}</p>
+      <div class="kv"><span class="k">Ya ${m.yes} · Tidak ${m.no}</span><span class="v">butuh ≥ 31 Ya</span></div>
+      ${m.status === 'voting' ? (myVote ? `<p class="teal-text small">✓ Kamu memilih: ${myVote === 'yes' ? 'Ya' : 'Tidak'}</p>`
+        : `<div class="row"><button class="btn-gold btn-sm" data-nmvote="${m.id}|yes">YA</button><button class="btn-danger btn-sm" data-nmvote="${m.id}|no">TIDAK</button></div>`) : ''}</div>`;
+    }).join('') : '<p class="muted">Belum ada mosi nama.</p>'}
+  </div>
   <div class="panel"><h3>💰 ANGGARAN NEGARA</h3>
     <p class="muted small">Diisulkan Menteri Ekonomi · voting parlemen 3 hari · dibayar kas negara · efek 7 hari.</p>
     ${d.budgets?.length ? d.budgets.map((b) => {
@@ -3716,6 +3783,24 @@ ROUTES.parliament = async () => {
     try { await post(`/api/parliament/impeach/${id}/vote`, { vote }); toast('Suaramu tercatat.'); route(); }
     catch (e) { toast(e.message); }
   });
+  $('#btn-war-motion')?.addEventListener('click', async () => {
+    try { await post('/api/parliament/war-motion', { region_id: Number($('#war-motion-region').value) }); toast('Mosi perang diusulkan! Voting 3 hari.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $('#btn-name-motion')?.addEventListener('click', async () => {
+    try { await post('/api/parliament/name', { name: $('#name-motion-name').value.trim() }); toast('Mosi nama diusulkan! Voting 7 hari.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-wmvote]').forEach((b) => b.onclick = async () => {
+    const [id, vote] = b.dataset.wmvote.split('|');
+    try { await post(`/api/parliament/war-motion/${id}/vote`, { vote }); toast('Suaramu tercatat.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-nmvote]').forEach((b) => b.onclick = async () => {
+    const [id, vote] = b.dataset.nmvote.split('|');
+    try { await post(`/api/parliament/name/${id}/vote`, { vote }); toast('Suaramu tercatat.'); route(); }
+    catch (e) { toast(e.message); }
+  });
   $('#btn-impeach')?.addEventListener('click', async () => {
     if (!confirm('Usulkan pemakzulan presiden? Voting parlemen dibuka 3 hari. Bila lolos, presiden dicopot.')) return;
     try { await post('/api/parliament/impeach', {}); toast('Pemakzulan diusulkan!'); route(); }
@@ -3726,6 +3811,12 @@ ROUTES.parliament = async () => {
 // ---------- PEMILU ----------
 ROUTES.elections = async () => {
   const [d, parties] = await Promise.all([api('/api/elections'), api('/api/parties')]);
+  // Petisi pembuka pemilu parlemen (v5.7.0): status per wilayah untuk
+  // tiap pemilu parlemen yang masih terjadwal.
+  const petitions = {};
+  for (const e of (d.elections || []).filter((x) => x.type === 'parliament' && x.status === 'scheduled')) {
+    try { petitions[e.id] = await api(`/api/elections/${e.id}/petition`); } catch (_) { /* abaikan — panel petisi tidak tampil */ }
+  }
   const myParty = parties.mine || null;
   const isLeader = !!(myParty && myParty.leader_id === ME.citizen.id);
   const countryName = d.country ? esc(d.country.name) : 'Belum bernegara';
@@ -3744,10 +3835,25 @@ ROUTES.elections = async () => {
   ${d.elections.length ? d.elections.map((e) => `
     <div class="panel"><h3>🗳️ PEMILU ${e.type === 'president' ? 'PRESIDEN' : 'PARLEMEN'} — ${esc(e.status.toUpperCase())}</h3>
       <p class="muted small">Dibuka ${fmtDate(e.opens_at)} · Ditutup ${fmtDate(e.closes_at)}${e.winner ? ' · Pemenang: ' + esc(e.winner) : ''}</p>
-      ${e.candidates.length ? e.candidates.map((c) => `
-        <div class="kv"><span class="k">🧑 ${esc(c.username)} ${c.party_name ? '[' + esc(c.party_tag) + ']' : ''}</span>
-        <span class="v">${c.votes} suara ${e.status === 'open' && !e.myVote ? `<button class="btn-gold btn-sm" data-evote="${e.id}|${c.citizen_id}">PILIH</button>` : ''}</span></div>`).join('')
-        : '<p class="muted">Belum ada kandidat.</p>'}
+      ${e.type === 'parliament'
+        ? (e.parties?.length ? e.parties.map((pt) => `
+          <div class="kv"><span class="k">🏳️ ${esc(pt.name)} [${esc(pt.tag)}]</span>
+          <span class="v">${pt.votes} suara ${e.status === 'open' && !e.myVote ? `<button class="btn-gold btn-sm" data-pvote="${e.id}|${pt.id}">PILIH PARTAI</button>` : ''}</span></div>`).join('')
+          : '<p class="muted">Belum ada partai terdaftar. Ketua partai bisa mendaftarkan partainya saat pemilu dibuka.</p>')
+        : (e.candidates.length ? e.candidates.map((c) => `
+          <div class="kv"><span class="k">🧑 ${esc(c.username)} ${c.party_name ? '[' + esc(c.party_tag) + ']' : ''}</span>
+          <span class="v">${c.votes} suara ${e.status === 'open' && !e.myVote ? `<button class="btn-gold btn-sm" data-evote="${e.id}|${c.citizen_id}">PILIH</button>` : ''}</span></div>`).join('')
+          : '<p class="muted">Belum ada kandidat.</p>')}
+      ${e.type === 'parliament' && e.status === 'scheduled' && petitions[e.id] ? `
+      <div class="card" style="margin-top:10px"><h4>📝 PETISI PEMBUKA PEMILU</h4>
+        <p class="muted small">Pemilu parlemen hanya dibuka bila MASING-MASING wilayah negaramu punya minimal 5 warga pendukung. Petisi baru tiap siklus pemilu.</p>
+        ${petitions[e.id].allMet ? '<p class="teal-text small">✓ Petisi terpenuhi di semua wilayah — pemilu akan dibuka otomatis saat waktunya tiba.</p>' : ''}
+        ${petitions[e.id].regions.map((r) => `<div class="kv"><span class="k">${esc(r.name)}</span><span class="v">${r.count}/5 ${r.met ? '✓' : ''}</span></div>`).join('')}
+        ${petitions[e.id].myRegionId ? '<p class="teal-text small">✓ Kamu sudah mendukung petisi ini.</p>'
+          : d.canVote ? `<button class="btn-gold btn-sm" data-petition="${e.id}">DUKUNG PEMBUKAAN PEMILU</button>`
+          : '<p class="muted small">Mendukung petisi butuh Level 5 + 3 hari menjadi warga.</p>'}
+      </div>` : ''}
+      ${e.myVote && e.type === 'parliament' && e.myVote.party_id ? `<p class="teal-text small">✓ Kamu memilih partai: ${esc((e.parties || []).find((pt) => pt.id === e.myVote.party_id)?.name || '')}.</p>` : ''}
       ${e.status === 'open' && e.type === 'president' ? (isLeader ? `
         <label style="margin-top:10px">NOMINASIKAN CALON PRESIDEN (KEPALA PARTAI)<select id="nominate-${e.id}">
           ${(parties.members || []).map((m) => `<option value="${m.citizen_id}">${esc(m.username)}${m.role === 'leader' ? ' (ketua)' : m.role === 'secretary' ? ' (sekretaris)' : ''}</option>`).join('')}
@@ -3761,6 +3867,15 @@ ROUTES.elections = async () => {
       ${e.myVote ? '<p class="teal-text small">✓ Kamu sudah memilih di pemilu ini.</p>' : ''}
     </div>`).join('') : emptyState('🗳️', 'Tidak ada pemilu', 'Pemilu presiden berikutnya dijadwalkan otomatis.')}
   `);
+  $$('[data-pvote]').forEach((b) => b.onclick = async () => {
+    const [eid, pid] = b.dataset.pvote.split('|');
+    try { await post(`/api/elections/${eid}/vote`, { party_id: Number(pid) }); toast('Suaramu untuk partai tercatat!'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-petition]').forEach((b) => b.onclick = async () => {
+    try { const r = await post(`/api/elections/${b.dataset.petition}/petition`, {}); toast(`Dukungan tercatat — ${esc(r.regionName)} kini ${r.count}/5 pendukung.`); route(); }
+    catch (e) { toast(e.message); }
+  });
   $$('[data-evote]').forEach((b) => b.onclick = async () => {
     const [eid, cid] = b.dataset.evote.split('|');
     try { await post(`/api/elections/${eid}/vote`, { candidate_id: Number(cid) }); toast('Suaramu tercatat!'); route(); }
@@ -3795,14 +3910,20 @@ ROUTES.war = async (id) => {
       ${w.status !== 'active' ? '<p class="muted">Perang sudah berakhir.</p>'
         : !d.atFront ? `<p class="red-text"><b>TIDAK DI GARIS DEPAN</b> — Kamu harus berada di ${esc(w.region_name)} untuk menyerang.</p>
           <button class="btn-gold" data-goto="#/regions/${w.region_id}">TERBANG KE SANA →</button>`
-        : `<p class="muted small">Energi ${ME.citizen.energy}/100 · Senjata di inventaris dipakai sebagai amunisi (1 senjata per serangan).</p>
+        : `<p class="muted small">Energi ${d.myEnergy ?? ME.citizen.energy}/100 · Amunisi 1 unit per serangan — tier yang dipilih (tier lebih tinggi = damage lebih besar).</p>
+          ${d.homeBonus ? '<p class="teal-text small">🏠 Kamu bertarung di wilayah asalmu: damage +15%.</p>' : ''}
           ${d.bonuses?.length ? `<p class="muted small">Bonus aktif: ${d.bonuses.map(esc).join(' · ')}</p>` : ''}
           <p class="muted small">⚔️ Kekuatan militermu: ${d.militaryPower ?? 0} (kerusakan ×${d.militaryMult ?? 1}) — <a data-goto="#/military" style="cursor:pointer" class="gold-text">rekrut pasukan</a>.</p>
+          <p class="muted small">Amunisimu: ${d.myAmmo?.length ? d.myAmmo.map((a) => `${esc(a.ammo)} T${a.tier} ×${a.qty}`).join(' · ') : 'tidak ada Senjata/Drone'}</p>
           <div class="row">
-            <button class="btn-gold" data-attack="attacker|Senjata">SERANG SEBAGAI PENYERANG 🔥</button>
-            <button class="btn-ghost" data-attack="defender|Senjata">BELAH SEBAGAI PEMBELA 🛡️</button>
+            <label style="flex:1">SENJATA<select id="attack-ammo"><option value="Senjata">Senjata</option><option value="Drone">Drone (×1,5)</option></select></label>
+            <label style="flex:1">TIER<select id="attack-tier"><option value="1">Tier 1</option><option value="2">Tier 2 (+15%)</option><option value="3">Tier 3 (+30%)</option><option value="4">Tier 4 (+45%)</option><option value="5">Tier 5 (+60%)</option></select></label>
+            <label style="flex:1">ENERGI<select id="attack-energy"><option value="10">10 energi</option><option value="20">20 energi (+20%)</option><option value="30">30 energi (+40%)</option><option value="40">40 energi (+60%)</option><option value="50">50 energi (+80%)</option></select></label>
           </div>
-          <button class="btn-ghost btn-sm" data-attack="attacker|Drone" style="margin-top:8px">Serang dengan Drone (kerusakan ×1,5)</button>`}
+          <div class="row">
+            <button class="btn-gold" data-attack="attacker">SERANG SEBAGAI PENYERANG 🔥</button>
+            <button class="btn-ghost" data-attack="defender">BELAH SEBAGAI PEMBELA 🛡️</button>
+          </div>`}
     </div>
     <div class="panel"><h3>🏆 PEJUANG TERATAS</h3>
       ${d.fighters.length ? d.fighters.map((f, i) => `
@@ -3817,8 +3938,11 @@ ROUTES.war = async (id) => {
     </div>
     <button class="btn-gold" data-goto="#/chat/war_${w.id}">💬 Buka Obrolan Perang</button>`);
     $$('[data-attack]').forEach((b) => b.onclick = async () => {
-      const [side, ammo] = b.dataset.attack.split('|');
-      try { const r = await post(`/api/wars/${w.id}/attack`, { side, ammo }); toast(`Seranganmu menimbulkan ${r.damage} kerusakan!${r.bonuses?.length ? ' (' + r.bonuses.join(', ') + ')' : ''}`); await refreshMe(); route(); }
+      const side = b.dataset.attack;
+      const ammo = $('#attack-ammo')?.value || 'Senjata';
+      const tier = Number($('#attack-tier')?.value || 1);
+      const energy = Number($('#attack-energy')?.value || 10);
+      try { const r = await post(`/api/wars/${w.id}/attack`, { side, ammo, tier, energy }); toast(`Seranganmu menimbulkan ${r.damage} kerusakan! (tier ${r.tierUsed}, ${r.energyUsed} energi)${r.bonuses?.length ? ' (' + r.bonuses.join(', ') + ')' : ''}`); await refreshMe(); route(); }
       catch (e) { toast(e.message); }
     });
     return;
@@ -3826,7 +3950,7 @@ ROUTES.war = async (id) => {
   const data = await api('/api/wars');
   const active = data.wars.filter((w) => w.status === 'active');
   const ended = data.wars.filter((w) => w.status !== 'active');
-  $('#page').innerHTML = page('PERANG TANAH AIR', 'Front pemberontakan di wilayah-wilayah yang belum bernegara.', `
+  $('#page').innerHTML = page('PERANG TANAH AIR', 'Front perang: pemberontakan di wilayah jajahan & perang antar-negara.', `
   ${active.length ? active.map((w) => `
     <div class="card"><h4>🔥 ${esc(w.name)}</h4>
     <p class="muted small">${esc(w.region_name)} · ${esc(w.attacker_label)} vs ${esc(w.defender_label)} · berakhir ${fmtDate(w.ends_at)}</p>

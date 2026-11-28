@@ -384,7 +384,7 @@ async function main() {
     window.eval('route()');
     await sleep(300);
     const parlLocked = document.querySelector('#page').textContent;
-    check('Parlemen terkunci: countdown + penjelasan tampil (tanpa form UU)', parlLocked.includes('PARLEMEN DIBUKA') && parlLocked.includes('2 Desember 2026') && !document.querySelector('#law-kind'), parlLocked.slice(0, 120));
+    check('Parlemen terkunci: countdown + penjelasan tampil (tanpa form UU)', parlLocked.includes('PARLEMEN DIBUKA') && parlLocked.includes('28 November 2026') && !document.querySelector('#law-kind'), parlLocked.slice(0, 120));
 
     window.api = async (path) => {
       if (path === '/api/orgs') return {

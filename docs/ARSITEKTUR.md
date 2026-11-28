@@ -32,7 +32,7 @@ Ditulis di Tahap 7 (v4.1.0, 28 Nov 2026). Perilaku game yang lengkap ada di
   mentah, bukan uang**.
 - **Tidak ada negara awal.** Dunia mulai terpecah: 17 wilayah independen.
   Negara didirikan pemain (Level 10 + 100 emas); pendiri BUKAN otomatis
-  presiden (dipilih pemilu). **Parlemen dibuka 2 Desember 2026** (kunci
+  presiden (dipilih pemilu). **Parlemen dibuka 28 November 2026 20:00 WIB** (kunci
   `parliament_opens_at` di `db_meta`; konstanta di `game.js` hanya seed awal).
 - **Kewarganegaraan mengikuti wilayah asal** (`citizens.home_region_id`),
   lokasi saat ini di `citizens.region_id`. Travel butuh waktu
@@ -310,6 +310,86 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   (migrasi 28→29, konsumsi atomik, FK, CHECK, idempotensi),
   password-reset-dom 23/23 (UI login: link, form, pesan generik,
   cek status, tombol sekali pakai, halaman reset, validasi).
+- **Perang antar-negara, pendudukan & pemberontakan, nama negara oleh
+  parlemen, pemilu parlemen lewat petisi + vote partai v5.7.0 (28 Nov
+  2026, perintah mendesak pemilik):** skema 29→30, migrasi
+  `migrateV570Columns` (idempotent, pola ADD COLUMN IF NOT EXISTS /
+  PRAGMA seperti migrasi sebelumnya). **Parlemen dibuka 28 Nov 2026
+  20:00 WIB** — konstanta `PARLIAMENT_OPENS_AT_DEFAULT` =
+  `Date.parse('2026-11-28T20:00:00+07:00')` (epoch 1795870800); migrasi
+  meng-update `db_meta.parliament_opens_at` dari nilai lama 2 Des 2026
+  ke nilai baru (hanya bila masih bernilai lama). **Perang antar-negara**
+  (`wars.kind`: 'rebellion' | 'country_war' | 'liberation', kolom baru
+  `attacker_country_id` / `defender_country_id`): hanya bisa dideklarasikan
+  Menteri Pertahanan (`POST /api/wars/declare`, role 'defense') atau lewat
+  **mosi perang** parlemen (`POST /api/parliament/war-motion`, Level 5 +
+  5 emas, satu mosi aktif per negara, voting anggota parlemen 3 hari,
+  lolos bila YA ≥ 31 = `PARLIAMENT_MAJORITY`, lalu tick mendeklarasikan
+  perang dengan validasi ulang target). **Aliansi** minimal antar-negara
+  (`country_alliances`, pasangan terurut a < b + UNIQUE, status
+  pending/active): presiden mengusulkan (`POST
+  /api/countries/:id/ally`), presiden target menerima/menolak
+  (`POST /api/alliances/:id/respond`), salah satu presiden bisa
+  membubarkan (`POST /api/alliances/:id/dissolve`); negara sekutu TIDAK
+  bisa diserang (`checkWarTarget` menolak 400). **Dijajah:** penyerang
+  menang perang antar-negara → wilayah itu `occupied_by` = negara
+  penyerang, `occupied_from` = negara asal, `country_id` TETAP negara
+  asal; pajak pasar wilayah jajahan mengalir ke kas negara penjajah
+  (`paySellerTax` cabang occupied). **Pemberontakan HANYA di wilayah
+  jajahan** (`POST /api/regions/rebel` menolak wilayah merdeka /
+  bernegara yang damai / sudah dikuasai pemberontak): menang → perang
+  kind 'liberation', pembela = negara penjajah; pemberontak menang →
+  okupasi dibersihkan, wilayah kembali ke negara asal. **Nama negara
+  ditentukan parlemen:** `country.name` boleh NULL (migrasi DROP NOT
+  NULL + reset semua nama lama ke NULL — tampilan memakai placeholder
+  'Belum Dinamai'); pendirian negara tidak lagi menerima nama; **mosi
+  nama** (`POST /api/parliament/name`, Level 5 + 5 emas, nama 3–40
+  karakter unik, satu mosi aktif per negara, voting anggota parlemen 7
+  hari, lolos bila YA ≥ 31) — bila nama sudah dipakai negara lain saat
+  tick menutup, mosi gagal. Perhatian migrasi: `UPDATE country SET
+  name = NULL` hanya jalan bila kolom sudah nullable — setelah ALTER
+  DROP NOT NULL, flag-nya harus diset true (bug ini sempat lolos: nama
+  lama tidak ter-reset di DB yang kolomnya masih NOT NULL; dicek
+  pg-verify [31] dengan simulasi kolom NOT NULL). **Rumus damage baru**
+  (`warDamage` di game.js): `(20 + 5×Kekuatan) × (1 + 0,15×(tier−1)) ×
+  (1 + 0,02×(energi−10)) × (Drone? 1,5 : 1) × (wilayah asal? 1,15 : 1)`,
+  dibulatkan — default (tier 1, energi 10, bukan wilayah asal)
+  menghasilkan rumus lama persis. Endpoint serang
+  (`POST /api/wars/:id/attack`) menerima `tier` 1–5 + `energy` 10–50
+  (di luar itu 400), mengonsumsi amunisi tier itu persis + energi yang
+  dipilih, bonus wilayah asal bila `home_region_id` = wilayah perang;
+  respons menambah `breakdown` + `energyUsed` + `tierUsed`;
+  `GET /api/wars/:id` menambah `myAmmo` / `myEnergy` / `homeBonus` /
+  `energyMin` / `energyMax`. **Pemilu parlemen: petisi + vote partai**
+  (Tugas 6): `election_petitions` (election_id, region_id, citizen_id,
+  UNIQUE(election_id, citizen_id) — satu dukungan per warga per pemilu);
+  `GET/POST /api/elections/:id/petition` — dukung butuh hak pilih yang
+  sama dengan vote (Level 5 + 3 hari jadi warga); tick HANYA membuka
+  pemilu parlemen bila `parliamentPetitionMet` — tiap wilayah negara
+  itu punya ≥ 5 pendukung yang wilayah asalnya SAAT INI masih wilayah
+  itu (dukungan dihitung ulang dari `home_region_id`, bukan dari
+  region_id saat mendukung) — dan bila waktunya tiba tapi petisi belum
+  lengkap, pemilu tetap 'scheduled'. Pemilu presiden TIDAK kena gate.
+  **Vote partai:** `election_votes.party_id` (nullable) +
+  `candidate_id` boleh NULL; di pemilu parlemen vote HARUS
+  `party_id` (vote kandidat ditolak 400), partai didaftarkan dulu ke
+  pemilu (`POST /api/elections/:id/register-party`, hanya ketua partai);
+  pemilu presiden tetap vote kandidat. Alokasi kursi tick: agregasi suara
+  per partai (`COALESCE(ev.party_id, ec.party_id)` — suara kandidat lama
+  tetap dihitung lewat partainya), 60 kursi proporsional + koreksi
+  pembulatan ke partai terbesar. **Keputusan yang dicatat:** wilayah
+  dengan total warga < 5 TIDAK PERNAH bisa memenuhi petisi (bukan bug —
+  konsekuensi aturan pemilik; negara satu wilayah kecil harus merekrut
+  dulu). `countryDisplayName(c)` dipakai di semua notifikasi/tampilan
+  supaya nama NULL tampil 'Belum Dinamai' — KECUALI `country_name` di
+  feed wilayah/daftar (NULL dipertahankan = wilayah merdeka, yang dipakai
+  frontend untuk kaca abu-abu/"?" — `CASE WHEN r.country_id IS NULL
+  THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END`). Dicek e2e
+  [40] (perang/aliansi/pendudukan/pemberontakan/mosi nama/mosi
+  perang/rumus damage) + [41] (petisi + vote partai + alokasi kursi +
+  presiden tanpa gate), pg-verify [31] (migrasi 29→30, reset nama dari
+  kolom NOT NULL lama, 6 tabel + 6 kolom baru, DEFAULT kind, UNIQUE
+  aliansi/petisi, idempotensi).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

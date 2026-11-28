@@ -174,7 +174,7 @@ const tPar = Date.now() - t0;
 r = await one('SELECT COUNT(*) AS n FROM regions');
 check('initDb 10× paralel: seed tetap 17 (tidak terduplikasi)', Number(r.n) === 17, `n=${r.n}, ${tPar}ms`);
 const ver = await one("SELECT value FROM db_meta WHERE key = 'schema_version'");
-check('Penanda versi skema tersimpan (= 29)', ver?.value === '29', `value=${ver?.value}`);
+check('Penanda versi skema tersimpan (= 30)', ver?.value === '30', `value=${ver?.value}`);
 const t1 = Date.now();
 await initDb();
 const tFast = Date.now() - t1;
@@ -192,11 +192,11 @@ r = await one('SELECT COUNT(*) AS n FROM regions WHERE country_id IS NULL');
 check('Semua 17 wilayah merdeka (country_id NULL)', Number(r.n) === 17, `n=${r.n}`);
 r = await one("SELECT COUNT(*) AS n FROM regions WHERE country <> ''");
 check("Kolom warisan regions.country kosong di semua wilayah", Number(r.n) === 0, `n=${r.n}`);
-// Tanggal buka parlemen tersimpan di db_meta ≈ 2 Des 2026 00:00 WIB.
+// Tanggal buka parlemen tersimpan di db_meta = 28 Nov 2026 20:00 WIB.
 const po = await one("SELECT value FROM db_meta WHERE key = 'parliament_opens_at'");
 const opensAt = Number(po?.value);
 check('parliament_opens_at tersimpan di db_meta', Number.isFinite(opensAt) && opensAt > 0, `value=${po?.value}`);
-check('parliament_opens_at = 2 Des 2026 00:00 WIB', opensAt === Date.parse('2026-12-02T00:00:00+07:00'), `value=${opensAt}`);
+check('parliament_opens_at = 28 Nov 2026 20:00 WIB', opensAt === Date.parse('2026-11-28T20:00:00+07:00'), `value=${opensAt}`);
 // Tabel baru ada.
 for (const t of ['party_seats', 'country_joins', 'country_join_votes']) {
   r = await one("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name = ?", [t]).catch(() => null);
