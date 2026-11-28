@@ -25,7 +25,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3467;
 const DB_PATH = '/tmp/parlementer-bottom-nav-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.7.2';
+const EXPECTED_VERSION = '5.7.4';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -93,7 +93,7 @@ async function main() {
 
     // (8) Versi dulu (tanpa login).
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.2', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.7.4', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     const jar = makeJar();
     const r = await api(jar, '/api/auth/register', { email: 'domNav@test.local', password: 'rahasia123', username: 'warga_nav' });

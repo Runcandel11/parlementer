@@ -374,6 +374,26 @@ a.btn-gold { display: inline-block; text-decoration: none; }
    jelas di desktop; transisi halus di elemen interaktif. Identitas dan
    warna dasar tidak berubah. Semua animasi dimatikan bila pengguna
    memilih reduced motion. */
+/* ---------- background kontekstual per halaman (v5.7.4) ----------
+   #page-bg: lapisan gambar full-bleed di belakang semua konten aplikasi
+   (diisi per route lewat JS: PAGE_BG di public/js/app.js). Overlay gelap
+   menjaga teks tetap terbaca; panel kaca yang sudah ada (backdrop-filter)
+   memberi efek blur di atasnya. z-index 0 — di bawah HUD (40), drawer
+   (60), bottom-nav (50), modal (80), toast (90). #page position:relative
+   TANPA z-index supaya elemen fixed di dalamnya (modal/popover) tidak
+   terjebak stacking context. Tanpa parallax/animasi berat (ringan di HP). */
+#page-bg { position: fixed; inset: 0; z-index: 0; background-size: cover; background-position: center; background-repeat: no-repeat; pointer-events: none; }
+#page-bg::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,11,20,.86), rgba(7,11,20,.70) 35%, rgba(7,11,20,.84)); }
+#page { position: relative; }
+/* Banner hero tiap halaman: gambar konteks yang sama, tampil jelas di
+   atas (judul + sub di atasnya), sementara #page-bg memberi suasana di
+   belakang seluruh halaman. */
+.page-hero { position: relative; border-radius: var(--radius); overflow: hidden; margin: 4px 0 14px; min-height: 132px; display: flex; align-items: flex-end; background-size: cover; background-position: center; border: 1px solid var(--glass-border); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+.page-hero-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,11,20,.25), rgba(7,11,20,.78) 78%); }
+.page-hero-text { position: relative; padding: 14px 16px 12px; }
+.page-hero-text h2 { margin: 0; text-shadow: 0 2px 10px rgba(0,0,0,.7); }
+.page-hero-text .page-sub { margin: 2px 0 0; color: #d7dee9; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
+@media (prefers-reduced-motion: reduce) { .page-hero { box-shadow: none; } }
 .page > * { animation: pageIn .22s ease; }
 @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } }
 .modal-card { animation: popIn .18s ease; }
