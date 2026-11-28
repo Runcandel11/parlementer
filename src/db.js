@@ -1254,6 +1254,7 @@ export async function initDb() {
     await migrateStage8Columns(t);
     await migrateAutoWorkColumns(t);
     await migrateShareColumns(t);
+    await migrateWageRollback(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1332,7 +1333,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 22;
+const SCHEMA_VERSION = 23;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1954,6 +1955,116 @@ async function migrateShareColumns(t) {
   };
   await addCol('citizens', 'share_code', 'TEXT');
   await t.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_share_code ON citizens(share_code) WHERE share_code IS NOT NULL');
+}
+
+// v5.0.0 (28 Nov 2026) — rollback exploit gaji perusahaan.
+// AKAR MASALAH: POST /api/companies/:id/job (buka lowongan baru) TIDAK
+// ADA batas atas gaji, beda dengan edit upah yang dibatasi 1000 USD —
+// lowongan perusahaan bergaji ~5,46e21 (lalu 5,46e27, 5,46e31 — angka
+// naik tiap jam karena pemilik mengeditnya naik) lolos, meracuni NILAI
+// TERBAIK di halaman Pekerjaan dan mencetak gaji absurd ke pekerja yang
+// shift di sana (gaji dulu dicetak sistem, bukan dipotong pemilik).
+// PERBAIKAN (v5.0.0): tidak ada lagi batas tetap — gaji maksimal = uang
+// (USD) yang sedang dipegang pemilik perusahaan; gaji dipotong dari
+// pemilik saat shift; bila pemilik tak mampu bayar, shift gagal.
+// ROLLBACK (migrasi ini, skema 23 — dihitung dari TABEL LIVE saat migrasi
+// jalan, BUKAN hardcode angka snapshot):
+//   (a) CLAWBACK — warga dengan total_salary > $100.000 = eksploiter.
+//       Batas sah teoretis 2 hari game: ~28 shift/hari × $1000/shift
+//       (cap edit lama) × 2 hari ≈ $56rb — jadi $100rb aman, tidak
+//       menyentuh pemain sah. Data live 28 Nov 11:42–11:47 WIB: hanya 2
+//       warga di atas $1 jt USD (LIO $2,15e28, kenzz $8,25e30 — keduanya
+//       usd == total_salary persis, jadi seluruh USD-nya berasal dari
+//       gaji cetak; emas mereka kecil — LIO 215, kenzz ~0 — jadi emas
+//       TIDAK disentuh). Kelebihan di atas $100rb ditarik dari saldo USD
+//       (clamp ke 0 bila sudah dibelanjakan — sisanya tercatat sebagai
+//       tak-terpulihkan); total_salary dikoreksi ke $100rb.
+//   (b) CLAMP — SETELAH clawback (supaya memakai saldo pemilik yang
+//       sudah dikoreksi): tiap lowongan perusahaan (bukan ADMIN) yang
+//       gajinya melebihi USD pemiliknya saat ini diturunkan ke saldo
+//       pemilik itu (LEAST). Lowongan ADMIN (bahan mentah) dan lowongan
+//       yang gajinya sudah wajar TIDAK disentuh.
+// IDEMPOTEN lewat penanda db_meta 'wage_rollback_2026_11_28' + ringkasan
+// JSON di penanda yang sama (nama warga + jumlah, tanpa email/ID).
+const WAGE_ROLLBACK_KEY = 'wage_rollback_2026_11_28';
+// Total gaji sah maksimal dalam 2 hari game (lihat komentar di atas).
+const WAGE_ROLLBACK_LEGIT_CAP_USD = 100000;
+
+export async function migrateWageRollback(t) {
+  const done = await t.one('SELECT value FROM db_meta WHERE key = ?', [WAGE_ROLLBACK_KEY]);
+  if (done) {
+    console.log('[migrasi wage-rollback] sudah pernah jalan — dilewati.');
+    return { skipped: true };
+  }
+  const now = Date.now();
+  const summary = {
+    jobsChecked: 0, jobsClamped: 0, jobsUnchanged: 0, clamped: [],
+    citizensChecked: 0, citizensClawedBack: 0, citizensUnchanged: 0, clawedBack: [],
+  };
+  // ---- (a) CLAWBACK: tarik kelebihan gaji cetak di atas batas sah. ----
+  // URUTAN PENTING: clawback dulu, clamp kemudian — clamp memakai saldo
+  // pemilik SETELAH koreksi (bila pemiliknya sendiri eksploiter, gajinya
+  // tidak boleh tetap menempel di saldo hasil exploit).
+  const citizens = await t.sql(
+    `SELECT c.id, c.usd, c.total_salary, u.username AS name
+     FROM citizens c LEFT JOIN users u ON u.id = c.user_id
+     ORDER BY c.id`);
+  for (const row of citizens) {
+    summary.citizensChecked++;
+    const totalSalary = Number(row.total_salary) || 0;
+    if (!(totalSalary > WAGE_ROLLBACK_LEGIT_CAP_USD)) { summary.citizensUnchanged++; continue; }
+    const usdBefore = Number(row.usd) || 0;
+    const excess = totalSalary - WAGE_ROLLBACK_LEGIT_CAP_USD;
+    const deducted = Math.min(excess, usdBefore);
+    // Sisa saldo: JANGAN hitung `usdBefore - excess` langsung — untuk
+    // saldo raksasa (≥1e16) float64 menelan selisih $100rb (ULP > 100rb)
+    // sehingga sisa jadi 0, bukan $100rb. Bila seluruh kelebihan berhasil
+    // ditarik (deducted == excess), sisa = (usd − total_gaji) + batas sah:
+    // pengurangan dua angka yang sama persis (= 0) lalu + $100rb — tepat.
+    // Bila saldo sudah lebih kecil dari kelebihan (sudah dibelanjakan),
+    // seluruh sisa ditarik (saldo 0, sisanya tak-terpulihkan).
+    const usdAfter = deducted === excess
+      ? Math.max(0, Math.round(((usdBefore - totalSalary) + WAGE_ROLLBACK_LEGIT_CAP_USD) * 100) / 100)
+      : Math.max(0, Math.round((usdBefore - deducted) * 100) / 100);
+    const unrecovered = Math.max(0, excess - deducted);
+    await t.run('UPDATE citizens SET usd = ?, total_salary = ? WHERE id = ?', [usdAfter, WAGE_ROLLBACK_LEGIT_CAP_USD, row.id]);
+    summary.citizensClawedBack++;
+    const name = row.name || ('warga#' + row.id);
+    summary.clawedBack.push({ citizen: name, totalSalaryBefore: totalSalary, usdBefore, deducted, usdAfter, unrecovered });
+    await t.run(
+      'INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?)',
+      [row.id, 'SISTEM', 'Koreksi Saldo (Bug Gaji)',
+       `Total gajimu ${totalSalary.toLocaleString('id-ID')} USD melebihi batas wajar ${WAGE_ROLLBACK_LEGIT_CAP_USD.toLocaleString('id-ID')} USD untuk 2 hari game — gaji itu berasal dari lowongan bergaji tidak masuk akal (bug: lowongan baru tidak punya batas gaji, dan gaji dulu dicetak sistem). Kelebihan ${deducted.toLocaleString('id-ID')} USD ditarik dari saldomu (saldo sekarang ${usdAfter.toLocaleString('id-ID')} USD)${unrecovered > 0 ? `; ${unrecovered.toLocaleString('id-ID')} USD sudah terlanjur dibelanjakan dan tidak bisa ditarik` : ''}. Total gajimu dikoreksi ke ${WAGE_ROLLBACK_LEGIT_CAP_USD.toLocaleString('id-ID')} USD. Aturan baru (v5.0.0): gaji maksimal = uang yang dipegang pemilik perusahaan, dan gaji dipotong dari pemilik saat shift.`, now]);
+  }
+  // ---- (b) CLAMP: turunkan gaji lowongan absurd ke saldo pemilik. ----
+  const rows = await t.sql(
+    `SELECT j.id AS job_id, j.title, j.salary, co.owner_id, c.usd AS owner_usd, u.username AS owner_name
+     FROM jobs j JOIN companies co ON co.id = j.company_id
+     JOIN citizens c ON c.id = co.owner_id
+     LEFT JOIN users u ON u.id = c.user_id
+     WHERE j.is_admin = 0 AND j.company_id IS NOT NULL
+     ORDER BY j.id`);
+  for (const row of rows) {
+    summary.jobsChecked++;
+    const salary = Number(row.salary) || 0;
+    const balance = Number(row.owner_usd) || 0;
+    if (!(salary > balance)) { summary.jobsUnchanged++; continue; }
+    await t.run('UPDATE jobs SET salary = ? WHERE id = ?', [balance, row.job_id]);
+    summary.jobsClamped++;
+    const ownerName = row.owner_name || ('warga#' + row.owner_id);
+    summary.clamped.push({ job: row.title, owner: ownerName, before: salary, after: balance });
+    await t.run(
+      'INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?)',
+      [row.owner_id, 'SISTEM', 'Upah lowongan dikoreksi (aturan gaji baru)',
+       `Upah lowongan "${row.title}" diturunkan dari ${salary.toLocaleString('id-ID')} USD menjadi ${balance.toLocaleString('id-ID')} USD — aturan baru (v5.0.0): gaji maksimal = uang yang sedang kamu pegang. Naikkan lagi setelah uangmu cukup (edit upah di halaman Industri).`, now]);
+  }
+  const existing = await t.one('SELECT value FROM db_meta WHERE key = ?', [WAGE_ROLLBACK_KEY]);
+  if (existing) await t.run('UPDATE db_meta SET value = ? WHERE key = ?', [JSON.stringify(summary), WAGE_ROLLBACK_KEY]);
+  else await t.run('INSERT INTO db_meta (key, value) VALUES (?, ?)', [WAGE_ROLLBACK_KEY, JSON.stringify(summary)]);
+  console.log(`[migrasi wage-rollback] warga dicek=${summary.citizensChecked} ditarik=${summary.citizensClawedBack} tidak-berubah=${summary.citizensUnchanged} | lowongan dicek=${summary.jobsChecked} diturunkan=${summary.jobsClamped} tidak-berubah=${summary.jobsUnchanged}`);
+  for (const ex of summary.clawedBack.slice(0, 5)) console.log(`[migrasi wage-rollback] contoh tarik: ${ex.citizen}: total_gaji ${ex.totalSalaryBefore} usd ${ex.usdBefore} -> ditarik ${ex.deducted}, sisa ${ex.usdAfter}, tak-terpulihkan ${ex.unrecovered}`);
+  for (const ex of summary.clamped.slice(0, 5)) console.log(`[migrasi wage-rollback] contoh clamp: ${ex.job} (${ex.owner}): ${ex.before} -> ${ex.after}`);
+  return summary;
 }
 
 // Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di

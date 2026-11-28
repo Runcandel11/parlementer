@@ -174,13 +174,13 @@ npm run test:recovery # uji pemulihan (SIGKILL di tengah burst): 13 pemeriksaan
 # test:credit-dom (22), test:ticket-dom (56), test:stage6-dom (27),
 # test:bottom-nav (29), test:ads (20), test:offside (24),
 # test:topbar (31), test:share (28), test:xp-rollback (49).
-# Total seluruh suite: 2139 pemeriksaan (+ 13 uji pemulihan).
+# Total seluruh suite: 2226 pemeriksaan (+ 13 uji pemulihan).
 ```
 
-Hasil terakhir (28 Nov 2026, v4.6.1 hotfix migrasi share_code): **e2e 1046/1046 lolos,
-pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 188/188 lolos (178 lama + 10 regresi baru),
+Hasil terakhir (28 Nov 2026, v5.0.0 rework upah perusahaan + rollback exploit + perbaikan share 42P18): **e2e 1097/1097 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 224/224 lolos (188 lama + 36 regresi baru),
 pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos** — dan semua suite
-DOM lain hijau (22 suite DOM + xp-rollback + ssl = 821/821, diulang penuh untuk v4.6.1). Catatan: e2e pernah sekali
+DOM lain hijau (22 suite DOM + xp-rollback + ssl = 821/821, diulang penuh untuk v5.0.0). Catatan: e2e pernah sekali
 menghitung 907/907 (satu check kondisional yang kadang tereksekusi,
 0 gagal di 7 run berturut-turut) — flake jumlah, bukan kegagalan.
 Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lamar

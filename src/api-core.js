@@ -20,7 +20,7 @@ import {
   DAILY_PRODUCTION, PRODUCTION_INPUT, productionInputText, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS, convoySlotsFor,
   ENERGY_DRINK_NAME, ENERGY_DRINK_PRICE_GOLD, ENERGY_DRINK_ENERGY,
   breadLimitFor, AUTO_WORK_DURATION_MS,
-  COMPANY_WAGE_MAX_USD, SHIFT_MAX_PER_CALL,
+  SHIFT_MAX_PER_CALL,
   PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
   MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, tradeReputation, worldEventFor,
   DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
@@ -167,14 +167,14 @@ export function registerCore(app) {
   // countryId = kas negara yang menerima (penjual untuk pajak lokal,
   // pembeli untuk pajak impor global). NULL = tidak ada negara yang
   // menerima (wilayah merdeka) — pajaknya tidak masuk kas mana pun.
-  async function recordTreasury(t, currency, amount, note, countryId = null) {
+  async function recordTreasury(t, currency, amount, note, countryId = null, kind = 'pajak_pasar') {
     const a = round2(amount);
     if (a <= 0) return;
     if (!countryId) return;
     const col = currency === 'gold' ? 'treasury' : 'treasury_usd';
     await t.run(`UPDATE country SET ${col} = ${col} + ? WHERE id = ?`, [a, countryId]);
     await t.run('INSERT INTO treasury_tx (kind, currency, amount, note, country_id, created_at) VALUES (?,?,?,?,?,?) RETURNING id',
-      ['pajak_pasar', currency, a, note, countryId, Date.now()]);
+      [kind, currency, a, note, countryId, Date.now()]);
   }
   // Pajak penjualan penjual (Tahap 6): bila wilayah penjual SAAT INI
   // dikuasai pemberontak (regions.controller='pemberontak'), pajak TIDAK
@@ -628,10 +628,22 @@ export function registerCore(app) {
   // share_clicks dengan gold_given > 0; emas = klik × 10. Klik dengan
   // gold_given 0 (kuota habis) TERCATAT tapi tidak terhitung.
   async function shareStatsFor(ownerId, day) {
-    const rows = await sql(
-      `SELECT COUNT(*) AS n, COALESCE(SUM(gold_given), 0) AS gold FROM share_clicks
-       WHERE owner_id = ? AND gold_given > 0 AND (? IS NULL OR day = ?)`,
-      [ownerId, day, day]);
+    // DUA query terpisah, bukan `(? IS NULL OR day = ?)` — parameter NULL
+    // yang hanya dipakai di `IS NULL` membuat Postgres gagal menentukan
+    // tipenya (42P18 "could not determine data type of parameter $2"):
+    // di live 28 Nov 2026 GET /api/share 500 persis di sini, padahal
+    // SQLite (tes e2e) tidak peduli tipe parameter sehingga tes lolos.
+    // Pelajaran: JANGAN pernah menulis `? IS NULL` dengan parameter yang
+    // bisa NULL di Postgres — pisah query-nya seperti di bawah.
+    const rows = day == null
+      ? await sql(
+          `SELECT COUNT(*) AS n, COALESCE(SUM(gold_given), 0) AS gold FROM share_clicks
+           WHERE owner_id = ? AND gold_given > 0`,
+          [ownerId])
+      : await sql(
+          `SELECT COUNT(*) AS n, COALESCE(SUM(gold_given), 0) AS gold FROM share_clicks
+           WHERE owner_id = ? AND gold_given > 0 AND day = ?`,
+          [ownerId, day]);
     const total = rows[0] || { n: 0, gold: 0 };
     return { clicks: Number(total.n), gold: Number(total.gold) };
   }
@@ -1318,6 +1330,36 @@ export function registerCore(app) {
     // sekali per 24 jam. Mengembalikan { company, product, qty } bila ada
     // unit yang masuk, { ..., qty: 0, shortage: true } bila tertahan bahan,
     // atau null bila tidak ada bonus (bukan perusahaan / belum genap 1 unit).
+    // Konsumsi bahan baku produksi dari STOK PERUSAHAAN (v5.0.0 — dipakai
+    // bonus shift pemilik DAN upah bagi hasil pekerja): tiap unit produk
+    // menghabiskan perUnit bahan (PRODUCTION_INPUT, satu sumber kebenaran).
+    // Mengembalikan unit yang benar-benar bisa dibuat (dibatasi stok);
+    // 0 bila stok tidak cukup untuk 1 unit. Pabrik Sumber Daya (tanpa
+    // input) selalu mengembalikan unit yang diminta — menambang langsung.
+    // Melempar bila stok berubah di tengah jalan (balapan) — pemanggil
+    // berjalan di dalam tx, jadi semuanya rollback aman.
+    async function consumeProductionInputs(t, co, desiredUnits) {
+      if (desiredUnits <= 0) return 0;
+      const inputs = PRODUCTION_INPUT[co.type] || [];
+      if (!inputs.length) return desiredUnits;
+      let affordable = desiredUnits;
+      const stocks = [];
+      for (const input of inputs) {
+        const inputRow = await t.one('SELECT id FROM commodities WHERE name = ?', [input.commodity]);
+        const stock = inputRow ? await t.one('SELECT * FROM company_stock WHERE company_id = ? AND commodity_id = ?', [co.id, inputRow.id]) : null;
+        stocks.push({ input, stock, have: stock?.qty || 0 });
+        affordable = Math.min(affordable, Math.floor((stock?.qty || 0) / input.perUnit));
+      }
+      if (affordable <= 0) return 0;
+      for (const s of stocks) {
+        const used = affordable * s.input.perUnit;
+        if (used <= 0) continue;
+        if (!s.stock) throw Object.assign(new Error('Stok bahan perusahaan berubah di tengah shift — coba lagi.'), { status: 400 });
+        const took = await t.run('UPDATE company_stock SET qty = qty - ? WHERE id = ? AND qty >= ?', [used, s.stock.id, used]);
+        if (!took.changes) throw Object.assign(new Error('Stok bahan perusahaan berubah di tengah shift — coba lagi.'), { status: 400 });
+      }
+      return affordable;
+    }
     async function grantCompanyShiftBonus(t, job, spent, worker) {
       if (!job.company_id) return null;
       const co = await t.one(forUpdate('SELECT * FROM companies WHERE id = ?'), [job.company_id]);
@@ -1345,22 +1387,21 @@ export function registerCore(app) {
       let shortage = false;
       let shortageNeed = '';
       if (units > 0 && inputs.length) {
-        const stocks = [];
-        for (const input of inputs) {
-          const inputRow = await t.one('SELECT id FROM commodities WHERE name = ?', [input.commodity]);
-          const stock = inputRow ? await t.one('SELECT * FROM company_stock WHERE company_id = ? AND commodity_id = ?', [co.id, inputRow.id]) : null;
-          stocks.push({ input, stock, have: stock?.qty || 0 });
-        }
-        let affordable = units;
-        for (const s of stocks) affordable = Math.min(affordable, Math.floor(s.have / s.input.perUnit));
         shortageNeed = inputs.map((i) => `${i.perUnit}× ${i.commodity}`).join(' + ');
-        if (affordable <= 0) {
+        const made = await consumeProductionInputs(t, co, units);
+        if (made <= 0) {
           units = 0; credit = total; shortage = true;
           const now = Date.now();
           if (!co.bonus_warned_at || now - co.bonus_warned_at > DAY_MS) {
             await t.run('UPDATE companies SET bonus_warned_at = ? WHERE id = ?', [now, co.id]);
+            const stockTxt = [];
+            for (const input of inputs) {
+              const inputRow = await t.one('SELECT id FROM commodities WHERE name = ?', [input.commodity]);
+              const stock = inputRow ? await t.one('SELECT qty FROM company_stock WHERE company_id = ? AND commodity_id = ?', [co.id, inputRow.id]) : null;
+              stockTxt.push(`${stock?.qty || 0}× ${input.commodity}`);
+            }
             await notify(co.owner_id, 'EKONOMI', 'Bonus shift tertunda',
-              `${co.name} tidak mendapat bonus shift: stok bahan habis (butuh ${shortageNeed} per unit ${product}; stok sekarang ${stocks.map((s) => `${s.have}× ${s.input.commodity}`).join(', ')}). Isi stok dari halaman Industri → PERUSAHAANKU → ISI BAHAN.`, t);
+              `${co.name} tidak mendapat bonus shift: stok bahan habis (butuh ${shortageNeed} per unit ${product}; stok sekarang ${stockTxt.join(', ')}). Isi stok dari halaman Industri → PERUSAHAANKU → ISI BAHAN.`, t);
             // Beri tahu semua karyawan perusahaan ini (sekali per 24 jam,
             // bersamaan dengan peringatan pemilik) — pekerja yang menekan
             // tombol kerja melihat kenapa bonus perusahaan tertunda.
@@ -1368,15 +1409,8 @@ export function registerCore(app) {
               SELECT c.id, 'EKONOMI', 'Perusahaan kehabisan bahan', ?, ? FROM citizens c JOIN jobs j ON j.id = c.job_id WHERE j.company_id = ?`,
               [`${co.name} kehabisan bahan (butuh ${shortageNeed} per unit ${product}). Produksi & bonus shift berhenti sampai pemilik mengisi stok bahan.`, now, co.id]);
           }
-        } else {
-          if (affordable < units) { units = affordable; credit = total - units * 10; }
-          for (const s of stocks) {
-            const used = units * s.input.perUnit;
-            if (used <= 0) continue;
-            if (!s.stock) { units = 0; credit = total; shortage = true; break; }
-            const took = await t.run('UPDATE company_stock SET qty = qty - ? WHERE id = ? AND qty >= ?', [used, s.stock.id, used]);
-            if (!took.changes) { units = 0; credit = total; shortage = true; break; }
-          }
+        } else if (made < units) {
+          units = made; credit = total - units * 10;
         }
       }
       await t.run('UPDATE companies SET bonus_credit = ?, bonus_given = bonus_given + ? WHERE id = ?', [credit, units, co.id]);
@@ -1412,20 +1446,43 @@ export function registerCore(app) {
       return { ok: true, gross: usdValue, net: 0, tax: 0, goods: `${spent.qty}× ${job.resource}`, goodsQty: spent.qty, goodsName: job.resource, note: note + xpNoteSuffix(xp), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100), companyShortage: false };
     }
     if (job.salary_type === 'share') {
-      // Bagi hasil: 80–98% dibayar dalam bentuk barang (sumber daya perusahaan).
+      // Bagi hasil (v5.0.0): 80–98% nilai gaji dibayar dalam bentuk barang
+      // (produk perusahaan). DULU barangnya dicetak dari ketiadaan; kini
+      // DUA jangkar nyata: (1) unit dibatasi + menghabiskan STOK BAHAN
+      // perusahaan (seperti bonus shift — produksi butuh input); (2) nilai
+      // unit (× harga acuan) DIPOTONG dari USD pemilik — bila pemilik tidak
+      // mampu bayar, shift GAGAL (tidak ada barang yang dicetak). Pemilik
+      // yang bekerja di perusahaannya sendiri tidak dipotong (net nol),
+      // tapi barangnya tetap diproduksi dari stok.
       const pct = 80 + Math.min(18, Math.floor(job.share_pct || 90) - 80);
       const company = job.company_id ? await one('SELECT * FROM companies WHERE id = ?', [job.company_id]) : null;
+      if (!company) throw Object.assign(new Error('Perusahaan tempatmu bekerja sudah tidak ada.'), { status: 400 });
       const resource = company?.resource || 'Gandum Mentah';
       const com = await one('SELECT * FROM commodities WHERE name = ?', [resource]);
+      if (!com) throw Object.assign(new Error('Produk perusahaan ini tidak dikenal.'), { status: 500 });
       const spent = await tx(async (t) => {
         const s = await spendEnergy(t);
         const gross = shiftSalary(job.salary, s.eco, s.fatigue, taxRate).gross * s.fraction;
-        const units = Math.max(0, Math.floor((gross * pct / 100) / com.ref_usd));
+        const desired = Math.max(0, Math.floor((gross * pct / 100) / com.ref_usd));
+        const co = await t.one(forUpdate('SELECT * FROM companies WHERE id = ?'), [company.id]);
+        const inputs = PRODUCTION_INPUT[co.type] || [];
+        const units = await consumeProductionInputs(t, co, desired);
+        if (desired > 0 && units <= 0 && inputs.length) {
+          throw Object.assign(new Error(`${co.name} kehabisan bahan (butuh ${inputs.map((i) => `${i.perUnit}× ${i.commodity}`).join(' + ')} per unit ${resource}). Pemilik harus mengisi stok bahan dulu.`), { status: 400 });
+        }
+        const cost = Math.round(units * com.ref_usd * 100) / 100;
+        if (cost > 0 && co.owner_id !== c.id) {
+          const pay = await t.run('UPDATE citizens SET usd = usd - ? WHERE id = ? AND usd >= ?', [cost, co.owner_id, cost]);
+          if (!pay.changes) {
+            const ownerUsd = (await t.one('SELECT usd FROM citizens WHERE id = ?', [co.owner_id]))?.usd ?? 0;
+            throw Object.assign(new Error(`Pemilik ${co.name} tidak mampu membayar bagi hasilmu (${fmtRp(cost)}; uang pemilik sekarang ${fmtRp(ownerUsd)}). Shift dibatalkan — barang tidak dicetak.`), { status: 400 });
+          }
+        }
         if (units > 0) await addItem(c.id, com.id, 1, units, t);
         const bonus = await grantCompanyShiftBonus(t, job, s, c);
-        return { ...s, gross, units, bonus };
+        return { ...s, gross, units, cost, bonus, ownJob: co.owner_id === c.id };
       });
-      goodsNote = `${shiftPrefix(spent)}Dibayar ${spent.units}× ${resource} (bagi hasil ${pct}%).${bonusNote(spent.bonus)}`;
+      goodsNote = `${shiftPrefix(spent)}Dibayar ${spent.units}× ${resource} (bagi hasil ${pct}%).${spent.ownJob ? ' Kerja di perusahaan sendiri — nilai barang tidak dipotong.' : ' Nilai barang dibayar dari uang pemilik perusahaan.'}${bonusNote(spent.bonus)}`;
       const xp = await rewardShift(spent);
       return { ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, goodsQty: spent.units, goodsName: resource, note: goodsNote + xpNoteSuffix(xp), companyBonus: spent.bonus || null, companyShortage: !!(spent.bonus && spent.bonus.shortage), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
     }
@@ -1433,13 +1490,39 @@ export function registerCore(app) {
       const s = await spendEnergy(t);
       const { gross, net } = shiftSalary(job.salary, s.eco, s.fatigue, taxRate);
       const scaledGross = Math.round(gross * s.fraction * 100) / 100;
-      const scaledNet = Math.round(net * s.fraction * 100) / 100;
-      await t.run('UPDATE citizens SET usd = usd + ?, total_salary = total_salary + ? WHERE id = ?', [scaledNet, scaledNet, c.id]);
+      let scaledNet = Math.round(net * s.fraction * 100) / 100;
+      let scaledTax = Math.round(scaledGross * taxRate * 100) / 100;
+      // Gaji perusahaan (v5.0.0, perintah pemilik 28 Nov 2026): DIBAYAR
+      // PEMILIK, bukan dicetak sistem. Potong GROSS dari USD pemilik
+      // (atomik: hanya bila saldo cukup); pekerja terima NET; pajak
+      // penghasilan masuk kas negara pekerja (bila bernegara — tanpa
+      // negara pajaknya 0% seperti semula). Lowongan 'fixed' SELALU milik
+      // perusahaan (lihat pembuatan lowongan) — bila company_id hilang,
+      // gagal keras daripada diam-diam mencetak gaji.
+      if (!job.company_id) throw Object.assign(new Error('Lowongan tetap ini tidak punya perusahaan — hubungi admin.'), { status: 500 });
+      const co = await t.one(forUpdate('SELECT * FROM companies WHERE id = ?'), [job.company_id]);
+      if (!co) throw Object.assign(new Error('Perusahaan tempatmu bekerja sudah tidak ada.'), { status: 400 });
+      let ownJob = false;
+      if (co.owner_id === c.id) {
+        // Pemilik bekerja di perusahaannya sendiri: tidak ada transfer
+        // (net nol) — tapi bonus material + XP tetap jalan.
+        ownJob = true;
+        scaledNet = 0;
+        scaledTax = 0;
+      } else {
+        const pay = await t.run('UPDATE citizens SET usd = usd - ? WHERE id = ? AND usd >= ?', [scaledGross, co.owner_id, scaledGross]);
+        if (!pay.changes) {
+          const ownerUsd = (await t.one('SELECT usd FROM citizens WHERE id = ?', [co.owner_id]))?.usd ?? 0;
+          throw Object.assign(new Error(`Pemilik ${co.name} tidak mampu membayar gajimu (${fmtRp(scaledGross)}; uang pemilik sekarang ${fmtRp(ownerUsd)}). Shift dibatalkan — gaji tidak dicetak.`), { status: 400 });
+        }
+        if (scaledTax > 0) await recordTreasury(t, 'usd', scaledTax, `Pajak penghasilan shift ${c.username} (${co.name})`, myCountry?.id, 'pajak_gaji');
+        await t.run('UPDATE citizens SET usd = usd + ?, total_salary = total_salary + ? WHERE id = ?', [scaledNet, scaledNet, c.id]);
+      }
       const bonus = await grantCompanyShiftBonus(t, job, s, c);
-      return { ...s, gross: scaledGross, net: scaledNet, tax: Math.round(scaledGross * taxRate * 100) / 100, bonus };
+      return { ...s, gross: scaledGross, net: scaledNet, tax: scaledTax, bonus, ownJob };
     });
     const xp = await rewardShift(spent);
-    const baseNote = `${spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%).`}${bonusNote(spent.bonus)}`.trim();
+    const baseNote = `${spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%).`}${spent.ownJob ? ' Kerja di perusahaan sendiri — gaji tidak ditransfer.' : ` Gaji dibayar dari uang pemilik perusahaan (${fmtRp(spent.net)}).`}${bonusNote(spent.bonus)}`.trim();
     return { ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, goods: '', goodsQty: 0, goodsName: '', note: (baseNote + xpNoteSuffix(xp)).trim(), companyBonus: spent.bonus || null, companyShortage: !!(spent.bonus && spent.bonus.shortage), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
   }
 
@@ -1613,11 +1696,13 @@ export function registerCore(app) {
     res.json({ ok: true, stock: stock.map((s) => ({ commodity: s.commodity, qty: Number(s.qty) })) });
   }));
 
-  // Edit upah lowongan perusahaan (v4.6.0, saran LIO): HANYA pemilik
-  // perusahaan pemilik lowongan. Lowongan ADMIN (is_admin=1) bukan milik
-  // warga — tidak bisa diubah. Yang bisa diubah: salary (gaji per shift,
-  // dalam USD seperti penyimpanan server; klien menampilkan Rupiah).
-  // Validasi: 1–1000 USD per shift (Rp18.300–Rp18.300.000).
+  // Edit upah lowongan perusahaan (v4.6.0, saran LIO; rework v5.0.0):
+  // HANYA pemilik perusahaan pemilik lowongan. Lowongan ADMIN (is_admin=1)
+  // bukan milik warga — tidak bisa diubah. Yang bisa diubah: salary (gaji
+  // per shift, dalam USD seperti penyimpanan server; klien menampilkan
+  // Rupiah). ATURAN BARU (perintah pemilik 28 Nov 2026 11:35 WIB): TIDAK
+  // ADA batas tetap (cap 1000 USD DIHAPUS) — gaji maksimal = uang (USD)
+  // yang SEDANG dipegang pemilik; lebih dari itu → 400.
   app.patch('/api/jobs/:id', authRequired, citizenRequired, r(async (req, res) => {
     const job = await one('SELECT * FROM jobs WHERE id = ?', [req.params.id]);
     if (!job) return res.status(404).json({ error: 'Lowongan tidak ditemukan.' });
@@ -1626,8 +1711,13 @@ export function registerCore(app) {
     const co = await one('SELECT * FROM companies WHERE id = ?', [job.company_id]);
     if (!co || co.owner_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya pemilik perusahaan yang bisa mengubah upah ini.' });
     const salary = Number((req.body || {}).salary);
-    if (!Number.isFinite(salary) || salary <= 0 || salary > COMPANY_WAGE_MAX_USD) {
-      return res.status(400).json({ error: `Upah harus 1–${COMPANY_WAGE_MAX_USD} USD per shift.` });
+    if (!Number.isFinite(salary) || salary <= 0) {
+      return res.status(400).json({ error: 'Upah harus angka lebih dari 0.' });
+    }
+    const owner = await one('SELECT usd FROM citizens WHERE id = ?', [co.owner_id]);
+    const balance = owner?.usd ?? 0;
+    if (salary > balance) {
+      return res.status(400).json({ error: `Upah maksimal ${fmtRp(balance)} — sesuai uang yang sedang kamu pegang.` });
     }
     await run('UPDATE jobs SET salary = ? WHERE id = ?', [salary, job.id]);
     const updated = await one('SELECT * FROM jobs WHERE id = ?', [job.id]);
@@ -1639,10 +1729,19 @@ export function registerCore(app) {
     if (!co) return res.status(404).json({ error: 'Perusahaan tidak ditemukan.' });
     if (co.owner_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya pemilik yang bisa membuka lowongan.' });
     const { title, salary, salary_type, seats } = req.body || {};
-    if (!title || !salary || salary <= 0) return res.status(400).json({ error: 'Judul dan gaji wajib diisi.' });
+    const salaryUsd = Number(salary);
+    if (!title || !Number.isFinite(salaryUsd) || salaryUsd <= 0) return res.status(400).json({ error: 'Judul dan gaji wajib diisi (gaji harus angka lebih dari 0).' });
+    // ATURAN BARU (v5.0.0): gaji maksimal = uang yang SEDANG dipegang
+    // pemilik (tanpa batas tetap — dulu endpoint ini TIDAK ADA batas atas,
+    // sehingga lowongan bergaji ~5,46e21 lolos dan meracuni NILAI TERBAIK).
+    const owner = await one('SELECT usd FROM citizens WHERE id = ?', [co.owner_id]);
+    const balance = owner?.usd ?? 0;
+    if (salaryUsd > balance) {
+      return res.status(400).json({ error: `Gaji maksimal ${fmtRp(balance)} — sesuai uang yang sedang kamu pegang.` });
+    }
     const j = await run(`INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, level_min, tier, seats, seats_taken, region_id, description, created_at)
       VALUES (?,0,?,?,?,1,1,?,0,?,?,?) RETURNING id`,
-      [co.id, title.slice(0, 80), Number(salary), salary_type === 'share' ? 'share' : 'fixed', Math.max(1, Math.min(20, Number(seats) || 1)), co.region_id, '', Date.now()]);
+      [co.id, title.slice(0, 80), salaryUsd, salary_type === 'share' ? 'share' : 'fixed', Math.max(1, Math.min(20, Number(seats) || 1)), co.region_id, '', Date.now()]);
     res.json({ ok: true, jobId: j.id });
   }));
 

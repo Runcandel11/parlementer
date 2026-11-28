@@ -88,7 +88,7 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
 | UU yang tersedia | `LAW_KINDS` (`game.js`) | usul UU, `lawEffectText`, tick |
 | Harga pasar acuan | `COMMODITIES` + `checkPriceBand` (`game.js`) | pasar lokal/global, chart |
 | Hadiah klik share link | `SHARE_GOLD_PER_CLICK` = 10, `SHARE_MAX_GOLD_PER_DAY` = 200, `SHARE_MAX_CLICKS_PER_DAY` = 20 (`game.js`) | klik `/s/:code`, GET `/api/share`, GET `/api/admin/share`, tes |
-| Upah perusahaan maks | `COMPANY_WAGE_MAX_USD` = 1000 (`game.js`) | PATCH `/api/jobs/:id`, UI edit upah |
+| Upah perusahaan maks | TIDAK ADA batas tetap (v5.0.0) — gaji maksimal = USD yang sedang dipegang pemilik perusahaan; gaji dipotong dari pemilik saat shift; bila pemilik tak mampu bayar, shift gagal (`performShift`, `api-core.js`) | POST `/api/companies/:id/job`, PATCH `/api/jobs/:id`, POST `/api/jobs/shift`, UI edit upah + panel CARA KERJA |
 | Shift maks per tekan | `SHIFT_MAX_PER_CALL` = 10 (`game.js`) | POST `/api/jobs/shift` (multi-shift) |
 | Pesan error HEIC | `HEIC_ERROR_MESSAGE` (`util.js`) + `IMAGE_ERROR_HEIC` (`app.js`) — jaga selaras | endpoint foto profil/perusahaan, klien `isHeicFile` |
 
@@ -111,15 +111,33 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
 
 ## 5. Skema database
 
-- `SCHEMA_VERSION` saat ini **22** (`src/db.js`). Migrasi berurutan
+- `SCHEMA_VERSION` saat ini **23** (`src/db.js`). Migrasi berurutan
   (`migrateStageNColumns`) — jangan pernah menulis ulang `CREATE TABLE`
   tanpa jalur migrasi; data live harus ikut naik versi.
-- **Pelajaran insiden 28 Nov 2026 (v4.6.0 crash-loop, server down 11:11–11:2x WIB):**
+- **Pelajaran insiden 28 Nov 2026 (v4.6.0 crash-loop, server down 11:11–11:27 WIB):**
   indeks yang merujuk kolom hasil migrasi JANGAN dibuat di `schema()` —
   `schema()` jalan SEBELUM migrasi, jadi di DB lama indeksnya gagal
   (Postgres 42703) dan `initDb` crash sebelum server nyala. Buat indeks
   seperti itu di fungsi migrasi, SETELAH `ADD COLUMN` (pola
   `migrateShareColumns` v4.6.1).
+- **Pelajaran insiden 28 Nov 2026 (share 500 di live, v4.6.1):** JANGAN
+  pernah menulis `? IS NULL OR kolom = ?` dengan parameter yang bisa NULL
+  di Postgres — Postgres 18 tidak bisa menentukan tipe `$2` (error 42P18)
+  dan query gagal di SETIAP request; SQLite (tes e2e) dinamis sehingga
+  tes lokal lolos. Pakai dua cabang query (dengan/tanpa filter) atau cast
+  eksplisit. Regresi: `test/pg-verify.mjs` section [24] (GET /api/share di
+  Postgres sungguhan, termasuk statistik total/day NULL).
+- **Upah perusahaan v5.0.0 (28 Nov 2026):** TIDAK ADA batas tetap gaji —
+  gaji maksimal = USD yang sedang dipegang pemilik perusahaan; gaji
+  dipotong dari pemilik saat shift (fixed: gross; bagi hasil: nilai barang
+  × harga acuan, unit dibatasi stok bahan); bila pemilik tak mampu bayar,
+  shift gagal dan tx rollback (tidak ada pencetakan). Pemilik yang bekerja
+  di perusahaannya sendiri tidak digaji (net nol) tapi tetap dapat bonus
+  material. Rollback exploit (skema 23, `migrateWageRollback`, penanda
+  `wage_rollback_2026_11_28`): warga dengan total_salary > $100.000
+  (batas sah 2 hari ≈ $56rb) ditarik kelebihannya dari USD (sisa $100rb;
+  clamp 0 bila sudah dibelanjakan); lowongan perusahaan di-clamp ke saldo
+  pemilik SETELAH clawback; ADMIN tidak disentuh; emas tidak disentuh.
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

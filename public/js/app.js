@@ -2539,7 +2539,7 @@ ROUTES.companies = async () => {
   <div class="panel"><h3>📖 CARA KERJA PERUSAHAAN</h3>
     <p class="small">• <b>Produksi harian:</b> setiap perusahaan menghasilkan produk setiap hari (otomatis saat pergantian hari) dan langsung masuk inventaris pemilik.</p>
     <p class="small">• <b>Karyawan:</b> setiap shift karyawan menambah produk ke inventaris pemilik — sekitar 1/10 produksi harian per shift penuh. Produk kecil langsung masuk; produk besar seperti Drone terakumulasi beberapa shift.</p>
-    <p class="small">• <b>Gaji:</b> gaji karyawan dibayar oleh sistem, <b>bukan</b> dipotong dari pemilik — mendirikan perusahaan tidak membuatmu keluar uang tiap giliran.</p>
+    <p class="small">• <b>Gaji:</b> gaji karyawan <b>DIPOTONG dari uangmu</b> (Rupiah) tiap shift — bukan dicetak sistem. Gaji maksimal = uang yang sedang kamu pegang; bila uangmu tidak cukup, shift karyawan gagal dan mereka tidak digaji. Gantinya, tiap shift karyawan menambah produk ke inventarismu (bonus shift di atas). Pemilik yang bekerja di perusahaannya sendiri tidak digaji (net nol).</p>
     <p class="small">• <b>Bahan baku:</b> semua perusahaan (kecuali Pabrik Sumber Daya) butuh bahan baku dari <b>STOK perusahaan</b> — pemilik mengisi stok dulu lewat ISI BAHAN di kartu perusahaannya (bahan pindah dari inventaris ke stok). Pabrik: 2× Besi Mentah per Bahan Bangunan; Industri Ringan: 1× Gandum Mentah per Makanan; Industri Berat: 1× Besi Mentah + 1× Minyak Mentah per Drone. Produksi maupun bonus shift berhenti bila stok habis (pemilik &amp; pekerja diberi tahu).</p>
     <p class="small">• <b>Milikmu:</b> pemilik bisa mengubah nama, tentang, dan bahan yang diproduksi, serta memasang foto perusahaan.</p>
   </div>
@@ -2569,12 +2569,13 @@ ROUTES.companies = async () => {
       <p class="muted small">📦 Stok bahan: ${c.stock?.length ? c.stock.map((s) => `${fmt(s.qty)}× ${esc(s.commodity)}`).join(', ') : 'KOSONG — isi dulu supaya produksi &amp; bonus shift jalan.'}</p>
       ${c.inputs?.length ? `<div class="row"><select id="stock-commodity-${c.id}">${c.inputs.map((i) => `<option>${esc(i)}</option>`).join('')}</select><input placeholder="Jumlah" type="number" min="1" value="10" id="stock-qty-${c.id}" style="max-width:100px"><button class="btn-gold btn-sm" data-stockco="${c.id}">📦 ISI BAHAN</button></div>
       <p class="muted small">Bahan diambil dari inventarismu ke stok perusahaan.</p>` : ''}
-      ${c.jobs?.length ? `<div style="margin-top:8px"><p class="muted small">💼 Lowonganmu (edit upah):</p>${c.jobs.map((j) => `
+      ${c.jobs?.length ? `<div style="margin-top:8px"><p class="muted small">💼 Lowonganmu (edit upah — maks ${fmtRp(ME.citizen?.usd || 0)}, sesuai uangmu sekarang):</p>${c.jobs.map((j) => `
         <div class="row"><span class="small" style="flex:1">${esc(j.title)} · ${fmt(j.workers || 0)} pekerja · sekarang ${fmtRp(j.salary)}</span>
         <input placeholder="Upah baru (Rp)" type="number" min="1" id="wage-${j.id}" style="max-width:130px">
         <button class="btn-gold btn-sm" data-wagejob="${j.id}">SIMPAN UPAH</button></div>`).join('')}</div>` : ''}
       <div class="row"><input placeholder="Judul lowongan baru" id="job-title-${c.id}"><input placeholder="Gaji (Rp)" type="number" id="job-salary-${c.id}" style="max-width:120px">
       <button class="btn-gold btn-sm" data-newjob="${c.id}">BUKA LOWONGAN</button></div>
+      <p class="muted small">Gaji maksimal ${fmtRp(ME.citizen?.usd || 0)} — sesuai uang yang sedang kamu pegang.</p>
       <div class="row" style="margin-top:8px"><button class="btn-gold btn-sm" data-editco="${c.id}">✏️ EDIT</button>
       <button class="btn-gold btn-sm" data-photoco="${c.id}">📷 PASANG FOTO</button>
       <input type="file" accept="image/*" id="co-photo-${c.id}" hidden></div>

@@ -2980,7 +2980,12 @@ async function main() {
   check('M6 beli global: kas negara +5 emas pajak impor', dbS6.prepare('SELECT treasury FROM country WHERE id = ?').get(nusOId).treasury === treasGoldBefore + 5, `treasury=${dbS6.prepare('SELECT treasury FROM country WHERE id = ?').get(nusOId).treasury}`);
   dbS6.prepare('UPDATE country SET tax_import = 2 WHERE id = ?').run(nusOId);
   // --- (b) Pajak shift ikut event Pasar Bergairah (−1 poin), seperti pajak pasar.
-  const job7 = dbS6.prepare("INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, resource, pay_qty, level_min, tier, seats, seats_taken, region_id, description, created_at) VALUES (NULL,0,'Pekerja Uji Shift',48,'fixed','',0,1,1,10,0,?, 'uji Tahap 7', ?)").run(safeRegionO, Date.now());
+  // v5.0.0: lowongan tetap HARUS milik perusahaan (gaji dibayar pemilik) —
+  // fixture ini dulu company_id NULL (gaji dicetak); kini ditempel ke
+  // Dapur Enam (milik M3) dan saldo M3 dipastikan cukup untuk 2 shift.
+  const dapur7Id = dbS6.prepare("SELECT id FROM companies WHERE name = 'Dapur Enam'").get().id;
+  dbS6.prepare('UPDATE citizens SET usd = 10000 WHERE id = (SELECT owner_id FROM companies WHERE id = ?)').run(dapur7Id);
+  const job7 = dbS6.prepare("INSERT INTO jobs (company_id, is_admin, title, salary, salary_type, resource, pay_qty, level_min, tier, seats, seats_taken, region_id, description, created_at) VALUES (?,0,'Pekerja Uji Shift',48,'fixed','',0,1,1,10,0,?, 'uji Tahap 7', ?)").run(dapur7Id, safeRegionO, Date.now());
   const job7Id = Number(job7.lastInsertRowid);
   dbS6.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(safeRegionO, freeRegionO, m2Id);
   r = await M2.post('/api/jobs/apply', { job_id: job7Id });
@@ -3483,7 +3488,7 @@ async function main() {
   r = await S3.patch(`/api/jobs/${job33Id}`, { salary: 0 });
   check('Upah 0 → 400', r.status === 400, `status=${r.status}`);
   r = await S3.patch(`/api/jobs/${job33Id}`, { salary: 1001 });
-  check('Upah 1001 (>1000) → 400', r.status === 400, `status=${r.status}`);
+  check('Upah 1001 (> saldo pemilik 500) → 400', r.status === 400, `status=${r.status}`);
   r = await S3.patch(`/api/jobs/${adminS2.id}`, { salary: 500 });
   check('Upah lowongan ADMIN → 403', r.status === 403, `status=${r.status}`);
 
@@ -3538,6 +3543,180 @@ async function main() {
   r = await S1.post('/api/profile/avatar', { avatar: tinyJpeg33 });
   check('Avatar JPEG mungil tetap diterima (hanya HEIC yang ditolak)', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
   dbS33.close();
+
+  console.log('\n[34] v5.0.0 — rework upah perusahaan: gaji dari pemilik + bagi-hasil dari uang pemilik + ADMIN tak tersentuh');
+  const G1 = new Client(); const G2 = new Client(); const G3 = new Client(); const G4 = new Client();
+  G1.extraHeaders = { 'X-Forwarded-For': '127.0.0.61' };
+  G2.extraHeaders = { 'X-Forwarded-For': '127.0.0.62' };
+  G3.extraHeaders = { 'X-Forwarded-For': '127.0.0.63' };
+  G4.extraHeaders = { 'X-Forwarded-For': '127.0.0.64' };
+  r = await G1.post('/api/auth/register', { email: 'wage_t1@test.local', password: 'rahasia123', username: 'wage_t1' });
+  check('G1 (pemilik perusahaan) terdaftar', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await G2.post('/api/auth/register', { email: 'wage_t2@test.local', password: 'rahasia123', username: 'wage_t2' });
+  check('G2 (pekerja tetap) terdaftar', r.status === 200 && r.data.ok);
+  r = await G3.post('/api/auth/register', { email: 'wage_t3@test.local', password: 'rahasia123', username: 'wage_t3' });
+  check('G3 (pekerja bagi hasil) terdaftar', r.status === 200 && r.data.ok);
+  r = await G4.post('/api/auth/register', { email: 'wage_t4@test.local', password: 'rahasia123', username: 'wage_t4' });
+  check('G4 (pekerja ADMIN) terdaftar', r.status === 200 && r.data.ok);
+  const dbS34 = new DatabaseSync(DB_PATH);
+  const meG1 = (await G1.get('/api/me')).data;
+  // G1: Level 10 + 1000 emas + 10000 USD, pindah ke wilayah merdeka, dirikan
+  // negara (supaya pajak gaji pekerja bisa dicek masuk kas negara).
+  const free34 = dbS34.prepare('SELECT id FROM regions WHERE country_id IS NULL ORDER BY id LIMIT 1').get();
+  dbS34.prepare('UPDATE citizens SET level = 10, gold = 1000, usd = 10000, region_id = ?, home_region_id = ? WHERE id = ?').run(free34.id, free34.id, meG1.citizen.id);
+  r = await G1.post('/api/countries', { name: 'Negara 34', ideology: 'Konservatisme', system: 'presidensial' });
+  check('G1 mendirikan negara (untuk tes pajak gaji)', r.status === 200 && !!r.data.countryId, `status=${r.status} ${r.data.error || ''}`);
+  const capital34 = free34.id;
+  r = await G1.post('/api/companies', { type: 'resource', name: 'Tambang 34', resource: 'Besi Mentah' });
+  check('G1 mendirikan Tambang (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
+  const tambang34Id = r.data.companyId;
+
+  // --- (a) Buat lowongan: gaji > saldo pemilik ditolak (bukan cap tetap).
+  r = await G1.post(`/api/companies/${tambang34Id}/job`, { title: 'Operator Mahal', salary: 15000, salary_type: 'fixed', seats: 4 });
+  check('Buka lowongan gaji 15000 (> saldo 10000) → 400', r.status === 400 && /maksimal/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  r = await G1.post(`/api/companies/${tambang34Id}/job`, { title: 'Operator 34', salary: 100, salary_type: 'fixed', seats: 4 });
+  check('Buka lowongan gaji 100 (≤ saldo) → 200', r.status === 200 && !!r.data.jobId, `status=${r.status} ${r.data.error || ''}`);
+  const jobFixed34 = r.data.jobId;
+  r = await G1.post(`/api/companies/${tambang34Id}/job`, { title: 'Bagi Hasil 34', salary: 100, salary_type: 'share', seats: 4 });
+  check('Buka lowongan bagi hasil gaji 100 → 200', r.status === 200 && !!r.data.jobId, `status=${r.status} ${r.data.error || ''}`);
+  const jobShare34 = r.data.jobId;
+  r = await G1.post(`/api/companies/${tambang34Id}/job`, { title: 'Bagi Hasil Mahal', salary: 15000, salary_type: 'share', seats: 4 });
+  check('Buka lowongan bagi hasil 15000 (> saldo) → 400', r.status === 400, `status=${r.status}`);
+
+  // --- (b) Edit upah: > saldo ditolak; di atas cap lama (1000) tapi ≤ saldo DIIZINKAN.
+  r = await G1.patch(`/api/jobs/${jobFixed34}`, { salary: 15000 });
+  check('Edit upah 15000 (> saldo) → 400', r.status === 400, `status=${r.status}`);
+  dbS34.prepare('UPDATE citizens SET usd = 20000 WHERE id = ?').run(meG1.citizen.id);
+  r = await G1.patch(`/api/jobs/${jobFixed34}`, { salary: 1500 });
+  check('Edit upah 1500 (> cap lama 1000, ≤ saldo 20000) → 200: cap tetap HILANG', r.status === 200 && Number(r.data.job?.salary) === 1500, `status=${r.status} ${JSON.stringify(r.data.job)}`);
+  r = await G1.patch(`/api/jobs/${jobFixed34}`, { salary: 100 });
+  check('Edit upah kembali 100 (untuk tes shift)', r.status === 200 && Number(r.data.job?.salary) === 100, `status=${r.status}`);
+  dbS34.prepare('UPDATE citizens SET usd = 10000 WHERE id = ?').run(meG1.citizen.id);
+
+  // Tarif pajak dari event dunia saat ini (hari 1 = Panen Raya → 2%;
+  // bila minggu booming, −1 poin) — dihitung, bukan di-hardcode.
+  const world34 = (await G1.get('/api/world')).data;
+  const taxRate34 = 0.02 - (world34.event?.key === 'booming' ? 0.01 : 0);
+  const expTax34 = Math.round(100 * taxRate34 * 100) / 100;
+  const expNet34 = Math.round((100 - expTax34) * 100) / 100;
+
+  // --- (c) Shift fixed: gaji dipotong pemilik (gross), pekerja terima net,
+  // pajak ke kas negara, pemilik dapat bonus material (+2 Besi).
+  const meG2 = (await G2.get('/api/me')).data;
+  dbS34.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(capital34, capital34, meG2.citizen.id);
+  r = await G2.post('/api/jobs/apply', { job_id: jobFixed34 });
+  check('G2 melamar lowongan tetap Tambang 34', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const t1UsdB = (await G1.get('/api/me')).data.citizen.usd;
+  const t2UsdB = (await G2.get('/api/me')).data.citizen.usd;
+  const treasB = (await G1.get('/api/country')).data.country.treasury_usd;
+  r = await G2.post('/api/jobs/shift');
+  check('G2 shift penuh di perusahaan: 200', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  check('Shift fixed: gross 100 = net + pajak', r.data.gross === 100 && Math.abs(r.data.net + r.data.tax - 100) < 0.01 && Math.abs(r.data.tax - expTax34) < 0.01, `gross=${r.data.gross} net=${r.data.net} tax=${r.data.tax} (ekspektasi pajak ${expTax34})`);
+  const t1UsdA = (await G1.get('/api/me')).data.citizen.usd;
+  const t2UsdA = (await G2.get('/api/me')).data.citizen.usd;
+  const treasA = (await G1.get('/api/country')).data.country.treasury_usd;
+  check('Pemilik dipotong GROSS 100 (bukan cetak)', Math.abs(t1UsdA - (t1UsdB - 100)) < 0.01, `pemilik ${t1UsdB} -> ${t1UsdA}`);
+  check('Pekerja terima NET (bukan gross)', Math.abs(t2UsdA - (t2UsdB + expNet34)) < 0.01, `pekerja ${t2UsdB} -> ${t2UsdA} (net ${expNet34})`);
+  check('Pajak masuk kas negara pekerja', Math.abs(treasA - (treasB + expTax34)) < 0.01, `kas ${treasB} -> ${treasA}`);
+  check('Pemilik dapat bonus material +2 Besi Mentah', r.data.companyBonus?.qty === 2 && r.data.companyBonus?.product === 'Besi Mentah', JSON.stringify(r.data.companyBonus));
+  check('Catatan shift: gaji dibayar dari uang pemilik', /dibayar dari uang pemilik/.test(r.data.note || ''), r.data.note);
+  const besiId34 = dbS34.prepare("SELECT id FROM commodities WHERE name = 'Besi Mentah'").get().id;
+  const besiT1a = dbS34.prepare('SELECT COALESCE(SUM(qty),0) AS q FROM inventory WHERE citizen_id = ? AND commodity_id = ?').get(meG1.citizen.id, besiId34).q;
+  check('Bonus material benar-benar di inventaris PEMILIK', Number(besiT1a) >= 2, `qty=${besiT1a}`);
+
+  // --- (d) Pemilik tidak mampu bayar: shift gagal rapi, tidak ada yang berubah.
+  dbS34.prepare('UPDATE citizens SET usd = 50, energy = 100 WHERE id = ?').run(meG1.citizen.id);
+  dbS34.prepare('UPDATE citizens SET energy = 100 WHERE id = ?').run(meG2.citizen.id);
+  const t2UsdBeforeFail = (await G2.get('/api/me')).data.citizen.usd;
+  r = await G2.post('/api/jobs/shift');
+  check('Pemilik saldo 50 < gaji 100: shift → 400 "tidak mampu membayar"', r.status === 400 && /tidak mampu membayar/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  const t2AfterFail = (await G2.get('/api/me')).data.citizen;
+  const t1AfterFail = (await G1.get('/api/me')).data.citizen;
+  check('Shift gagal: USD pekerja + energi pekerja + USD pemilik TIDAK berubah', Math.abs(t2AfterFail.usd - t2UsdBeforeFail) < 0.01 && t2AfterFail.energy === 100 && Math.abs(t1AfterFail.usd - 50) < 0.01, `pekerja usd=${t2AfterFail.usd} energi=${t2AfterFail.energy} pemilik usd=${t1AfterFail.usd}`);
+  dbS34.prepare('UPDATE citizens SET usd = 10000 WHERE id = ?').run(meG1.citizen.id);
+
+  // --- (e) Pemilik bekerja di perusahaannya sendiri: net nol, bonus tetap jalan.
+  r = await G1.post('/api/jobs/apply', { job_id: jobFixed34 });
+  check('G1 (pemilik) melamar lowongan sendiri', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const t1UsdB2 = (await G1.get('/api/me')).data.citizen.usd;
+  r = await G1.post('/api/jobs/shift');
+  check('Pemilik shift di perusahaan sendiri: 200, net 0, pajak 0', r.status === 200 && r.data.net === 0 && r.data.tax === 0, `status=${r.status} net=${r.data.net} tax=${r.data.tax} ${r.data.error || ''}`);
+  const t1UsdA2 = (await G1.get('/api/me')).data.citizen.usd;
+  check('Pemilik kerja sendiri: USD TIDAK berubah (tidak ada transfer)', Math.abs(t1UsdA2 - t1UsdB2) < 0.01, `pemilik ${t1UsdB2} -> ${t1UsdA2}`);
+  check('Pemilik kerja sendiri: bonus material +2 Besi tetap jalan', r.data.companyBonus?.qty === 2 && r.data.companyBonus?.product === 'Besi Mentah', JSON.stringify(r.data.companyBonus));
+  check('Catatan shift pemilik: "perusahaan sendiri"', /perusahaan sendiri/.test(r.data.note || ''), r.data.note);
+
+  // --- (f) Shift bagi hasil: pekerja dapat barang, pemilik membayar nilainya.
+  const meG3 = (await G3.get('/api/me')).data;
+  dbS34.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(capital34, capital34, meG3.citizen.id);
+  r = await G3.post('/api/jobs/apply', { job_id: jobShare34 });
+  check('G3 melamar lowongan bagi hasil Tambang 34', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const besiRef34 = dbS34.prepare("SELECT ref_usd FROM commodities WHERE name = 'Besi Mentah'").get().ref_usd;
+  const expShareUnits = Math.floor(100 * 0.9 / besiRef34);
+  const expShareCost = Math.round(expShareUnits * besiRef34 * 100) / 100;
+  const t1UsdB3 = (await G1.get('/api/me')).data.citizen.usd;
+  const t3UsdB = (await G3.get('/api/me')).data.citizen.usd;
+  r = await G3.post('/api/jobs/shift');
+  check('G3 shift bagi hasil: 200', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  check('Bagi hasil: pekerja dapat barang (90% × gaji / harga acuan)', r.data.goodsQty === expShareUnits && r.data.goodsName === 'Besi Mentah', `goods=${r.data.goodsQty}×${r.data.goodsName} (ekspektasi ${expShareUnits})`);
+  const t1UsdA3 = (await G1.get('/api/me')).data.citizen.usd;
+  const t3UsdA = (await G3.get('/api/me')).data.citizen.usd;
+  check('Bagi hasil: pemilik membayar nilai barang (bukan cetak)', Math.abs(t1UsdA3 - (t1UsdB3 - expShareCost)) < 0.01, `pemilik ${t1UsdB3} -> ${t1UsdA3} (biaya ${expShareCost})`);
+  check('Bagi hasil: USD pekerja TIDAK berubah', Math.abs(t3UsdA - t3UsdB) < 0.01, `pekerja ${t3UsdB} -> ${t3UsdA}`);
+  const besiT3 = dbS34.prepare('SELECT COALESCE(SUM(qty),0) AS q FROM inventory WHERE citizen_id = ? AND commodity_id = ?').get(meG3.citizen.id, besiId34).q;
+  check('Bagi hasil: barang benar-benar di inventaris PEKERJA', Number(besiT3) === expShareUnits, `qty=${besiT3}`);
+  check('Bagi hasil: pemilik juga dapat bonus +2 Besi', r.data.companyBonus?.qty === 2 && r.data.companyBonus?.product === 'Besi Mentah', JSON.stringify(r.data.companyBonus));
+
+  // --- (f2) Bagi hasil saat pemilik tidak mampu bayar nilai barangnya.
+  dbS34.prepare('UPDATE citizens SET usd = 1 WHERE id = ?').run(meG1.citizen.id);
+  dbS34.prepare('UPDATE citizens SET energy = 100 WHERE id = ?').run(meG3.citizen.id);
+  r = await G3.post('/api/jobs/shift');
+  check('Bagi hasil, pemilik saldo 1: shift → 400 "tidak mampu membayar"', r.status === 400 && /tidak mampu membayar/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  const t3AfterFail2 = (await G3.get('/api/me')).data.citizen;
+  check('Bagi hasil gagal: energi pekerja tetap 100, tidak ada barang', t3AfterFail2.energy === 100, `energi=${t3AfterFail2.energy}`);
+  dbS34.prepare('UPDATE citizens SET usd = 10000 WHERE id = ?').run(meG1.citizen.id);
+
+  // --- (f3) Bagi hasil Pabrik: tanpa stok bahan → gagal; dengan stok 12 Besi
+  // → 5× Bahan Bangunan (90/17,85) dari 10 Besi + bonus 1× dari 2 Besi sisa.
+  r = await G1.post('/api/companies', { type: 'factory', name: 'Pabrik 34', resource: 'Bahan Bangunan' });
+  check('G1 mendirikan Pabrik (100 emas)', r.status === 200 && !!r.data.companyId, `status=${r.status} ${r.data.error || ''}`);
+  const pabrik34Id = r.data.companyId;
+  r = await G1.post(`/api/companies/${pabrik34Id}/job`, { title: 'Bagi Hasil Pabrik 34', salary: 100, salary_type: 'share', seats: 4 });
+  check('Buka lowongan bagi hasil Pabrik', r.status === 200 && !!r.data.jobId, `status=${r.status} ${r.data.error || ''}`);
+  const jobShareFab34 = r.data.jobId;
+  r = await G3.post('/api/jobs/apply', { job_id: jobShareFab34 });
+  check('G3 pindah ke lowongan bagi hasil Pabrik', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  r = await G3.post('/api/jobs/shift');
+  check('Bagi hasil Pabrik tanpa stok: shift → 400 "kehabisan bahan"', r.status === 400 && /kehabisan bahan/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  dbS34.prepare('INSERT INTO inventory (citizen_id, commodity_id, tier, qty) VALUES (?,?,1,?) ON CONFLICT (citizen_id, commodity_id, tier) DO UPDATE SET qty = qty + ?').run(meG1.citizen.id, besiId34, 10, 10);
+  r = await G1.post(`/api/companies/${pabrik34Id}/stock`, { commodity: 'Besi Mentah', qty: 12 });
+  check('Pemilik isi stok Pabrik: 12 Besi', r.status === 200 && r.data.stock?.[0]?.qty === 12, `status=${r.status} ${r.data.error || ''}`);
+  const bbRef34 = dbS34.prepare("SELECT ref_usd FROM commodities WHERE name = 'Bahan Bangunan'").get().ref_usd;
+  const expFabUnits = Math.min(Math.floor(100 * 0.9 / bbRef34), Math.floor(12 / 2));
+  const expFabCost = Math.round(expFabUnits * bbRef34 * 100) / 100;
+  const t1UsdB4 = (await G1.get('/api/me')).data.citizen.usd;
+  r = await G3.post('/api/jobs/shift');
+  check('Bagi hasil Pabrik dengan stok: 200', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  check('Bagi hasil Pabrik: unit dibatasi stok (5, bukan 40+)', r.data.goodsQty === expFabUnits && r.data.goodsName === 'Bahan Bangunan', `goods=${r.data.goodsQty}×${r.data.goodsName} (ekspektasi ${expFabUnits})`);
+  const t1UsdA4 = (await G1.get('/api/me')).data.citizen.usd;
+  check('Bagi hasil Pabrik: pemilik membayar nilai barang', Math.abs(t1UsdA4 - (t1UsdB4 - expFabCost)) < 0.01, `pemilik ${t1UsdB4} -> ${t1UsdA4} (biaya ${expFabCost})`);
+  check('Bagi hasil Pabrik: bonus 1× Bahan Bangunan dari sisa stok', r.data.companyBonus?.qty === 1 && r.data.companyBonus?.product === 'Bahan Bangunan', JSON.stringify(r.data.companyBonus));
+  const fabStock = (await G1.get('/api/companies')).data.companies.find((x) => x.id === pabrik34Id);
+  check('Stok Pabrik habis setelah shift (10 dipakai barang + 2 dipakai bonus)', ((fabStock?.stock || []).find((s) => s.commodity === 'Besi Mentah')?.qty || 0) === 0, JSON.stringify(fabStock?.stock));
+
+  // --- (g) Lowongan ADMIN tidak terpengaruh aturan upah perusahaan.
+  const meG4 = (await G4.get('/api/me')).data;
+  const jobsT4 = (await G4.get('/api/jobs')).data;
+  const adminT4 = jobsT4.jobs.find((j) => j.is_admin);
+  dbS34.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(adminT4.region_id, meG4.citizen.id);
+  r = await G4.post('/api/jobs/apply', { job_id: adminT4.id });
+  check('G4 melamar lowongan ADMIN', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  const t4UsdB = (await G4.get('/api/me')).data.citizen.usd;
+  r = await G4.post('/api/jobs/shift');
+  check('Shift ADMIN tetap dibayar BAHAN MENTAH (bukan USD pemilik)', r.status === 200 && (r.data.goodsQty || 0) > 0, `status=${r.status} goods=${r.data.goodsQty} ${r.data.error || ''}`);
+  const t4UsdA = (await G4.get('/api/me')).data.citizen.usd;
+  check('Shift ADMIN: USD pekerja TIDAK berubah', Math.abs(t4UsdA - t4UsdB) < 0.01, `pekerja ${t4UsdB} -> ${t4UsdA}`);
+  dbS34.close();
 
   setDayO(1);
 

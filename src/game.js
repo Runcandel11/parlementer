@@ -87,7 +87,15 @@
 // idx_share_code pindah dari schema() ke migrateShareColumns — di schema()
 // ia menggagalkan initDb di database lama (Postgres 42703) sehingga server
 // crash-loop setelah deploy v4.6.0.
-export const VERSION = '4.6.1';
+// Update BESAR v5.0.0 = rework ekonomi upah perusahaan (perintah pemilik
+// 28 Nov 2026 11:35 WIB): TIDAK ADA batas tetap gaji — gaji maksimal =
+// uang (USD) yang sedang dipegang pemilik perusahaan; gaji karyawan
+// DIPOTONG dari uang pemilik (bukan dicetak sistem); gantinya pemilik
+// dapat material dari tiap shift karyawan (bonus shift); lowongan bergaji
+// absurd hasil exploit di-rollback (migrasi clamp). Plus perbaikan bug
+// share link: shareStatsFor tidak lagi memakai `? IS NULL` (Postgres
+// 42P18 — hanya gagal di live, lolos di SQLite).
+export const VERSION = '5.0.0';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
@@ -535,15 +543,19 @@ export const AUTO_WORK_MIN_ENERGY = 100;
 export const AUTO_WORK_FATIGUE_PAUSE = 10000;
 export const AUTO_WORK_INTERVAL_MS = Number(process.env.AUTO_WORK_INTERVAL_MS || 5 * 60 * 1000);
 
-// --- Stok bahan perusahaan + upah (v4.6.0, saran LIO) ---
+// --- Stok bahan perusahaan + upah (v4.6.0, saran LIO; rework v5.0.0) ---
 // Produksi perusahaan TIDAK LAGI mengambil bahan diam-diam dari inventaris
 // pemilik: pemilik mengisi STOK perusahaan dulu (POST /api/companies/:id/
 // stock); produksi harian (tick) + bonus shift mengambil dari stok itu.
 // Bila stok habis, produksi berhenti + pemilik & pekerja diberi tahu.
-// Upah perusahaan bisa diubah pemilik (PATCH /api/jobs/:id): 1–1000 USD
-// per shift (Rp18.300–Rp18.300.000); lowongan ADMIN bukan milik warga jadi
-// tidak bisa diubah.
-export const COMPANY_WAGE_MAX_USD = 1000;
+// UPAH PERUSAHAAN (v5.0.0, perintah pemilik 28 Nov 2026 11:35 WIB):
+// TIDAK ADA batas tetap gaji (cap 1000 USD v4.6.0 DIHAPUS) — gaji maksimal
+// = uang (USD) yang SEDANG dipegang pemilik perusahaan saat lowongan
+// dibuat/diubah; gaji karyawan DIPOTONG dari uang pemilik saat shift
+// (bukan dicetak sistem); bila pemilik tidak mampu bayar, shift GAGAL
+// (tidak ada gaji yang dicetak); gantinya pemilik dapat material dari
+// tiap shift karyawan (bonus shift, dari stok bahan). Lowongan ADMIN
+// (dibayar bahan mentah) TIDAK tersentuh aturan ini.
 // Kerja satu giliran (v4.6.0, saran LIO): satu tekan POST /api/jobs/shift
 // menjalankan shift berturut-turut sampai energi habis (bukan 100 dulu
 // lalu 40). Batas iterasi = pengaman (cap energi tertinggi realistis

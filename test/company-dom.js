@@ -145,7 +145,7 @@ async function main() {
     check('Penjelasan: panel CARA KERJA PERUSAHAAN tampil', pageTxt.includes('CARA KERJA PERUSAHAAN'));
     check('Penjelasan: sebut produksi harian', pageTxt.includes('Produksi harian'));
     check('Penjelasan: sebut bonus shift ~1/10 produksi harian', pageTxt.includes('1/10 produksi harian'));
-    check('Penjelasan: gaji dibayar sistem, bukan dipotong pemilik', pageTxt.includes('bukan') && pageTxt.includes('dipotong dari pemilik'));
+    check('Penjelasan: gaji DIPOTONG dari uang pemilik, bukan dicetak sistem', pageTxt.includes('DIPOTONG dari uangmu') && pageTxt.includes('bukan dicetak sistem'));
     check('Penjelasan: Pabrik butuh 2× Besi Mentah', pageTxt.includes('2× Besi Mentah'));
     check('Pemilik: tombol EDIT ada di perusahaannya', !!document.querySelector('[data-editco]'));
     check('Pemilik: tombol PASANG FOTO ada di perusahaannya', !!document.querySelector('[data-photoco]'));
