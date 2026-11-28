@@ -1,16 +1,21 @@
 // Parlementer — tes DOM landing page + UI kaca (jsdom + server sungguhan).
 // Membuktikan:
-//   (1) LANDING: pengunjung belum login melihat hero (badge, headline,
-//       tombol emas AMBIL KEWARGANEGARAAN + MASUK, 3 badge bawah) — tanpa
-//       klaim "beta"; CTA membuka form yang benar; tombol kembali ke beranda;
+//   (1) LANDING: pengunjung belum login melihat hero (badge OPEN BETA,
+//       headline, tombol emas AMBIL KEWARGANEGARAAN + MASUK, 3 badge bawah);
+//       CTA membuka form yang benar; tombol kembali ke beranda;
 //   (2) Daftar dari form landing berfungsi; pemain login langsung ke
 //       dashboard (landing tidak menghadang);
 //   (3) ?ref= tetap membuka tab DAFTAR dengan kode terisi;
 //   (4) PETA LANGSUNG: wilayah tanpa negara = kaca abu-abu (kelas free) +
 //       tanda "?" (17 ubin, semua belum bernegara di DB segar);
 //   (5) UI KACA: CSS memakai backdrop-filter; ikon atas diperkecil (32px);
-//   (6) VERSI: footer landing + drawer menampilkan "Parlementer v5.0.1"
+//   (6) VERSI: footer landing + drawer menampilkan "Parlementer v5.1.0"
 //       dari konstanta VERSION (API /api/world + /api/me).
+//   (7) v5.1.0 — ROMBAK LANDING ala Parlementum: meta OG + Twitter Card
+//       (judul baru), og-image.jpg 1200×630 dari gambar pemilik, favicon +
+//       logo P MERAH, angka dunia live cocok dengan /api/world (bukan
+//       hardcode), front damai yang jujur bila tak ada perang, kabar
+//       langsung + tiga pilar + penutup + footer Discord.
 // Jalankan: node test/landing-glass-dom.js
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -22,7 +27,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3462;
 const DB_PATH = '/tmp/parlementer-landing-glass-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '5.0.1';
+const EXPECTED_VERSION = '5.1.0';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -92,11 +97,35 @@ async function main() {
     const html = await (await fetch(BASE + '/')).text();
     check('landing: hero ada di HTML (id landing-hero)', html.includes('id="landing-hero"'));
     check('landing: tombol emas AMBIL KEWARGANEGARAAN ada', html.includes('AMBIL KEWARGANEGARAAN'));
-    check('landing: headline DUNIA INI DIBENTUK ULANG OLEH PARA PEMAINNYA', html.includes('DUNIA INI') && html.includes('PARA PEMAINNYA'));
+    check('landing: headline DUNIA YANG BERJALAN OLEH PARA PEMAIN', html.includes('DUNIA YANG') && html.includes('BERJALAN OLEH') && html.includes('PARA PEMAIN'));
     check('landing: 3 badge bawah ada', html.includes('GRATIS DIMAINKAN') && html.includes('DIMAINKAN DI BROWSER') && html.includes('SEMUA BISA DIDAPAT DENGAN BERMAIN'));
-    check('landing: badge 100% PEMAIN ASLI (tanpa klaim beta)', html.includes('100% PEMAIN ASLI') && !html.toUpperCase().includes('BETA'));
+    check('landing: label OPEN BETA tampil (status game saat ini)', html.includes('OPEN BETA'));
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.0.1 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 5.1.0 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
+
+    // --- v5.1.0: kartu preview link (OG) + favicon/logo ---
+    check('OG: og:title judul baru (Dunia yang Berjalan oleh Para Pemain)', html.includes('og:title" content="Parlementer — Dunia yang Berjalan oleh Para Pemain'));
+    check('OG: og:description tagline Bahasa Indonesia', html.includes('og:description" content="Bekerja, berdagang, memilih, memerintah, hingga berperang'));
+    check('OG: og:image + og:url + og:type website', html.includes('og:image" content="https://parlementer.my.id/og-image.jpg') && html.includes('og:url" content="https://parlementer.my.id/') && html.includes('og:type" content="website'));
+    check('OG: twitter:card summary_large_image + twitter:image', html.includes('twitter:card" content="summary_large_image') && html.includes('twitter:image" content="https://parlementer.my.id/og-image.jpg'));
+    check('logo: favicon + apple-touch-icon terpasang', html.includes('rel="icon"') && html.includes('href="/favicon.png"') && html.includes('rel="apple-touch-icon"') && html.includes('href="/logo-192.png"'));
+    const ogRes = await fetch(BASE + '/og-image.jpg');
+    check('OG: /og-image.jpg tersaji 200 (image/jpeg)', ogRes.status === 200 && (ogRes.headers.get('content-type') || '').includes('image/jpeg'), `status=${ogRes.status}`);
+    const ogBuf = Buffer.from(await ogRes.arrayBuffer());
+    check('OG: /og-image.jpg ukuran 1200×630 (gambar pemilik)', ogBuf.length > 50000 && ogBuf.readUInt16BE(0) === 0xffd8, `bytes=${ogBuf.length}`);
+    for (const [path, label] of [['/favicon.png', 'favicon.png'], ['/logo-192.png', 'logo-192.png'], ['/logo-512.png', 'logo-512.png']]) {
+      const r = await fetch(BASE + path);
+      check(`logo: ${label} tersaji 200 (image/png)`, r.status === 200 && (r.headers.get('content-type') || '').includes('image/png'), `status=${r.status}`);
+    }
+
+    // --- v5.1.0: seksi landing baru ada di HTML statis ---
+    check('landing: seksi angka dunia ada (id ls-population s.d. ls-tx)', html.includes('id="ls-population"') && html.includes('id="ls-countries"') && html.includes('id="ls-regions-owned"') && html.includes('id="ls-fronts"') && html.includes('id="ls-tx"'));
+    check('landing: kartu front live ada (BERKAS GARIS DEPAN)', html.includes('BERKAS GARIS DEPAN') && html.includes('id="landing-front-body"') && html.includes('id="landing-front-peace"'));
+    check('landing: siaran langsung ada (DUNIA, SAAT ITU JUGA + KABAR LANGSUNG)', html.includes('DUNIA, SAAT ITU JUGA') && html.includes('KABAR LANGSUNG') && html.includes('id="landing-feed-list"'));
+    check('landing: tiga pilar ada (BUKAN SIMULATOR + NEGARA MILIK + EKONOMINYA)', html.includes('BUKAN') && html.includes('SIMULATOR') && html.includes('PEMERINTAHANNYA') && html.includes('NEGARA MILIK PARA PEMAIN') && html.includes('EKONOMINYA ANTARPEMAIN') && html.includes('PERANGNYA ANTARPEMAIN'));
+    check('landing: penutup ada (PIMPIN NEGARAMU + UCAPKAN SUMPAH)', html.includes('PIMPIN') && html.includes('KEHILANGAN') && html.includes('UCAPKAN SUMPAH — GRATIS'));
+    check('landing: footer ada (nama + deskripsi + Discord)', html.includes('landing-footer') && html.includes('discord.gg/JX7DWX3pF'));
+    check('landing: /api/world membawa angka live (regionsOwned/front/tx/feed)', typeof world.regionsOwned === 'number' && typeof world.activeFronts === 'number' && typeof world.tx24h === 'number' && Array.isArray(world.feed) && 'front' in world, `owned=${world.regionsOwned} fronts=${world.activeFronts} tx=${world.tx24h} feed=${world.feed?.length}`);
 
     // --- Kredit pembuat + SEO JSON-LD (28 Nov 2026) ---
     const ldMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
@@ -119,20 +148,36 @@ async function main() {
     check('tamu: #auth-view tampil, #app tersembunyi', !document.querySelector('#auth-view').hidden && document.querySelector('#app').hidden === true);
     check('tamu: hero landing tampil', !document.querySelector('#landing-hero').hidden);
     check('tamu: kartu login/daftar tersembunyi di awal', document.querySelector('#auth-card-wrap').hidden === true);
-    check('tamu: footer landing menampilkan Parlemen v5.0.1', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
+    check('tamu: footer landing menampilkan Parlemen v5.1.0', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
     const landingCredits = document.querySelector('#landing-credits')?.textContent || '';
     check('tamu: footer landing menampilkan kredit pembuat (Khalid + Angelica)', landingCredits.includes('Khalid Talal Muhammad Zain Al-Ghunaim') && landingCredits.includes('Angelica'), landingCredits);
     check('tamu: kredit landing menyebut Khalid CEO & Pengembang', landingCredits.includes('CEO & Pengembang'), landingCredits);
     check('tamu: kredit landing menyebut Angelica Asisten Developer', landingCredits.includes('Asisten Developer'), landingCredits);
+
+    // --- v5.1.0: angka + kabar dunia LIVE di-render dari /api/world ---
+    const fmtId = (n) => Number(n || 0).toLocaleString('id-ID');
+    check('tamu: angka WARGA landing cocok dengan /api/world', (document.querySelector('#ls-population')?.textContent || '') === fmtId(world.population), document.querySelector('#ls-population')?.textContent);
+    check('tamu: angka NEGARA landing cocok dengan /api/world', (document.querySelector('#ls-countries')?.textContent || '') === fmtId(world.countries), document.querySelector('#ls-countries')?.textContent);
+    check('tamu: WILAYAH DIKUASAI landing cocok (dimiliki/total dari API)', (document.querySelector('#ls-regions-owned')?.textContent || '') === fmtId(world.regionsOwned) && (document.querySelector('#ls-regions-total')?.textContent || '') === fmtId(world.regions), `${document.querySelector('#ls-regions-owned')?.textContent}/${document.querySelector('#ls-regions-total')?.textContent}`);
+    check('tamu: FRONT AKTIF + TRANSAKSI 24 JAM landing cocok dengan API', (document.querySelector('#ls-fronts')?.textContent || '') === fmtId(world.activeFronts) && (document.querySelector('#ls-tx')?.textContent || '') === fmtId(world.tx24h), `${document.querySelector('#ls-fronts')?.textContent} / ${document.querySelector('#ls-tx')?.textContent}`);
+    check('tamu: DB segar tanpa perang — kartu front menampilkan keadaan damai yang jujur', document.querySelector('#landing-front-body').hidden === true && document.querySelector('#landing-front-peace').hidden === false && (document.querySelector('#lf-peace-note')?.textContent || '').includes('Belum ada perang'));
+    check('tamu: DB segar tanpa kabar — feed kosong menampilkan keadaan kosong yang jujur', document.querySelector('#landing-feed-list').children.length === 0 && document.querySelector('#landing-feed-empty').hidden === false);
+    check('tamu: jam KABAR LANGSUNG tampil format UTC', /^\d{2}:\d{2} UTC$/.test(document.querySelector('#landing-feed-clock')?.textContent || ''), document.querySelector('#landing-feed-clock')?.textContent);
+    check('tamu: logo P MERAH tampil di hero landing', (document.querySelector('.landing-logo')?.getAttribute('src') || '').includes('/logo-512.png'));
+    check('tamu: logo P MERAH tampil di footer landing', (document.querySelector('.landing-footer-logo')?.getAttribute('src') || '').includes('/logo-192.png'));
+    check('tamu: logo P MERAH tampil di layar loading + kartu login', (document.querySelector('img.loading-logo')?.getAttribute('src') || '').includes('/logo-192.png') && (document.querySelector('img.auth-logo')?.getAttribute('src') || '').includes('/logo-192.png'));
+    check('tamu: footer landing menampilkan versi + kredit pembuat', (document.querySelector('#landing-footer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION) && (document.querySelector('.landing-footer-credits')?.textContent || '').includes('Khalid Talal Muhammad Zain Al-Ghunaim'));
 
     // CTA daftar → form DAFTAR; kembali → hero; CTA masuk → form MASUK.
     document.querySelector('#landing-register').click();
     await sleep(200);
     check('CTA daftar: kartu tampil + form DAFTAR tampil, form MASUK tersembunyi', !document.querySelector('#auth-card-wrap').hidden && !document.querySelector('#form-register').hidden && document.querySelector('#form-login').hidden === true);
     check('CTA daftar: hero tersembunyi saat form tampil', document.querySelector('#landing-hero').hidden === true);
+    check('CTA daftar: seluruh halaman landing tersembunyi saat form tampil', document.querySelector('#landing-page').hidden === true);
     document.querySelector('#auth-back').click();
     await sleep(200);
     check('tombol kembali: hero tampil lagi, kartu tersembunyi', !document.querySelector('#landing-hero').hidden && document.querySelector('#auth-card-wrap').hidden === true);
+    check('tombol kembali: halaman landing tampil lagi', document.querySelector('#landing-page').hidden === false);
     document.querySelector('#landing-login').click();
     await sleep(200);
     check('CTA masuk: form MASUK tampil, form DAFTAR tersembunyi', !document.querySelector('#form-login').hidden && document.querySelector('#form-register').hidden === true);
@@ -147,7 +192,7 @@ async function main() {
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await sleep(2500);
     check('daftar dari landing: aplikasi tampil (#app), landing tidak menghadang', document.querySelector('#app').hidden === false && document.querySelector('#auth-view').hidden === true);
-    check('login: footer drawer menampilkan Parlemen v5.0.1', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
+    check('login: footer drawer menampilkan Parlemen v5.1.0', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
     const drawerCredits = document.querySelector('#drawer-credits')?.textContent || '';
     check('login: footer drawer menampilkan kredit pembuat (Khalid + Angelica)', drawerCredits.includes('Khalid Talal Muhammad Zain Al-Ghunaim') && drawerCredits.includes('Angelica'), drawerCredits);
     check('login: kredit drawer menyebut Khalid CEO & Pengembang', drawerCredits.includes('CEO & Pengembang'), drawerCredits);

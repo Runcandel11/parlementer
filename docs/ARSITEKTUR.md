@@ -163,6 +163,23 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   article_id yang tidak ketemu → 400 "Artikel tidak ditemukan." (dulu
   diam-diam jadi null — pesan tanpa pratinjau); validasi artikel dicek
   SEBELUM cooldown supaya error yang benar yang tampil.
+- **Landing + OG + logo v5.1.0 (28 Nov 2026, perintah pemilik):** kartu
+  preview link memakai gambar pemilik (og-image.jpg 1200×630, tanpa
+  generate ulang) + meta OG/Twitter Card; landing dirombak ala Parlementum
+  (hero, angka dunia live, kartu front live, siaran langsung, tiga pilar,
+  penutup, footer + Discord) dengan label OPEN BETA; logo P MERAH sebagai
+  favicon + logo landing/header + layar loading + kartu login.
+  ATURAN KERAS — angka dan peristiwa landing HANYA dari data nyata:
+  `/api/world` diperluas dengan field nyata dari DB (`regionsOwned`,
+  `activeFronts`, `warsTotal`, `tx24h`, `front` = perang aktif paling
+  sengit dengan skor + endsAt, `feed` = maks 6 peristiwa nyata terbaru
+  dari perang/pemilu/transaksi/artikel, `lastTrade`); bila tidak ada
+  front/kabar, tampilkan keadaan damai/kosong yang jujur — JANGAN karang
+  angka atau peristiwa. Warna front: merah = penyerang, emas = bertahan.
+  Pelajaran: `renderLandingWorld(w)` HARUS membaca seluruh field dari
+  parameter `w` yang sama yang di-render ke DOM — field yang diambil
+  dari `/api/world` lain (mis. front di-render dari `w.front` tapi
+  persentase dari field lain) mudah tertinggal saat API berubah.
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

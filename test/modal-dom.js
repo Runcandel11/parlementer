@@ -776,7 +776,7 @@ async function main() {
     // Open Graph + Twitter Card di halaman utama + gambar preview disajikan.
     const html2 = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
     check('index.html: meta Open Graph + Twitter Card ada (og:title/description/image/url, twitter:card)',
-      html2.includes('og:title" content="Parlementer — Bangun Negaramu') && html2.includes('og:image" content="https://parlementer.my.id/og-image.jpg') && html2.includes('og:url" content="https://parlementer.my.id/') && html2.includes('twitter:card" content="summary_large_image') && html2.includes('twitter:image" content="https://parlementer.my.id/og-image.jpg'));
+      html2.includes('og:title" content="Parlementer — Dunia yang Berjalan oleh Para Pemain') && html2.includes('og:description" content="Bekerja, berdagang, memilih, memerintah, hingga berperang') && html2.includes('og:image" content="https://parlementer.my.id/og-image.jpg') && html2.includes('og:url" content="https://parlementer.my.id/') && html2.includes('twitter:card" content="summary_large_image') && html2.includes('twitter:image" content="https://parlementer.my.id/og-image.jpg'));
     const ogRes = await fetch(BASE + '/og-image.jpg');
     check('gambar preview OG disajikan (GET /og-image.jpg 200, image/jpeg)',
       ogRes.status === 200 && (ogRes.headers.get('content-type') || '').includes('image/jpeg'), `status=${ogRes.status} type=${ogRes.headers.get('content-type')}`);

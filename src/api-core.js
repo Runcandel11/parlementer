@@ -2569,9 +2569,39 @@ export function registerCore(app) {
     const regions = await one('SELECT COUNT(*) AS n FROM regions');
     const countries = await one('SELECT COUNT(*) AS n FROM country');
     const day = world?.day || 1;
+    // v5.1.0 (rombak landing ala Parlementum): angka + kabar dunia LIVE
+    // untuk landing — SEMUA dihitung dari DB, tanpa angka karangan.
+    const regionsOwned = await one('SELECT COUNT(*) AS n FROM regions WHERE country_id IS NOT NULL');
+    const activeFronts = await one("SELECT COUNT(*) AS n FROM wars WHERE status = 'active'");
+    const warsTotal = await one('SELECT COUNT(*) AS n FROM wars');
+    const tx24h = await one('SELECT COUNT(*) AS n FROM market_tx WHERE created_at > ?', [now - 24 * 60 * 60 * 1000]);
+    // Front paling sengit: perang aktif dengan skor gabungan tertinggi
+    // (seri → yang terbaru). Semua perang lahir dari pemberontakan
+    // (POST /api/regions/rebel), jadi tipenya selalu PEMBERONTAKAN.
+    const frontRow = await one(`SELECT w.name, w.attacker_label, w.defender_label, w.score_a, w.score_d, w.ends_at, w.created_at, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active' ORDER BY (w.score_a + w.score_d) DESC, w.created_at DESC LIMIT 1`);
+    const front = frontRow ? { type: 'PEMBERONTAKAN', name: frontRow.name, region: frontRow.region_name, attacker: frontRow.attacker_label, defender: frontRow.defender_label, scoreA: frontRow.score_a, scoreD: frontRow.score_d, endsAt: frontRow.ends_at } : null;
+    // Kabar langsung: peristiwa nyata terbaru dari perang, pemilu,
+    // transaksi pasar, dan artikel pers (maks 6, terbaru dulu).
+    const feed = [];
+    const warRows = await sql(`SELECT w.attacker_label, w.defender_label, r.name AS region_name, w.created_at FROM wars w JOIN regions r ON r.id = w.region_id ORDER BY w.created_at DESC LIMIT 2`);
+    for (const x of warRows) feed.push({ icon: '⚔️', text: `Perang di ${x.region_name} — ${x.attacker_label} melawan ${x.defender_label}`, at: x.created_at });
+    const elRows = await sql(`SELECT e.type, e.status, c.name AS country_name, e.created_at FROM elections e LEFT JOIN country c ON c.id = e.country_id WHERE e.country_id IS NOT NULL ORDER BY e.created_at DESC LIMIT 2`);
+    for (const x of elRows) {
+      const typeLabel = x.type === 'president' ? 'Presiden' : x.type === 'parliament' ? 'Parlemen' : x.type;
+      const st = x.status === 'open' ? 'sedang berlangsung' : x.status === 'closed' ? 'selesai' : 'dijadwalkan';
+      feed.push({ icon: '🏛️', text: `Pemilu ${typeLabel} di ${x.country_name || 'dunia'} ${st}`, at: x.created_at });
+    }
+    const txRows = await sql(`SELECT t.qty, t.created_at, co.name AS commodity, u.username AS buyer FROM market_tx t JOIN commodities co ON co.id = t.commodity_id JOIN citizens c ON c.id = t.buyer_id JOIN users u ON u.id = c.user_id ORDER BY t.created_at DESC LIMIT 2`);
+    for (const x of txRows) feed.push({ icon: '🛒', text: `${x.buyer} membeli ${x.qty}× ${x.commodity} di pasar`, at: x.created_at });
+    const artRows = await sql(`SELECT a.title, n.name AS paper, a.created_at FROM articles a JOIN newspapers n ON n.id = a.newspaper_id ORDER BY a.created_at DESC LIMIT 2`);
+    for (const x of artRows) feed.push({ icon: '📰', text: `${x.paper} menerbitkan “${x.title}”`, at: x.created_at });
+    feed.sort((a, b) => b.at - a.at);
+    // Transaksi pasar terakhir (kutipan "BURSA" di pilar ekonomi).
+    const lastTx = await one(`SELECT t.qty, t.created_at, co.name AS commodity FROM market_tx t JOIN commodities co ON co.id = t.commodity_id ORDER BY t.created_at DESC LIMIT 1`);
+    const lastTrade = lastTx ? { qty: lastTx.qty, commodity: lastTx.commodity, at: lastTx.created_at } : null;
     // Event dunia minggu ini (Tahap 6) — publik, supaya landing + dashboard
     // bisa menampilkan event yang sedang berlaku tanpa login.
-    worldCache = { version: VERSION, day, population: Number(population.n), regions: Number(regions.n), countries: Number(countries.n), onlineCount: await countOnline(), event: worldEventFor(day) };
+    worldCache = { version: VERSION, day, population: Number(population.n), regions: Number(regions.n), countries: Number(countries.n), onlineCount: await countOnline(), event: worldEventFor(day), regionsOwned: Number(regionsOwned.n), activeFronts: Number(activeFronts.n), warsTotal: Number(warsTotal.n), tx24h: Number(tx24h.n), front, feed: feed.slice(0, 6), lastTrade };
     worldCacheAt = now;
     res.json(worldCache);
   }));

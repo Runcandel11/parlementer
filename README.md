@@ -174,13 +174,15 @@ npm run test:recovery # uji pemulihan (SIGKILL di tengah burst): 13 pemeriksaan
 # test:credit-dom (22), test:ticket-dom (56), test:stage6-dom (27),
 # test:bottom-nav (29), test:ads (20), test:offside (24),
 # test:topbar (31), test:share (28), test:xp-rollback (49).
-# Total seluruh suite: 2261 pemeriksaan (+ 13 uji pemulihan).
+# Total seluruh suite: 2291 pemeriksaan (+ 13 uji pemulihan).
 ```
 
-Hasil terakhir (28 Nov 2026, v5.0.1 bagikan artikel ke chat + dedup lowongan, laporan Vincent): **e2e 1113/1113 lolos,
-pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 233/233 lolos (224 lama + 9 regresi dedup baru),
-pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos** — dan semua suite
-DOM lain hijau (22 suite DOM + xp-rollback + ssl = 831/831, diulang penuh untuk v5.0.1). Catatan: e2e pernah sekali
+Hasil terakhir (28 Nov 2026, v5.1.0 kartu preview + rombak landing ala Parlementum + logo P MERAH): **e2e 1113/1113 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 233/233 lolos,
+pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, landing-glass-dom 70/70 lolos (48 lama + 22 cek baru:
+meta OG/Twitter Card, og-image 200 + 1200×630, favicon/logo 200, angka landing cocok dengan /api/world, front damai yang
+jujur, feed kosong yang jujur, logo P MERAH di hero/footer/loading/login)** — dan semua suite
+DOM lain hijau (20 suite DOM = 806/806, xp-rollback 49/49, ssl 6/6; total 2291/2291, 0 gagal). Catatan: e2e pernah sekali
 menghitung 907/907 (satu check kondisional yang kadang tereksekusi,
 0 gagal di 7 run berturut-turut) — flake jumlah, bukan kegagalan.
 Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lamar

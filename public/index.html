@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Parlementer — Simulasi Geopolitik Online</title>
 <meta name="description" content="Parlementer: hidup sebagai warga, bekerja, berdagang, berpolitik, berperang, dan menulis berita. 100% online, tanpa bot.">
-<!-- Open Graph + Twitter Card: preview saat link dibagikan (WhatsApp/Threads/dll.) -->
+<!-- Open Graph + Twitter Card: preview saat link dibagikan (WhatsApp/Threads/dll.)
+     Gambar kartu dari pemilik (28 Nov 2026), teks Bahasa Indonesia. -->
 <meta property="og:site_name" content="Parlementer">
-<meta property="og:title" content="Parlementer — Bangun Negaramu">
-<meta property="og:description" content="Simulasi negara online — hidup sebagai warga, bekerja, berdagang, berpolitik, dan berperang. 100% pemain asli, tanpa bot.">
+<meta property="og:title" content="Parlementer — Dunia yang Berjalan oleh Para Pemain">
+<meta property="og:description" content="Bekerja, berdagang, memilih, memerintah, hingga berperang — setiap keputusan dibuat oleh pemain seperti kamu. Gratis untuk dimainkan, langsung di browser.">
 <meta property="og:image" content="https://parlementer.my.id/og-image.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -17,9 +18,12 @@
 <meta property="og:type" content="website">
 <meta property="og:locale" content="id_ID">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Parlementer — Bangun Negaramu">
-<meta name="twitter:description" content="Simulasi negara online — hidup sebagai warga, bekerja, berdagang, berpolitik, dan berperang. 100% pemain asli, tanpa bot.">
+<meta name="twitter:title" content="Parlementer — Dunia yang Berjalan oleh Para Pemain">
+<meta name="twitter:description" content="Bekerja, berdagang, memilih, memerintah, hingga berperang — setiap keputusan dibuat oleh pemain seperti kamu. Gratis untuk dimainkan, langsung di browser.">
 <meta name="twitter:image" content="https://parlementer.my.id/og-image.jpg">
+<!-- Logo P MERAH (pilihan pemilik, 28 Nov 2026): favicon + ikon aplikasi. -->
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/logo-192.png">
 <!-- JSON-LD: mesin pencari memahami Parlementer sebagai game + siapa pembuatnya. -->
 <script type="application/ld+json">
 {
@@ -58,7 +62,7 @@
 <body>
 <!-- ============ LAYAR LOADING (tampil saat cold start, sebelum JS boot) ============ -->
 <div id="loading-screen">
-  <div class="loading-logo">◆</div>
+  <img class="loading-logo" src="/logo-192.png" alt="Parlementer">
   <div class="loading-title">PARLEMENTER</div>
   <div class="loading-spinner" aria-hidden="true"></div>
   <p class="loading-text">Memuat...</p>
@@ -67,9 +71,11 @@
 
 <!-- ============ HALAMAN LOGIN (tampil pertama kali) ============ -->
 <div id="auth-view" class="auth-view" hidden>
-  <!-- LANDING PAGE (pengunjung belum login): hero berlatar peta gelap,
-       seperti referensi 10 — headline + tombol emas + badge. Teks headline
-       dan subteks kata-kata Parlementer sendiri, bukan salinan. -->
+  <!-- LANDING PAGE (pengunjung belum login) — rombak v5.1.0 ala Parlementum:
+       hero + angka dunia live + front live + siaran langsung + tiga pilar +
+       penutup + footer. Semua angka/peristiwa diisi JS dari /api/world
+       (data nyata — JANGAN hardcode). Teks kata-kata Parlementer sendiri. -->
+  <div id="landing-page">
   <section id="landing-hero" class="landing-hero" aria-label="Beranda Parlementer">
     <div class="landing-map" aria-hidden="true">
       <svg viewBox="0 0 800 500" preserveAspectRatio="xMidYMid slice">
@@ -97,10 +103,11 @@
       </svg>
     </div>
     <div class="landing-content">
-      <p class="landing-badge">◆ 100% PEMAIN ASLI · GRATIS</p>
-      <p class="landing-kicker">Simulasi geopolitik online · Dimainkan di browser · Gratis</p>
-      <h1 class="landing-title">DUNIA INI<br>DIBENTUK ULANG<br>OLEH <span class="gold">PARA PEMAINNYA</span></h1>
-      <p class="landing-sub">Setiap wilayah di peta ini diperebutkan para pemain — pilih negaramu, klaim kewarganegaraanmu, dan rebut kursimu. Kerja, dagang, bikin partai, masuk parlemen, perang, sampai jadi presiden.</p>
+      <img class="landing-logo" src="/logo-512.png" alt="Logo Parlementer">
+      <p class="landing-badge">◆ OPEN BETA · 100% PEMAIN ASLI · GRATIS</p>
+      <p class="landing-kicker">MMO Simulasi Negara · Di Browser · Gratis</p>
+      <h1 class="landing-title">DUNIA YANG<br>BERJALAN OLEH<br><span class="gold">PARA PEMAIN</span></h1>
+      <p class="landing-sub">Bekerja, berdagang, memilih, memerintah, hingga berperang — setiap keputusan dibuat oleh pemain seperti kamu. Pilih negaramu, klaim kewarganegaraanmu, dan ambil kursimu.</p>
       <div class="landing-cta">
         <button class="btn-gold big" id="landing-register" type="button">AMBIL KEWARGANEGARAAN</button>
         <button class="btn-ghost big" id="landing-login" type="button">MASUK</button>
@@ -114,11 +121,120 @@
       <p class="landing-version" id="landing-credits">Dibuat oleh Khalid Talal Muhammad Zain Al-Ghunaim (CEO &amp; Pengembang) &amp; Angelica (Asisten Developer)</p>
     </div>
   </section>
+
+  <!-- Angka dunia LIVE (diisi JS dari /api/world — data nyata) -->
+  <section class="landing-stats" aria-label="Angka dunia">
+    <div class="landing-stats-grid">
+      <div class="landing-stat"><span class="landing-stat-num" id="ls-population">—</span><span class="landing-stat-label">WARGA</span></div>
+      <div class="landing-stat"><span class="landing-stat-num" id="ls-countries">—</span><span class="landing-stat-label">NEGARA</span></div>
+      <div class="landing-stat"><span class="landing-stat-num"><span id="ls-regions-owned">—</span><span class="landing-stat-den"> / <span id="ls-regions-total">—</span></span></span><span class="landing-stat-label">WILAYAH DIKUASAI</span></div>
+      <div class="landing-stat"><span class="landing-stat-num" id="ls-fronts">—</span><span class="landing-stat-label">FRONT AKTIF</span></div>
+      <div class="landing-stat"><span class="landing-stat-num" id="ls-tx">—</span><span class="landing-stat-label">TRANSAKSI · 24 JAM</span></div>
+    </div>
+    <p class="landing-world-label">● DUNIA SAAT INI</p>
+    <ul class="landing-legend">
+      <li><span class="legend-swatch owned"></span> Dikuasai sebuah negara</li>
+      <li><span class="legend-swatch free"></span> Belum Bernegara — tanah terbuka</li>
+      <li><span class="legend-swatch front"></span> Front aktif</li>
+      <li><span class="legend-swatch capital"></span> Ibu kota</li>
+    </ul>
+    <button class="landing-link" id="landing-world-btn" type="button">BUKA DUNIA ↗</button>
+  </section>
+
+  <!-- Front live (diisi JS dari /api/world.front; bila damai tampilkan keadaan sebenarnya) -->
+  <section class="landing-front" aria-label="Garis depan">
+    <div class="landing-front-card">
+      <div class="landing-front-head"><span>⚔️ BERKAS GARIS DEPAN</span><span class="landing-live">● LANGSUNG</span></div>
+      <div id="landing-front-body">
+        <div class="landing-front-top">
+          <p class="landing-front-type" id="lf-type">PEMBERONTAKAN</p>
+          <p class="landing-front-ends" id="lf-ends">—</p>
+        </div>
+        <h2 class="landing-front-region" id="lf-region">—</h2>
+        <div class="landing-front-sides">
+          <div><p class="landing-front-side-label">PENYERANG</p><p class="landing-front-side-name" id="lf-attacker">—</p><p class="landing-front-score" id="lf-score-a">—</p></div>
+          <div><p class="landing-front-side-label">BERTAHAN</p><p class="landing-front-side-name" id="lf-defender">—</p><p class="landing-front-score" id="lf-score-d">—</p></div>
+        </div>
+        <div class="landing-front-bar"><span id="lf-bar" style="width:50%"></span></div>
+        <p class="landing-front-note" id="lf-note">—</p>
+      </div>
+      <div id="landing-front-peace" hidden>
+        <h2 class="landing-front-region">DUNIA SEDANG DAMAI</h2>
+        <p class="landing-front-note" id="lf-peace-note">Belum ada perang yang berjalan saat ini. Pemberontakan bisa dimulai kapan saja oleh para pemain.</p>
+      </div>
+      <button class="landing-link" id="landing-front-all" type="button">SEMUA FRONT ↗</button>
+    </div>
+  </section>
+
+  <!-- Siaran langsung (diisi JS dari /api/world.feed — peristiwa nyata) -->
+  <section class="landing-broadcast" aria-label="Siaran langsung">
+    <p class="landing-section-kicker">◆ SIARAN LANGSUNG</p>
+    <h2 class="landing-section-title">DUNIA, SAAT ITU JUGA</h2>
+    <p class="landing-section-text">Setiap perang, setiap pemungutan suara, setiap perjanjian dibacakan di sini saat pemain melakukannya. Tak ada yang menulis naskahnya — para warga yang menulis.</p>
+    <div class="landing-feed">
+      <div class="landing-feed-head"><span>● KABAR LANGSUNG</span><span id="landing-feed-clock">— UTC</span></div>
+      <ul class="landing-feed-list" id="landing-feed-list"></ul>
+      <p class="landing-feed-empty" id="landing-feed-empty" hidden>Belum ada kabar terbaru — dunia baru saja dimulai. Jadilah bagian dari kabar pertama.</p>
+    </div>
+  </section>
+
+  <!-- Tiga pilar -->
+  <section class="landing-pillars" aria-label="Permainan macam apa">
+    <p class="landing-section-kicker center">◆ PERMAINAN MACAM APA? ◆</p>
+    <h2 class="landing-pillars-title">BUKAN<br>SIMULATOR<br>PEMERINTAHAN</h2>
+    <div class="landing-pillars-rule"></div>
+    <h2 class="landing-pillars-title outline">MELAINKAN<br>PEMERINTAHANNYA<br>SENDIRI.</h2>
+    <p class="landing-section-text center">Tidak ada penguasa AI di Parlementer. Tiap presiden adalah pemain, tiap harga adalah hasil tawar-menawar, tiap undang-undang adalah hasil pemungutan suara. Tiga pilar menopangnya:</p>
+    <div class="landing-pillar">
+      <span class="landing-pillar-icon" aria-hidden="true">🏛️</span>
+      <h3>NEGARA MILIK PARA PEMAIN</h3>
+      <p>Partai didirikan, pemilu digelar, parlemen mengesahkan undang-undang. Kursi kepresidenan diisi lewat suara, bukan lewat kode.</p>
+      <p class="landing-pillar-quote"><span>— PARLEMEN</span><br>“PARLEMEN PERTAMA DIBUKA 2 DESEMBER 2026.”</p>
+    </div>
+    <div class="landing-pillar">
+      <span class="landing-pillar-icon" aria-hidden="true">📈</span>
+      <h3>EKONOMINYA ANTARPEMAIN</h3>
+      <p>Tiap potong roti berasal dari ladang seorang pemain, tiap senapan dari pabrik seorang pemain. Harga ditentukan pasar, bukan rumus.</p>
+      <p class="landing-pillar-quote"><span>— BURSA</span><br><span id="landing-trade-quote">“PASAR MULAI DARI NOL — JADILAH PENJUAL PERTAMA.”</span></p>
+    </div>
+    <div class="landing-pillar">
+      <span class="landing-pillar-icon" aria-hidden="true">⚔️</span>
+      <h3>PERANGNYA ANTARPEMAIN</h3>
+      <p>Perang lahir dari pemberontakan pemain dan dimenangkan dengan senjata serta pasukan yang dibangun pemain. Setiap wilayah bisa jadi garis depan berikutnya.</p>
+      <p class="landing-pillar-quote"><span>— GARIS DEPAN</span><br><span id="landing-war-quote">“BELUM ADA PERANG YANG PERNAH TERJADI.”</span></p>
+    </div>
+  </section>
+
+  <!-- Penutup -->
+  <section class="landing-closing" aria-label="Pimpin negaramu">
+    <h2 class="landing-closing-title"><span class="gold">PIMPIN</span><br>NEGARAMU<br>ATAU<br>KEHILANGAN<br>DIA</h2>
+    <p class="landing-closing-quote">“MEMIMPIN SEBUAH NEGARA BUKAN HAK — IA BEBAN YANG DIMENANGKAN DI KOTAK SUARA.”</p>
+    <div class="landing-cta">
+      <button class="btn-gold big" id="landing-closing-register" type="button">UCAPKAN SUMPAH — GRATIS</button>
+      <button class="btn-ghost big" id="landing-closing-login" type="button">MASUK</button>
+    </div>
+    <div class="landing-perks">
+      <span>🎁 GRATIS DIMAINKAN</span>
+      <span>🌐 DIMAINKAN DI BROWSER</span>
+      <span>⚖️ SEMUA BISA DIDAPAT DENGAN BERMAIN</span>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="landing-footer" aria-label="Tentang Parlementer">
+    <img class="landing-footer-logo" src="/logo-192.png" alt="Logo Parlementer">
+    <p class="landing-footer-name">PARLEMENTER</p>
+    <p class="landing-footer-desc">Dunia berkelanjutan berisi negara-negara nyata — dikerjakan, diperdagangkan, diperintah dan diperebutkan sepenuhnya oleh para pemainnya.</p>
+    <p class="landing-footer-social"><a href="https://discord.gg/JX7DWX3pF" target="_blank" rel="noopener">💬 Discord</a></p>
+    <p class="landing-footer-credits">Dibuat oleh Khalid Talal Muhammad Zain Al-Ghunaim (CEO &amp; Pengembang) &amp; Angelica (Asisten Developer)</p>
+    <p class="landing-footer-version" id="landing-footer-version">Parlementer</p>
+  </footer>
+  </div><!-- /#landing-page -->
   <!-- FORM LOGIN/DAFTAR (muncul setelah ketuk CTA landing) -->
   <div id="auth-card-wrap" hidden>
   <div class="auth-card">
     <button id="auth-back" class="btn-text" type="button">← Kembali ke Beranda</button>
-    <div class="auth-logo">◆</div>
+    <img class="auth-logo" src="/logo-192.png" alt="Parlementer">
     <h1 class="auth-title">PARLEMENTER</h1>
     <p class="auth-sub">Simulasi geopolitik online — hidup sebagai warga, bangun namamu.</p>
     <div class="auth-tabs">

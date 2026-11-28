@@ -396,6 +396,8 @@ function setVersion(v) {
   const label = 'Parlementer v' + v;
   const lv = $('#landing-version');
   if (lv) lv.textContent = label;
+  const fv = $('#landing-footer-version');
+  if (fv) fv.textContent = label;
   const dv = $('#drawer-version');
   if (dv) dv.textContent = label;
 }
@@ -404,14 +406,68 @@ function setVersion(v) {
 // muncul setelah ketuk CTA (atau langsung bila ?ref= ada).
 function showLanding() {
   $('#landing-hero').hidden = false;
+  const lp = $('#landing-page');
+  if (lp) lp.hidden = false;
   $('#auth-card-wrap').hidden = true;
   $('#auth-view').classList.add('landing');
 }
 function showAuthForm(which) {
   $('#landing-hero').hidden = true;
+  const lp = $('#landing-page');
+  if (lp) lp.hidden = true;
   $('#auth-card-wrap').hidden = false;
   $('#auth-view').classList.remove('landing');
   switchAuthTab(which);
+}
+
+// Landing v5.1.0: isi angka + kabar dunia LIVE dari /api/world (data nyata).
+// Dipanggil sekali saat showAuth (publik, tanpa login). Bila API gagal,
+// angka tetap "—" dan kabar menampilkan keadaan kosong yang jujur.
+function renderLandingWorld(w) {
+  if (!w) return;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('ls-population', fmt(w.population));
+  set('ls-countries', fmt(w.countries));
+  set('ls-regions-owned', fmt(w.regionsOwned));
+  set('ls-regions-total', fmt(w.regions));
+  set('ls-fronts', fmt(w.activeFronts));
+  set('ls-tx', fmt(w.tx24h));
+  // Front live: perang aktif paling sengit, atau keadaan damai yang jujur.
+  const body = document.getElementById('landing-front-body');
+  const peace = document.getElementById('landing-front-peace');
+  if (w.front) {
+    if (body) body.hidden = false;
+    if (peace) peace.hidden = true;
+    set('lf-type', w.front.type || 'PEMBERONTAKAN');
+    const total = (w.front.scoreA || 0) + (w.front.scoreD || 0);
+    const defPct = total > 0 ? Math.round((w.front.scoreD / total) * 100) : 50;
+    set('lf-region', (w.front.region || '').toUpperCase());
+    set('lf-attacker', w.front.attacker || '—');
+    set('lf-defender', w.front.defender || '—');
+    set('lf-score-a', fmt(w.front.scoreA));
+    set('lf-score-d', fmt(w.front.scoreD));
+    const bar = document.getElementById('lf-bar');
+    if (bar) bar.style.width = (100 - defPct) + '%'; // bar merah = pangsa penyerang
+    set('lf-note', defPct >= 50 ? `Pihak bertahan menahan · ${defPct}%` : `Pihak penyerang unggul · ${100 - defPct}%`);
+    const endsMs = (w.front.endsAt || 0) - Date.now();
+    set('lf-ends', endsMs > 0 ? 'BERAKHIR DALAM ' + fmtCountdown(endsMs).toUpperCase() : 'SEGERA BERAKHIR');
+  } else {
+    if (body) body.hidden = true;
+    if (peace) peace.hidden = false;
+  }
+  // Kabar langsung: peristiwa nyata terbaru (maks 6).
+  const list = document.getElementById('landing-feed-list');
+  const empty = document.getElementById('landing-feed-empty');
+  if (list) {
+    list.innerHTML = (w.feed || []).map((f) => `<li><span class="landing-feed-icon">${esc(f.icon || '•')}</span><span class="landing-feed-text">${esc(f.text || '')}</span><span class="landing-feed-time">${ago(f.at)}</span></li>`).join('');
+    if (empty) empty.hidden = (w.feed || []).length > 0;
+  }
+  // Jam kabar langsung (UTC, ala Parlementum).
+  const clock = document.getElementById('landing-feed-clock');
+  if (clock) { const d = new Date(); clock.textContent = String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0') + ' UTC'; }
+  // Kutipan pilar: transaksi terakhir + jumlah perang (data nyata).
+  if (w.lastTrade) set('landing-trade-quote', `“${fmt(w.lastTrade.qty)}× ${String(w.lastTrade.commodity || '').toUpperCase()} TERJUAL DI PASAR.”`);
+  set('landing-war-quote', (w.warsTotal || 0) > 0 ? `“${fmt(w.warsTotal)} PERANG SUDAH TERJADI DI DUNIA INI.”` : '“BELUM ADA PERANG YANG PERNAH TERJADI.”');
 }
 
 function showAuth() {
@@ -422,9 +478,17 @@ function showAuth() {
   $('#tab-register').onclick = () => switchAuthTab('register');
   $('#landing-register').onclick = () => showAuthForm('register');
   $('#landing-login').onclick = () => showAuthForm('login');
+  // CTA seksi landing v5.1.0 (peta/front/penutup butuh login → buka daftar).
+  const goRegister = () => showAuthForm('register');
+  const goLogin = () => showAuthForm('login');
+  const wire = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  wire('landing-world-btn', goRegister);
+  wire('landing-front-all', goRegister);
+  wire('landing-closing-register', goRegister);
+  wire('landing-closing-login', goLogin);
   $('#auth-back').onclick = showLanding;
-  // Versi game untuk footer landing (endpoint publik, tanpa login).
-  api('/api/world').then((w) => setVersion(w.version)).catch(() => {});
+  // Versi game + angka/kabar dunia untuk landing (endpoint publik, tanpa login).
+  api('/api/world').then((w) => { setVersion(w.version); renderLandingWorld(w); }).catch(() => {});
   // Link referral ?ref=CODE: isi otomatis field kode dan buka tab DAFTAR.
   const refParam = new URLSearchParams(location.search).get('ref');
   if (refParam) {
