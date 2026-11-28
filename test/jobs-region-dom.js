@@ -129,6 +129,20 @@ async function main() {
     check('Statistik: jumlah lowongan wilayah sendiri tampil', pageText(dom).includes('Lowongan di Wilayahmu'));
     check('Halaman tidak lagi berjudul PAPAN LOWONGAN (daftar campur)', !pageText(dom).includes('PAPAN LOWONGAN'));
 
+    // (6) v5.7.5 — kartu lowongan beranimasi + meter keterisian kursi.
+    const jobCards = [...document.querySelectorAll('#jobs-local-list .job-card')];
+    check('v5.7.5: tiap kartu lokal punya kelas job-card + indeks stagger --i',
+      jobCards.length === localCards.length && jobCards.every((c, i) => c.style.getPropertyValue('--i') === String(i)),
+      `job-card=${jobCards.length} harapan=${localCards.length}`);
+    const adminCard = jobCards.find((c) => c.textContent.includes('ADMIN'));
+    check('v5.7.5: kartu ADMIN tanpa batas kursi → tanpa meter kursi',
+      !!adminCard && !adminCard.querySelector('.seat-bar'), adminCard ? 'kartu ADMIN ketemu' : 'kartu ADMIN tidak ketemu');
+    const css = fs.readFileSync(ROOT + 'public/css/style.css', 'utf8');
+    check('v5.7.5: CSS punya keyframes jobCardIn + stagger 50ms + hover lift',
+      css.includes('@keyframes jobCardIn') && css.includes('calc(var(--i, 0) * 50ms)') && css.includes('.job-card:hover'));
+    check('v5.7.5: CSS menghormati prefers-reduced-motion untuk kartu lowongan',
+      css.includes('@media (prefers-reduced-motion: reduce) { .job-card { animation: none;'));
+
     // (2) Wilayah lain: tersembunyi di balik tombol, tanpa tombol LAMAR.
     const otherList = document.querySelector('#jobs-other-list');
     const toggleBtn = document.querySelector('#btn-jobs-other');
@@ -174,7 +188,26 @@ async function main() {
       dbJ.prepare(`INSERT INTO jobs (id, company_id, is_admin, title, salary, salary_type, resource, pay_qty, level_min, tier, seats, seats_taken, region_id, description, created_at)
         VALUES (?, 9001, 0, 'Kerja', 100, 'fixed', '', 0, 1, 1, 4, 0, ?, 'uji grup v5.0.1', 0)`).run(9002 + i, myRegionId);
     }
+    // v5.7.5 — meter kursi: 1 perusahaan + 1 lowongan 4 kursi, lalu 2 warga
+    // lain melamar → meter harus terisi 2/4 = 50%.
+    dbJ.prepare(`INSERT INTO companies (id, owner_id, name, about, type, region_id, resource, created_at)
+      VALUES (9006, ?, 'PT Meter', '', 'resource', ?, 'Besi Mentah', 0)`).run(meCitizenId, myRegionId);
+    dbJ.prepare(`INSERT INTO jobs (id, company_id, is_admin, title, salary, salary_type, resource, pay_qty, level_min, tier, seats, seats_taken, region_id, description, created_at)
+      VALUES (9005, 9006, 0, 'Kerja Uji', 100, 'fixed', '', 0, 1, 1, 4, 0, ?, 'uji meter kursi v5.7.5', 0)`).run(myRegionId);
     dbJ.close();
+    // Dua warga baru: pindahkan ke wilayah pemain (registrasi acak wilayah)
+    // lalu lamar 'Kerja Uji' supaya kursinya terisi 2/4.
+    for (let n = 2; n <= 3; n++) {
+      const jarN = makeJar();
+      const regN = await api(jarN, '/api/auth/register', { email: `domJob${n}@test.local`, password: 'rahasia123', username: `warga_job${n}` });
+      check(`v5.7.5: daftar warga_job${n} (API)`, regN.status === 200 && regN.data.ok);
+      const meN = (await api(jarN, '/api/me')).data.citizen;
+      const dbN = new DatabaseSync(DB_PATH);
+      dbN.prepare('UPDATE citizens SET region_id = ?, home_region_id = ? WHERE id = ?').run(myRegionId, myRegionId, meN.id);
+      dbN.close();
+      const applyN = await api(jarN, '/api/jobs/apply', { job_id: 9005 });
+      check(`v5.7.5: warga_job${n} melamar 'Kerja Uji'`, applyN.status === 200 && applyN.data.ok, `status=${applyN.status} ${applyN.data.error || ''}`);
+    }
     dom.window.route();
     await sleep(1500);
     const localCardsAfter = document.querySelectorAll('#jobs-local-list [data-job-region]');
@@ -185,6 +218,16 @@ async function main() {
     check('Kartu gabungan: kursi dijumlahkan (0/12 kursi)', !!twin && /0\/12 kursi/.test(twin.textContent), twin ? twin.textContent.slice(0, 120) : 'tidak ada kartu');
     const twinApply = twin?.querySelector('[data-apply]');
     check('Kartu gabungan: tetap punya tombol LAMAR (ke lowongan berkursi kosong)', !!twinApply && ['9002', '9003', '9004'].includes(twinApply.getAttribute('data-apply')), twinApply?.getAttribute('data-apply') || 'tidak ada tombol');
+    // v5.7.5 — meter kursi: kartu gabungan 0/12 → isi 0%; 'Kerja Uji' 2/4 → 50%.
+    const twinFill = twin?.querySelector('.seat-fill');
+    check('v5.7.5: meter kursi kartu gabungan (0/12) terisi 0%', !!twinFill && twinFill.style.width === '0%', twinFill ? `width=${twinFill.style.width}` : 'tidak ada meter');
+    const meterCards = [...localCardsAfter].filter((el) => el.textContent.includes('Kerja Uji'));
+    check("v5.7.5: kartu 'Kerja Uji' tampil sebagai 1 kartu", meterCards.length === 1, `kartu meter=${meterCards.length}`);
+    const meter = meterCards[0];
+    check("v5.7.5: kartu 'Kerja Uji' menulis 2/4 kursi", !!meter && /2\/4 kursi/.test(meter.textContent), meter ? meter.textContent.slice(0, 120) : 'tidak ada kartu');
+    const meterFill = meter?.querySelector('.seat-fill');
+    check("v5.7.5: meter kursi 'Kerja Uji' terisi 50%", !!meterFill && meterFill.style.width === '50%', meterFill ? `width=${meterFill.style.width}` : 'tidak ada meter');
+    check("v5.7.5: meter kursi punya label aksesibel", !!meter?.querySelector('.seat-bar')?.getAttribute('aria-label')?.includes('2 dari 4 kursi terisi'), meter?.querySelector('.seat-bar')?.getAttribute('aria-label') || 'tidak ada label');
     const statsText = pageText(dom);
     check('Statistik: jumlah lowongan wilayah memakai hitungan grup', /Lowongan di Wilayahmu/.test(statsText), statsText.slice(0, 120));
   } finally {

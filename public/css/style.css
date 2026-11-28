@@ -232,6 +232,21 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .empty .big-ico { font-size: 40px; color: var(--gold); margin-bottom: 8px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
 .card.selected { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+/* Kartu lowongan (v5.7.5, Lane 11 — poles dari referensi micro-interactions):
+   masuk berurutan (stagger 50 ms/kartu, easing smooth-pop), naik sedikit saat
+   hover, + meter keterisian kursi (isi emas, merah bila penuh). Hanya
+   transform/opacity yang dianimasikan (compositor-only, 60fps); fill mode
+   `backwards` supaya kartu tidak berkedip sebelum delay-nya habis dan
+   transform hover tetap bekerja setelah animasi selesai.
+   Referensi: https://skillmd.com/skills/impertio-studio/frontend-visual-micro-interactions
+   dan https://www.jpesewang.work/blog/making-figma-come-alive-the-art-of-micro-interactions-in-front-end */
+.job-card { animation: jobCardIn .25s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 50ms); transition: transform .15s cubic-bezier(0.2, 0, 0, 1), border-color .15s cubic-bezier(0.2, 0, 0, 1), box-shadow .15s cubic-bezier(0.2, 0, 0, 1); }
+@keyframes jobCardIn { from { opacity: 0; transform: translateY(8px); } }
+.seat-bar { height: 6px; border-radius: 3px; background: var(--panel2); border: 1px solid var(--line); overflow: hidden; margin: 6px 0 2px; }
+.seat-fill { height: 100%; background: linear-gradient(90deg, var(--gold-dim), var(--gold-bright)); transition: width .2s linear; }
+.seat-bar.full .seat-fill { background: var(--danger); }
+@media (hover: hover) { .job-card:hover { transform: translateY(-2px); border-color: var(--gold-dim); box-shadow: 0 6px 18px rgba(0,0,0,.35); } }
+@media (prefers-reduced-motion: reduce) { .job-card { animation: none; transition: none; } .seat-fill { transition: none; } }
 .card h4 { font-family: 'Oswald', sans-serif; font-size: 18px; letter-spacing: .04em; text-transform: uppercase; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }

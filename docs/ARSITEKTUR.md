@@ -468,6 +468,24 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **Kartu lowongan beranimasi + meter kursi v5.7.5 (28 Nov 2026, Lane 11 —
+  Lucia Fernández, poles berkelanjutan; antrean Lane 11 kosong):** kartu
+  lowongan di halaman Pekerjaan masuk berurutan (stagger 50 ms/kartu,
+  easing smooth-pop `cubic-bezier(0.16, 1, 0.3, 1)`, 250 ms) dan naik
+  sedikit saat hover (`translateY(-2px)` + bayangan, 150 ms); di bawah teks
+  "X/Y kursi" ada meter keterisian kursi (isi emas, merah bila penuh —
+  lebar = pekerja/kursi, transisi linear 200 ms) + `aria-label` "N dari M
+  kursi terisi". Kartu ADMIN (tanpa batas kursi) tidak punya meter. Hanya
+  `transform`/`opacity` yang dianimasikan; fill mode `backwards` supaya
+  kartu tidak berkedip sebelum delay-nya dan hover tetap bekerja setelah
+  animasi selesai; `prefers-reduced-motion` mematikan animasi + transisi.
+  Referensi (bukan karangan): https://skillmd.com/skills/impertio-studio/frontend-visual-micro-interactions
+  dan https://www.jpesewang.work/blog/making-figma-come-alive-the-art-of-micro-interactions-in-front-end.
+  Murni visual — tidak mengubah aturan main, gaji, atau kursi. Tanpa
+  migrasi skema (tetap 31). Dicek `test/jobs-region-dom.js` (11 cek baru:
+  kelas `job-card` + `--i` per kartu, ADMIN tanpa meter, CSS keyframes/
+  stagger/hover/reduced-motion, meter 0% di kartu gabungan 0/12, meter 50%
+  + label di 'Kerja Uji' 2/4 setelah 2 warga melamar).
 - **Background kontekstual per halaman v5.7.4 (28 Nov 2026):** tiap halaman
   diberi gambar latar sesuai konteksnya (perintah pemilik 17:48 WIB —
   halaman Perang di screenshot pemilik terpotong-potong pita-pita + area

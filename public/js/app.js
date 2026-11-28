@@ -2747,14 +2747,18 @@ ROUTES.jobs = async () => {
   };
   const localJobs = groupJobs(data.jobs.filter((j) => j.region_id === myRegionId));
   const otherJobs = groupJobs(data.jobs.filter((j) => j.region_id !== myRegionId));
-  const jobCard = (g, local) => {
+  const jobCard = (g, local, idx = 0) => {
     const j = g.job;
     const inGroup = ME.citizen.job_id && g.rows.some((r) => r.id === ME.citizen.job_id);
     const applyRow = g.rows.find((r) => r.is_admin || (r.seats_taken || 0) < (r.seats || 0));
+    // v5.7.5: meter keterisian kursi (visual saja — angka tetap dari teks
+    // "X/Y kursi" di atasnya); ADMIN tanpa batas kursi jadi tanpa meter.
+    const seatPct = j.is_admin || !g.seats ? 0 : Math.min(100, Math.round((g.workers / g.seats) * 100));
     return `
-      <div class="card" data-job-region="${j.region_id}" data-group-size="${g.rows.length}">
+      <div class="card job-card" style="--i:${idx}" data-job-region="${j.region_id}" data-group-size="${g.rows.length}">
         <h4>${esc(j.title)} ${j.is_admin ? '<span class="chip">ADMIN</span>' : ''}</h4>
         <p class="muted small">${esc(j.company_name || 'Pemerintah')} · ${esc(j.region_name)} · Level ${j.level_min}+ · ${j.is_admin ? 'Tanpa batas kursi' : `${g.workers}/${g.seats} kursi`}</p>
+        ${j.is_admin ? '' : `<div class="seat-bar${seatPct >= 100 ? ' full' : ''}" role="img" aria-label="${g.workers} dari ${g.seats} kursi terisi"><div class="seat-fill" style="width:${seatPct}%"></div></div>`}
         ${g.rows.length > 1 ? `<p class="muted small">📋 ${g.rows.length} lowongan serupa digabung — kursi dijumlahkan.</p>` : ''}
         <p class="small">${esc(j.description || '')}</p>
         <div class="kv"><span class="k">${j.salary_type === 'goods' ? 'Upah (bahan mentah)' : j.salary_type === 'share' ? 'Bagi hasil' : 'Gaji tetap'}</span><span class="v gold-text">${payLabel(j)}</span></div>
@@ -2785,12 +2789,12 @@ ROUTES.jobs = async () => {
     ${autoWorkBlock()}</div>` : `${doubleXpChip()}`}
   <div class="panel"><h3>📍 DI WILAYAHMU${myRegionName ? ' — ' + esc(myRegionName.toUpperCase()) : ''}</h3>
     ${data.adminPayMult && data.adminPayMult !== 1 ? `<p class="muted small">Upah ADMIN saat ini ${Math.round(data.adminPayMult * 100)}% dari upah dasar (UU yang berlaku).</p>` : ''}
-    ${localJobs.length ? `<div id="jobs-local-list">${localJobs.map((j) => jobCard(j, true)).join('')}</div>` : emptyState('💼', 'Belum ada lowongan di wilayahmu', 'Lowongan ADMIN dan perusahaan warga akan muncul di sini.')}
+    ${localJobs.length ? `<div id="jobs-local-list">${localJobs.map((g, i) => jobCard(g, true, i)).join('')}</div>` : emptyState('💼', 'Belum ada lowongan di wilayahmu', 'Lowongan ADMIN dan perusahaan warga akan muncul di sini.')}
   </div>
   <div class="panel"><h3>🌍 WILAYAH LAIN</h3>
     <p class="muted small">Lowongan di luar wilayahmu — kamu harus bepergian dulu ke wilayah itu sebelum bisa melamar.</p>
     <button class="btn-ghost btn-sm" id="btn-jobs-other" type="button">🌍 Tampilkan lowongan wilayah lain (${fmt(otherJobs.length)})</button>
-    <div id="jobs-other-list" hidden>${otherJobs.map((j) => jobCard(j, false)).join('')}</div>
+    <div id="jobs-other-list" hidden>${otherJobs.map((g, i) => jobCard(g, false, i)).join('')}</div>
   </div>`);
   $('#btn-shift')?.addEventListener('click', doShift);
   $('#btn-autowork')?.addEventListener('click', async () => {
