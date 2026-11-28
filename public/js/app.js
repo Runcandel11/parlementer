@@ -3677,6 +3677,65 @@ async function partyDetail(id) {
 }
 
 // ---------- PARLEMEN ----------
+// v5.7.3 — Diagram hemicycle parlemen (ala parliament chart Flourish /
+// ChartLoad: tiap titik = 1 kursi, disusun setengah lingkaran, diwarnai
+// per partai + garis mayoritas + animasi muncul bertahap).
+// Referensi: https://flourish.studio/blog/how-to-make-parliament-chart/
+// dan https://www.chartload.com/charts/parliament-chart/
+// Fungsi murni (tanpa DOM) supaya bisa diuji langsung dari tes DOM.
+const HEMI_COLORS = ['#3b82f6', '#f59e0b', '#ef4444', '#10b981', '#a855f7', '#ec4899', '#14b8a6', '#eab308'];
+const HEMI_EMPTY = '#26324a';
+function hemicycleRowCounts(totalSeats, radii) {
+  const sum = radii.reduce((a, b) => a + b, 0);
+  const raw = radii.map((r) => (totalSeats * r) / sum);
+  const counts = raw.map((x) => Math.floor(x));
+  let rest = totalSeats - counts.reduce((a, b) => a + b, 0);
+  // Sisa dibagikan ke baris dengan pecahan terbesar (largest remainder).
+  const order = raw.map((x, i) => [x - Math.floor(x), i]).sort((a, b) => b[0] - a[0]);
+  for (let k = 0; k < rest && k < order.length; k++) counts[order[k][1]]++;
+  return counts;
+}
+function renderHemicycle(partySeats, totalSeats, filledSeats, majority) {
+  const total = Math.max(0, Number(totalSeats) || 60);
+  const filled = Math.min(total, Math.max(0, Number(filledSeats) || 0));
+  const maj = Math.max(1, Number(majority) || 31);
+  const parts = Array.isArray(partySeats) ? partySeats : [];
+  // Warna per kursi: blok partai berurutan (kursi terbanyak dulu, sesuai
+  // urutan partySeats dari server); sisa kursi terisi tanpa partai memakai
+  // palet bergilir; kursi kosong abu-abu.
+  const seatColor = [];
+  parts.forEach((p, pi) => {
+    const n = Math.max(0, Number(p.seats) || 0);
+    for (let i = 0; i < n && seatColor.length < filled; i++) seatColor.push(HEMI_COLORS[pi % HEMI_COLORS.length]);
+  });
+  for (let i = seatColor.length; i < filled; i++) seatColor.push(HEMI_COLORS[i % HEMI_COLORS.length]);
+  for (let i = seatColor.length; i < total; i++) seatColor.push(HEMI_EMPTY);
+  const cx = 160, cy = 178, radii = [58, 88, 118, 148];
+  const rows = hemicycleRowCounts(total, radii);
+  let idx = 0;
+  const circles = [];
+  let majorityAngle = null;
+  rows.forEach((n, ri) => {
+    for (let j = 0; j < n; j++) {
+      const ang = (Math.PI * (180 - ((j + 0.5) * 180) / n)) / 180;
+      const x = (cx + radii[ri] * Math.cos(ang)).toFixed(1);
+      const y = (cy - radii[ri] * Math.sin(ang)).toFixed(1);
+      if (idx === maj - 1) majorityAngle = ang;
+      circles.push(`<circle class="hemi-dot" cx="${x}" cy="${y}" r="6" fill="${seatColor[idx]}" style="--d:${idx * 9}ms"><title>Kursi ${idx + 1} dari ${total}</title></circle>`);
+      idx++;
+    }
+  });
+  // Garis mayoritas: dari pusat melewati kursi ke-`maj`, sampai tepi luar.
+  let majLine = '';
+  if (majorityAngle !== null) {
+    const x2 = (cx + 156 * Math.cos(majorityAngle)).toFixed(1);
+    const y2 = (cy - 156 * Math.sin(majorityAngle)).toFixed(1);
+    majLine = `<line class="hemi-majority" x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" />`;
+  }
+  const legend = parts.map((p, pi) => `<span class="hemi-chip"><i style="background:${HEMI_COLORS[pi % HEMI_COLORS.length]}"></i>${esc(p.name)} — ${Number(p.seats) || 0} kursi</span>`).join('')
+    + (total - filled > 0 ? `<span class="hemi-chip"><i style="background:${HEMI_EMPTY}"></i>Kosong — ${total - filled} kursi</span>` : '');
+  return `<div class="hemi-wrap"><svg class="hemi-svg" viewBox="0 0 320 185" role="img" aria-label="Diagram kursi parlemen: ${filled} dari ${total} kursi terisi">${majLine}${circles.join('')}</svg>${legend ? `<div class="hemi-legend">${legend}</div>` : ''}</div>`;
+}
 ROUTES.parliament = async () => {
   const d = await api('/api/parliament');
   // Parlemen TERKUNCI sampai dibuka 28 Nov 2026 20:00 WIB (redesain dunia): tampilkan
@@ -3693,14 +3752,9 @@ ROUTES.parliament = async () => {
   // mengosongkan seluruh halaman parlemen (mock tes / gangguan jaringan).
   let regionsData = { regions: [] };
   try { regionsData = await api('/api/regions'); } catch (e) { /* tetap tampil tanpa daftar wilayah */ }
-  const seatColors = ['#3b82f6', '#f59e0b', '#ef4444', '#10b981', '#a855f7', '#ec4899', '#14b8a6', '#eab308'];
-  const dots = [];
-  for (let i = 0; i < d.totalSeats; i++) {
-    dots.push(`<span class="seat-dot" style="background:${i < d.filledSeats ? seatColors[i % seatColors.length] : '#26324a'}"></span>`);
-  }
+  const eff = d.effects || { taxIncome: 2, adminPayMult: 1, travelTickets: 1, budgetKind: null, budgetUntil: 0, mobilizationUntil: 0 };
   const LAW_KIND_LABEL = { tax_income: 'Pajak Penghasilan', admin_pay: 'Upah ADMIN', travel: 'Biaya Perjalanan', ideology: 'Ideologi Negara', system: 'Sistem Pemerintahan', general: 'UU Umum' };
   const BUDGET_LABEL = { claim: 'Pasokan Harian +2 Emas', train: 'Latihan 10% Lebih Murah', war: 'Dana Perang (+10% Kerusakan)' };
-  const eff = d.effects || { taxIncome: 2, adminPayMult: 1, travelTickets: 1, budgetKind: null, budgetUntil: 0, mobilizationUntil: 0 };
   const countryName = d.country ? esc(d.country.name) : 'Belum bernegara';
   $('#page').innerHTML = page('PARLEMEN', `${countryName} · 60 kursi · Mayoritas 31`, `
   <div class="tabs">
@@ -3715,7 +3769,7 @@ ROUTES.parliament = async () => {
     <div class="stat-cell"><div class="stat-label">🗳️ Pemilu</div><div class="stat-num" style="font-size:20px">Lihat Pemilu</div></div>
   </div>
   <div class="panel"><h3>🏛️ DEWAN <span class="muted small">${d.filledSeats} dari 60 kursi terisi</span></h3>
-    <div class="seat-chart">${dots.join('')}</div>
+    ${renderHemicycle(d.partySeats, d.totalSeats, d.filledSeats, d.majority)}
     <p style="text-align:center" class="gold-text">◆ MAYORITAS ${d.majority}</p>
     <p class="muted small" style="text-align:center">${d.isMp ? 'Kamu anggota parlemen — kamu bisa memilih UU.' : 'Partaimu belum punya kursi. Menangkan pemilu parlemen untuk masuk dewan.'}</p>
   </div>

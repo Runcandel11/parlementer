@@ -330,8 +330,17 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .premium-name { color: var(--gold-bright); }
 .price-big { font-family: 'Oswald', sans-serif; font-size: 34px; font-weight: 700; }
 .was-price { text-decoration: line-through; color: var(--muted); }
-.seat-chart { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; padding: 10px 0; }
-.seat-dot { width: 12px; height: 12px; border-radius: 50%; }
+/* v5.7.3 — Diagram hemicycle parlemen: SVG setengah lingkaran + legenda
+   partai + animasi kursi muncul bertahap (stagger via --d per titik). */
+.hemi-wrap { padding: 6px 0 2px; }
+.hemi-svg { display: block; width: 100%; max-width: 560px; height: auto; margin: 0 auto; }
+.hemi-dot { animation: hemi-pop .45s cubic-bezier(.2,.9,.3,1.4) both; animation-delay: var(--d, 0ms); transform-box: fill-box; transform-origin: center; }
+@keyframes hemi-pop { from { opacity: 0; transform: scale(.2); } to { opacity: 1; transform: scale(1); } }
+.hemi-majority { stroke: var(--gold-bright); stroke-width: 1.5; stroke-dasharray: 5 4; opacity: .85; }
+.hemi-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; margin-top: 8px; }
+.hemi-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
+.hemi-chip i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; flex: none; }
+@media (prefers-reduced-motion: reduce) { .hemi-dot { animation: none; } }
 .shop-banner { background: linear-gradient(90deg, var(--gold-bright), var(--gold)); color: #1a1206; text-align: center; font-family: 'Oswald', sans-serif; letter-spacing: .1em; padding: 6px; border-radius: 8px 8px 0 0; margin: -16px -16px 12px; font-size: 14px; }
 
 /* ---------- layar loading (cold start) ---------- */

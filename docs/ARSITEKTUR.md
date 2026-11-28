@@ -468,6 +468,31 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **Diagram hemicycle parlemen v5.7.3 (28 Nov 2026, Lane 5 — poles
+  berkelanjutan, perintah pemilik 18:12 WIB):** halaman `#/parliament`
+  tidak lagi menampilkan 60 titik dalam grid datar — kini diagram
+  setengah lingkaran (hemicycle) ala parliament chart Flourish/ChartLoad:
+  4 baris konsentris (8+13+17+22 = 60 kursi), tiap titik = 1 kursi,
+  diwarnai PER PARTAI sesuai alokasi `party_seats` (blok berurutan,
+  partai kursi terbanyak = warna pertama dari palet 8 warna yang sama
+  seperti sebelumnya), kursi kosong abu-abu `#26324a`, garis mayoritas
+  putus-putus emas melewati kursi ke-31, legenda "Nama — N kursi" +
+  chip "Kosong — N kursi", dan animasi muncul bertahap (stagger 9 ms
+  per titik, `prefers-reduced-motion` mematikan animasi). `GET
+  /api/parliament` kini mengirim `partySeats: [{id, name, seats}]`
+  (hanya partai berkursi, urut kursi terbanyak). Fungsi murni
+  `renderHemicycle(partySeats, totalSeats, filledSeats, majority)` +
+  `hemicycleRowCounts(totalSeats, radii)` di `public/js/app.js`
+  (largest-remainder supaya jumlah baris selalu = total kursi);
+  aman bila `partySeats`/`totalSeats` tidak ada (mock lama → palet
+  bergilir seperti sebelumnya). Tanpa migrasi skema (tetap 31); tanpa
+  perubahan aturan main — murni tampilan. Dicek suite DOM baru
+  `test/parliament-hemicycle-dom.js` (**29/29 hijau**, 28 Nov 2026:
+  hemicycle penuh 60 + warna per partai + garis mayoritas + legenda;
+  parlemen belum penuh 15/45 + chip Kosong; fungsi murni: kosong semua
+  + 31/29 + baris 8+13+17+22) + cek baru e2e [28c] (`partySeats`
+  NUSA 40 + MUDA 20 = 60 terisi — menunggu full suite hijau sebelum
+  push, lihat antrean Lane 5).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

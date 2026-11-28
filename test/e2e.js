@@ -1700,6 +1700,15 @@ async function main() {
   const seats2 = db28.prepare('SELECT seats FROM party_seats WHERE party_id = ? AND country_id = ?').get(party2Id, nusantaraId);
   check('Partai Nusantara dapat 40 kursi (2/3 suara)', seats1?.seats === 40, `kursi=${seats1?.seats}`);
   check('Partai Muda dapat 20 kursi (1/3 suara)', seats2?.seats === 20, `kursi=${seats2?.seats}`);
+  // v5.7.3 — hemicycle parlemen: /api/parliament mengirim alokasi kursi
+  // per partai (untuk diwarnai per partai di diagram).
+  r = await C.get('/api/parliament');
+  check('GET /api/parliament: partySeats NUSA 40 + MUDA 20 (kursi terbanyak dulu), jumlah = 60 kursi terisi',
+    r.status === 200 && Array.isArray(r.data.partySeats) && r.data.partySeats.length === 2
+    && r.data.partySeats[0].name === 'Partai Nusantara' && r.data.partySeats[0].seats === 40
+    && r.data.partySeats[1].name === 'Partai Muda' && r.data.partySeats[1].seats === 20
+    && r.data.partySeats.reduce((a, p) => a + p.seats, 0) === r.data.filledSeats && r.data.filledSeats === 60,
+    `status=${r.status} partySeats=${JSON.stringify(r.data.partySeats)} filled=${r.data.filledSeats}`);
   // Regresi bug live 27 Nov 2026: GET /api/parties 500 di Postgres begitu
   // ada partai (ORDER BY "seats" ambigu: p.* sudah membawa parties.seats
   // + alias subquery `seats`). SQLite diam-diam memilih salah satunya,

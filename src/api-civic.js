@@ -979,6 +979,15 @@ export function registerCivic(app) {
     const country = await getMyCountry({ one }, c);
     const countryId = country?.id || -1;
     const seats = await one('SELECT COALESCE(SUM(seats),0) AS n FROM party_seats WHERE country_id = ?', [countryId]);
+    // v5.7.3 — Diagram hemicycle parlemen: alokasi kursi PER PARTAI di
+    // negara ini (party_seats), untuk diwarnai per partai di frontend.
+    // Hanya partai yang punya kursi (> 0), urut kursi terbanyak dulu.
+    const partySeats = await sql(
+      `SELECT p.id, p.name, ps.seats FROM party_seats ps
+       JOIN parties p ON p.id = ps.party_id
+       WHERE ps.country_id = ? AND ps.seats > 0
+       ORDER BY ps.seats DESC, p.name ASC`,
+      [countryId]);
     const isMp = await isMpCitizen(c);
     const laws = await sql(
       `SELECT l.*, u.username AS proposer_name FROM laws l
@@ -1020,6 +1029,7 @@ export function registerCivic(app) {
     // negara: pajak 0%, upah ×1, perjalanan 1 tiket.
     res.json({
       totalSeats: 60, filledSeats: Number(seats.n), majority: 31, isMp,
+      partySeats: partySeats.map((ps) => ({ id: ps.id, name: ps.name, seats: Number(ps.seats) })),
       parliamentOpen: par.open, parliamentOpensAt: par.opensAt,
       country: countrySummary(country),
       laws, myVotes: Object.fromEntries(myVotes.map((v) => [v.law_id, v.vote])),
