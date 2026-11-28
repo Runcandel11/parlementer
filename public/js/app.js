@@ -56,6 +56,20 @@ function wibHourNow() {
 function isDoubleXpNow() { return wibHourNow() === 0; }
 function doubleXpChip() { return isDoubleXpNow() ? `<p class="small" style="color:#ffd700">🌙 <b>JAM GANDA XP ×2</b> — sekarang (00:00–01:00 WIB)! Shift apa pun memberi XP dua kali lipat.</p>` : ''; }
 
+// Blok toggle kerja otomatis 24 jam (v4.5.0, Premium): tampil di panel
+// PEKERJAANMU bila sudah bekerja. Non-Premium hanya melihat catatan
+// bahwa fitur ini khusus Premium.
+function autoWorkBlock() {
+  const aw = ME.autoWork || { active: false, until: 0, shifts: 0, paused: false, lastAt: 0 };
+  if (!ME.citizen.isPremium) return `<p class="muted small">🤖 Kerja otomatis 24 jam (jalan walau aplikasi ditutup) khusus Premium — shift berjalan otomatis di server selama 24 jam.</p>`;
+  const status = !aw.active ? 'Mati — nyalakan untuk kerja otomatis 24 jam.'
+    : aw.paused ? `Aktif, DIJEDA — kelelahan ≥ 10.000, lanjut otomatis saat pulih di bawah 10.000. ${aw.shifts} shift otomatis sejauh ini.`
+    : `Aktif · sisa ${fmtRemaining(aw.until - Date.now())} · ${aw.shifts} shift otomatis · shift jalan tiap energi penuh (100).`;
+  return `<div class="kv"><span class="k">🤖 Kerja otomatis 24 jam</span><span class="v">${aw.active ? (aw.paused ? 'DIJEDA' : 'AKTIF') : 'MATI'}</span></div>
+  <p class="muted small">${status}</p>
+  <div class="row"><button class="btn-gold btn-sm" id="btn-autowork" type="button">${aw.active ? 'MATIKAN KERJA OTOMATIS' : 'NYALAKAN KERJA OTOMATIS (24 JAM)'}</button></div>`;
+}
+
 // Foto profil: tampil BESAR dengan aspek asli (tiket #11 LIO, v3.1.0) —
 // bukan lingkaran kecil yang memotong foto. Avatar lama (kotak 256×256)
 // tetap tampil normal sebagai kotak. Bila belum ada foto, inisial 144px.
@@ -629,7 +643,10 @@ function renderHUD() {
     if (ME.parliamentOpen) pcd.hidden = true;
     else {
       pcd.hidden = false;
-      pcd.innerHTML = `<b>🏛️ Parlemen dibuka ${fmtCountdown(Number(ME.parliamentOpensAt) - Date.now())} lagi</b> · 2 Des 2026`;
+      // (v4.5.0, perbaikan offside): tanggal dipisah ke baris kedua —
+      // dulu "· 2" menggantung di ujung baris pertama saat countdown
+      // melipat di layar HP sempit.
+      pcd.innerHTML = `<b>🏛️ Parlemen dibuka ${fmtCountdown(Number(ME.parliamentOpensAt) - Date.now())} lagi</b><br><span class="muted small">2 Des 2026</span>`;
     }
   }
   // Tombol peti pasokan harian (rombak UI): di bawah hamburger; berdenyut
@@ -962,9 +979,9 @@ ROUTES.dashboard = async () => {
       <span class="muted">Hasil ×${fatigueMultNow} · mulai 10.000: ×0.75</span>
     </button>
     <div class="stat-block">
-      <div class="stat-head"><span class="lbl">🌾 MAKANAN</span><span class="muted">Sisa roti hari ini ${10 - (c.bread_today || 0)}/10</span></div>
+      <div class="stat-head"><span class="lbl">🌾 MAKANAN</span><span class="muted">Sisa roti hari ini ${(c.breadLimit || 10) - (c.bread_today || 0)}/${c.breadLimit || 10}</span></div>
       <div class="food-grid" id="dash-food" style="margin-top:10px"><p class="muted small">Memuat…</p></div>
-      <p class="muted small" style="margin-top:8px">Ketuk kartu untuk makan. Batas 10 roti per hari.</p>
+      <p class="muted small" style="margin-top:8px">Ketuk kartu untuk makan. Batas ${c.breadLimit || 10} roti per hari.</p>
     </div>
     <div class="stat-block">
       <div class="stat-head"><span class="lbl">👛 DOMPET</span><button class="btn-text gold" type="button" data-goto="#/shop">TOP-UP ›</button></div>
@@ -1010,7 +1027,7 @@ ROUTES.dashboard = async () => {
   <div class="panel" id="dash-inv">
     <h3>📦 INVENTARIS</h3>
     <div class="inv-grid" id="dash-inv-grid"><p class="muted small">Memuat…</p></div>
-    <p class="muted small" style="margin-top:8px">Sisa roti hari ini: ${10 - (c.bread_today || 0)}/10 · <button class="btn-text gold" type="button" data-goto="#/inventory" style="padding:0">Lihat Semua ›</button></p>
+    <p class="muted small" style="margin-top:8px">Sisa roti hari ini: ${(c.breadLimit || 10) - (c.bread_today || 0)}/${c.breadLimit || 10} · <button class="btn-text gold" type="button" data-goto="#/inventory" style="padding:0">Lihat Semua ›</button></p>
   </div>
   <div class="panel" id="dash-convoy">
     <div class="panel-head"><h3>🚚 KONVOI</h3><button class="btn-text gold" type="button" data-goto="#/convoy">KELOLA ›</button></div>
@@ -1243,7 +1260,7 @@ ROUTES.inventory = async () => {
   const foodQty = (t) => foods.find((f) => f.tier === t)?.qty || 0;
   $('#page').innerHTML = page('INVENTARIS', `${inv.totalQty} unit · ${inv.items.length} jenis barang · nilai pasar ±${fmtRp(inv.marketValue)}`, `
   <div class="panel"><h3>🍞 MAKANAN</h3>
-    <p class="muted small">Sisa roti hari ini: ${10 - ME.citizen.bread_today}/10 · Ketuk kartu untuk makan.</p>
+    <p class="muted small">Sisa roti hari ini: ${(ME.citizen.breadLimit || 10) - ME.citizen.bread_today}/${ME.citizen.breadLimit || 10} · Ketuk kartu untuk makan.</p>
     <div class="food-grid" style="margin-top:10px">${[1, 2, 3, 4, 5].map((t) => {
       const q = foodQty(t);
       return `<button class="food-card ${q ? '' : 'empty'}" type="button" data-eat="${t}" ${q ? '' : 'disabled'} aria-label="Makan Makanan T${t}, tambah ${t * 10} energi">
@@ -1359,7 +1376,7 @@ ROUTES.notifications = async () => {
     ${ann.announcements.length ? ann.announcements.map((a) => `
       <div class="${a.read ? '' : 'announce-unread'}" style="margin-bottom:14px">
         <div class="kv"><span class="k"><span class="chip">Update #${a.num}</span> <b>${esc(a.title)}</b><br><small class="muted">${fmtDate(a.created_at)}</small></span>
-        <span class="v small">${a.read ? '<span class="muted">Dibaca</span>' : `<button class="btn-gold btn-sm" data-ann-read="${a.id}">Tandai Dibaca</button>`}</span></div>
+        <span class="v small" style="white-space:nowrap;flex-shrink:0">${a.read ? '<span class="muted">Dibaca</span>' : `<button class="btn-gold btn-sm" data-ann-read="${a.id}">Tandai Dibaca</button>`}</span></div>
         <p class="announce-body">${esc(a.body)}</p>
       </div>`).join('')
       : '<p class="muted">Belum ada pengumuman.</p>'}
@@ -2396,7 +2413,8 @@ ROUTES.jobs = async () => {
     <p class="muted small">Satu giliran memakai energimu sampai 100 — hadiah DAN XP sebanding dengan energi yang dipakai (50 energi → ~50% hadiah + 10 XP; 1 energi pun tetap dapat 1 XP). ${myJob.salary_type === 'goods' ? 'Lowongan ADMIN dibayar bahan mentah, tanpa pajak.' : myJob.salary_type === 'share' ? 'Dibayar dalam bentuk barang (bagi hasil).' : 'Gaji dipotong pajak penghasilan (tarif sesuai UU yang berlaku).'}</p>
     ${doubleXpChip()}
     <div class="row"><button class="btn-gold" id="btn-shift" ${ME.citizen.energy <= 0 ? 'disabled' : ''}>KERJAKAN SATU GILIRAN (${Math.min(ME.citizen.energy, 100)} ⚡)</button>
-    <button class="btn-ghost" id="btn-quit">Berhenti Kerja</button></div></div>` : `${doubleXpChip()}`}
+    <button class="btn-ghost" id="btn-quit">Berhenti Kerja</button></div>
+    ${autoWorkBlock()}</div>` : `${doubleXpChip()}`}
   <div class="panel"><h3>📍 DI WILAYAHMU${myRegionName ? ' — ' + esc(myRegionName.toUpperCase()) : ''}</h3>
     ${data.adminPayMult && data.adminPayMult !== 1 ? `<p class="muted small">Upah ADMIN saat ini ${Math.round(data.adminPayMult * 100)}% dari upah dasar (UU yang berlaku).</p>` : ''}
     ${localJobs.length ? `<div id="jobs-local-list">${localJobs.map((j) => jobCard(j, true)).join('')}</div>` : emptyState('💼', 'Belum ada lowongan di wilayahmu', 'Lowongan ADMIN dan perusahaan warga akan muncul di sini.')}
@@ -2407,6 +2425,14 @@ ROUTES.jobs = async () => {
     <div id="jobs-other-list" hidden>${otherJobs.map((j) => jobCard(j, false)).join('')}</div>
   </div>`);
   $('#btn-shift')?.addEventListener('click', doShift);
+  $('#btn-autowork')?.addEventListener('click', async () => {
+    const aw = ME.autoWork || { active: false };
+    try {
+      const r = await post('/api/jobs/auto-work', { on: !aw.active });
+      toast(r.autoWork?.active ? 'Kerja otomatis aktif 24 jam — shift jalan walau aplikasi ditutup.' : 'Kerja otomatis dimatikan.');
+      await refreshMe(); route();
+    } catch (e) { toast(e.message); }
+  });
   $('#btn-quit')?.addEventListener('click', async () => {
     try { await post('/api/jobs/quit'); toast('Kamu berhenti bekerja.'); await refreshMe(); route(); }
     catch (e) { toast(e.message); }
@@ -4150,7 +4176,7 @@ ROUTES.book = async () => {
     ${ann.announcements.length ? ann.announcements.map((a) => `
       <div style="margin-bottom:16px">
         <div class="kv"><span class="k"><span class="chip">Update #${a.num}</span> <b>${esc(a.title)}</b></span>
-        <span class="v small muted" style="white-space:nowrap">${fmtDate(a.created_at)}</span></div>
+        <span class="v small muted" style="white-space:nowrap;flex-shrink:0">${fmtDate(a.created_at)}</span></div>
         <p class="announce-body">${esc(a.body)}</p>
       </div>`).join('')
       : '<p class="muted">Belum ada pengumuman.</p>'}

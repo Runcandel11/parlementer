@@ -56,7 +56,7 @@ async function main() {
   async function startServer() {
     server = spawn('node', ['server.js'], {
       cwd: ROOT,
-      env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret', ADMIN_BOOTSTRAP_CODE: 'e2e-bootstrap-code', ADINPLAY_PROPERTY_ID: 'e2e-test-property' },
+      env: { ...process.env, PORT: String(PORT), DATABASE_PATH: DB_PATH, JWT_SECRET: 'e2e-test-secret', ADMIN_BOOTSTRAP_CODE: 'e2e-bootstrap-code', ADINPLAY_PROPERTY_ID: 'e2e-test-property', AUTO_WORK_INTERVAL_MS: '500' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout.on('data', (d) => { serverLog += d; });
@@ -3181,6 +3181,109 @@ async function main() {
     check('Tabel audit ad_rewards mencatat semua grant (7 baris)', Number(n.n) === 7, `n=${n.n}`);
     dbAds.close();
   }
+
+  console.log('\n[31] v4.5.0 — roti Premium (bug cap + jatah 25) + kerja otomatis 24 jam');
+  const dbAW = new DatabaseSync(DB_PATH);
+  const setEnergyW = (id, energy) => dbAW.prepare('UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ?').run(energy, Date.now(), id);
+  // --- (A) Warga Premium baru + pekerjaan ADMIN di wilayahnya.
+  // Registrasi dari 127.0.0.1 sudah tepat 20 (batas anti multi-akun) —
+  // AW + V2 memakai IP berbeda lewat X-Forwarded-For (pola [23b]/[28]).
+  const AW = new Client();
+  AW.extraHeaders = { 'X-Forwarded-For': '127.0.0.31' };
+  r = await AW.post('/api/auth/register', { email: 'warga_aw@test.local', password: 'rahasia123', username: 'warga_aw' });
+  check('Warga AW terdaftar', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  let meW = (await AW.get('/api/me')).data;
+  const wUserId = meW.user.id;
+  const wId = meW.citizen.id;
+  dbAW.prepare('UPDATE users SET premium_until = ? WHERE id = ?').run(Date.now() + 86400000, wUserId);
+  r = await AW.get('/api/me');
+  check('AW Premium: cap energi 120 (100 + 20)', r.data.citizen.energyCap === 120, `cap=${r.data.citizen.energyCap}`);
+  check('/api/me: breadLimit Premium = 25', r.data.citizen.breadLimit === 25, `breadLimit=${r.data.citizen.breadLimit}`);
+  const jobsW = (await AW.get('/api/jobs')).data.jobs || [];
+  const jobW = jobsW.find((j) => j.region_id === meW.citizen.region_id && j.is_admin === 1)
+    || jobsW.find((j) => j.region_id === meW.citizen.region_id);
+  check('Ada lowongan di wilayah AW', !!jobW, `jobs=${jobsW.length}`);
+  r = await AW.post('/api/jobs/apply', { job_id: jobW.id });
+  check('AW melamar pekerjaan', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  // --- (A1) Bug roti Premium: makan di cap non-Premium (100) harus naik.
+  await ADM.post('/api/admin/item', { user_id: wUserId, commodity: 'Makanan', tier: 1, qty: 40 });
+  setEnergyW(wId, 100);
+  r = await AW.post('/api/eat', { tier: 1 });
+  check('Premium makan T1 di energi 100 → 110 (dulu mentok 100, roti hilang)', r.status === 200 && r.data.energy === 110 && r.data.gained === 10, `status=${r.status} energy=${r.data.energy} gained=${r.data.gained} ${r.data.error || ''}`);
+  // --- (A2) Minum juga memakai cap Premium: 119 → 120.
+  r = await AW.post('/api/shop/energy-drink', { qty: 2 });
+  check('AW beli 2 kaleng minuman energi', r.status === 200 && r.data.qty === 2, `status=${r.status} ${r.data.error || ''}`);
+  setEnergyW(wId, 119);
+  r = await AW.post('/api/inventory/drink', { qty: 1 });
+  check('Premium minum di energi 119 → 120 (gained 1, bukan 0)', r.status === 200 && r.data.energy === 120 && r.data.gained === 1, `status=${r.status} gained=${r.data.gained} energy=${r.data.energy} ${r.data.error || ''}`);
+  // --- (B) Jatah roti Premium 25/hari; misi 'bread' tetap 10.
+  dbAW.prepare('UPDATE citizens SET bread_today = 0 WHERE id = ?').run(wId);
+  let eatOk = 0;
+  for (let i = 0; i < 25; i++) { const er = await AW.post('/api/eat', { tier: 1 }); if (er.status === 200) eatOk++; }
+  check('Premium makan 25 roti: semua lolos', eatOk === 25, `lolos ${eatOk}/25`);
+  r = await AW.post('/api/eat', { tier: 1 });
+  check('Roti ke-26 Premium ditolak (400, menyebut 25)', r.status === 400 && /\(25\)/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  r = await AW.get('/api/missions');
+  check("Misi harian 'bread' tetap target 10 (bukan 25)", (r.data.missions || []).find((m) => m.key === 'bread')?.target === 10, JSON.stringify((r.data.missions || []).find((m) => m.key === 'bread')));
+  // --- (B2) Non-Premium tetap 10/hari + breadLimit 10.
+  const V2 = new Client();
+  V2.extraHeaders = { 'X-Forwarded-For': '127.0.0.32' };
+  r = await V2.post('/api/auth/register', { email: 'warga_v2@test.local', password: 'rahasia123', username: 'warga_v2' });
+  check('Warga V2 (non-Premium) terdaftar', r.status === 200 && r.data.ok);
+  const meV2 = (await V2.get('/api/me')).data;
+  check('/api/me: breadLimit non-Premium = 10', meV2.citizen.breadLimit === 10, `breadLimit=${meV2.citizen.breadLimit}`);
+  await ADM.post('/api/admin/item', { user_id: meV2.user.id, commodity: 'Makanan', tier: 1, qty: 15 });
+  let eatOk2 = 0;
+  for (let i = 0; i < 10; i++) { const er = await V2.post('/api/eat', { tier: 1 }); if (er.status === 200) eatOk2++; }
+  check('Non-Premium makan 10 roti: semua lolos', eatOk2 === 10, `lolos ${eatOk2}/10`);
+  r = await V2.post('/api/eat', { tier: 1 });
+  check('Roti ke-11 non-Premium ditolak (400, menyebut 10)', r.status === 400 && /\(10\)/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+  // --- (D) Kerja otomatis.
+  r = await V2.post('/api/jobs/auto-work', { on: true });
+  check('Non-Premium menyalakan auto-kerja → 403', r.status === 403, `status=${r.status}`);
+  r = await AW.post('/api/jobs/auto-work', { on: true });
+  check('Premium menyalakan auto-kerja (24 jam)', r.status === 200 && r.data.autoWork?.active === true, `status=${r.status} ${r.data.error || ''}`);
+  // Pemicu runner: tunggu > interval (500 ms, env e2e) + GET /api/me,
+  // lalu beri runner waktu jalan (fire-and-forget dari middleware).
+  const triggerAutoWork = async () => { await sleep(700); await AW.get('/api/me'); await sleep(1200); };
+  setEnergyW(wId, 100);
+  const invBefore = (await AW.get('/api/inventory')).data.items.find((i) => i.name === jobW.resource)?.qty || 0;
+  await triggerAutoWork();
+  meW = (await AW.get('/api/me')).data;
+  check('Auto-kerja: 1 shift jalan sendiri (energi 100 → 0, shifts=1)', meW.citizen.energy === 0 && meW.autoWork?.shifts === 1, `energi=${meW.citizen.energy} shifts=${meW.autoWork?.shifts}`);
+  const invAfter = (await AW.get('/api/inventory')).data.items.find((i) => i.name === jobW.resource)?.qty || 0;
+  check('Auto-kerja: bayaran shift masuk inventaris', invAfter > invBefore, `${invBefore} → ${invAfter}`);
+  // Jeda kelelahan: fatigue 10.000 → dijeda, tidak ada shift baru.
+  dbAW.prepare('UPDATE citizens SET fatigue = 10000 WHERE id = ?').run(wId);
+  setEnergyW(wId, 100);
+  await triggerAutoWork();
+  meW = (await AW.get('/api/me')).data;
+  check('Kelelahan 10.000: auto-kerja DIJEDA, shift tidak jalan', meW.autoWork?.paused === true && meW.autoWork?.shifts === 1 && meW.citizen.energy === 100, `paused=${meW.autoWork?.paused} shifts=${meW.autoWork?.shifts} energi=${meW.citizen.energy}`);
+  // Pulih: fatigue 0 + energi 100 → lanjut, shifts=2.
+  dbAW.prepare('UPDATE citizens SET fatigue = 0 WHERE id = ?').run(wId);
+  setEnergyW(wId, 100);
+  await triggerAutoWork();
+  meW = (await AW.get('/api/me')).data;
+  check('Kelelahan pulih: auto-kerja lanjut (shifts=2, tidak dijeda)', meW.autoWork?.paused === false && meW.autoWork?.shifts === 2, `paused=${meW.autoWork?.paused} shifts=${meW.autoWork?.shifts}`);
+  // Kedaluwarsa: until di masa lalu → mati + notifikasi ringkasan.
+  dbAW.prepare('UPDATE citizens SET auto_work_until = ? WHERE id = ?').run(Date.now() - 1000, wId);
+  await triggerAutoWork();
+  meW = (await AW.get('/api/me')).data;
+  check('Masa 24 jam habis: auto-kerja mati', meW.autoWork?.active === false, `active=${meW.autoWork?.active}`);
+  const notifs = (await AW.get('/api/notifications')).data.notifications || [];
+  check('Notifikasi ringkasan "Kerja otomatis selesai" terkirim', notifs.some((n) => n.title === 'Kerja otomatis selesai'), `notif=${notifs.map((n) => n.title).slice(0, 5).join('|')}`);
+  // Toggle off + quit mematikan.
+  r = await AW.post('/api/jobs/auto-work', { on: true });
+  check('Nyalakan lagi untuk tes mati', r.status === 200 && r.data.autoWork?.active === true);
+  r = await AW.post('/api/jobs/auto-work', { on: false });
+  check('Matikan via toggle → tidak aktif', r.status === 200 && r.data.autoWork?.active === false, `status=${r.status}`);
+  r = await AW.post('/api/jobs/auto-work', { on: true });
+  check('Nyalakan lagi untuk tes quit', r.status === 200 && r.data.autoWork?.active === true);
+  r = await AW.post('/api/jobs/quit');
+  check('Keluar pekerjaan berhasil', r.status === 200 && r.data.ok);
+  meW = (await AW.get('/api/me')).data;
+  check('Quit mematikan auto-kerja', meW.autoWork?.active === false && !meW.citizen.job_id, `active=${meW.autoWork?.active} job=${meW.citizen.job_id}`);
+  dbAW.close();
 
   setDayO(1);
 

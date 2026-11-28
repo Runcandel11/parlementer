@@ -78,7 +78,10 @@
 // pemilik 28 Nov 2026): tiap iklan video yang ditonton sampai selesai
 // memberi +30 emas, tanpa batas harian; token tontonan satu kali pakai
 // + jeda minimum antar grant sebagai anti-spam.
-export const VERSION = '4.4.0';
+// Update sedang v4.5.0 = perbaikan bug roti Premium + jatah roti Premium
+// 25/hari + perbaikan teks meluber (Buku/Notifikasi/countdown) + kerja
+// otomatis Premium 24 jam yang jalan di server walau aplikasi ditutup.
+export const VERSION = '4.5.0';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
@@ -493,7 +496,38 @@ export const SHOP_PREMIUM = [
   { months: 6, price: 25000, perMonth: 4167 },
   { months: 12, price: 45000, perMonth: 3750 },
 ];
-export const PREMIUM_PERKS = 'Batas energi +20, +1 slot konvoi, dan namamu berwarna Premium di chat.';
+export const PREMIUM_PERKS = 'Batas energi +20, jatah roti 25/hari, kerja otomatis 24 jam, +1 slot konvoi, dan namamu berwarna Premium di chat.';
+
+// --- Jatah roti harian (v4.5.0, perintah pemilik 28 Nov 2026) ---
+// Non-Premium 10 roti/hari; Premium 25 roti/hari. Satu sumber kebenaran
+// untuk server (/api/eat) + klien (/api/me mengirim breadLimit). Target
+// misi harian 'bread' TETAP 10 (DAILY_MISSIONS di bawah) — bukan 25.
+export const BREAD_DAILY_LIMIT = 10;
+export const BREAD_DAILY_LIMIT_PREMIUM = 25;
+export function breadLimitFor(isPremium) {
+  return isPremium ? BREAD_DAILY_LIMIT_PREMIUM : BREAD_DAILY_LIMIT;
+}
+
+// --- Kerja otomatis Premium 24 jam (v4.5.0, "jalan walau ditutup") ---
+// Shift berjalan otomatis di SERVER (runner berkala), walau aplikasi
+// ditutup. Aturan jeda/berhenti otomatis (dipilih mengikuti peringatan
+// kelelahan yang sudah disampaikan ke pemilik):
+//  - hanya shift PENUH yang dijalankan otomatis: energi harus >= 100
+//    (regen +2/mnt -> ±1 shift penuh per 50 menit; shift parsial tidak
+//    dijalankan otomatis supaya hasilnya tidak receh dan kelelahan tidak
+//    menumpuk dari shift-shift kecil);
+//  - JEDA saat kelelahan >= 10.000 (ambang pengali ×0,75): kerja otomatis
+//    tidak pernah bekerja dengan hasil terpotong; jeda berakhir otomatis
+//    saat kelelahan pulih di bawah 10.000 (tick harian memulihkan 2000).
+//  - BERHENTI bila: 24 jam habis, Premium habis, atau pemain keluar/
+//    pindah pekerjaan. Pemain diberi tahu sekali lewat notifikasi SISTEM
+//    tiap kali berhenti/dijeda.
+//  - Runner jalan paling sering 1× per 5 menit (throttle di modul
+//    auto-work.js; tes boleh menyuntik lewat env AUTO_WORK_INTERVAL_MS).
+export const AUTO_WORK_DURATION_MS = 24 * 60 * 60 * 1000;
+export const AUTO_WORK_MIN_ENERGY = 100;
+export const AUTO_WORK_FATIGUE_PAUSE = 10000;
+export const AUTO_WORK_INTERVAL_MS = Number(process.env.AUTO_WORK_INTERVAL_MS || 5 * 60 * 1000);
 
 // --- Batas energi & regen (Tahap 4) ---
 // Batas dasar naik 5 per level: 100 + 5×(level−1). Bonus lama tetap

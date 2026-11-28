@@ -18,12 +18,19 @@ import {
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, PRODUCTION_INPUT, productionInputText, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS, convoySlotsFor,
   ENERGY_DRINK_NAME, ENERGY_DRINK_PRICE_GOLD, ENERGY_DRINK_ENERGY,
+  breadLimitFor, AUTO_WORK_DURATION_MS,
   PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
   MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, tradeReputation, worldEventFor,
   DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
   ONLINE_WINDOW_MS, onlineStatus,
   ADINPLAY_PROPERTY_ID, AD_REWARD_GOLD, AD_TOKEN_TTL_MS, AD_MIN_INTERVAL_MS,
 } from './game.js';
+
+// Diekspos untuk modul kerja otomatis (src/auto-work.js): performShift
+// memakai helper lokal registerCore (addXp, notify, addItem, takeItem)
+// sehingga tidak bisa diimpor langsung dari modul lain — registerCore
+// mengisi field ini saat aplikasi dibuat (sebelum server menerima request).
+export const shiftRunner = { performShift: null };
 
 export function registerCore(app) {
   const r = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -478,7 +485,7 @@ export function registerCore(app) {
         avatar: c.avatar || null,
         is_admin: !!c.is_admin, is_banned: !!c.is_banned, banned_reason: c.banned_reason || '',
       },
-      citizen: { ...c, isPremium, energyCap, trainCosts, trainCooldowns },
+      citizen: { ...c, isPremium, energyCap, trainCosts, trainCooldowns, breadLimit: breadLimitFor(isPremium) },
       // Kredit skor (v3.0.0): skor + tier + batasan yang berlaku — dipakai
       // dashboard untuk panel skor (satu sumber angka dari game.js).
       credit: creditInfo(c.credit_score),
@@ -501,6 +508,16 @@ export function registerCore(app) {
       // hadiah per iklan — Property ID bukan rahasia (tampil di sumber
       // halaman di semua integrasi AdinPlay), jadi aman dikirim ke klien.
       ads: { enabled: ADINPLAY_PROPERTY_ID !== '', propertyId: ADINPLAY_PROPERTY_ID, rewardGold: AD_REWARD_GOLD },
+      // Kerja otomatis 24 jam (v4.5.0): status untuk toggle di halaman
+      // Pekerjaan — aktif/mati, akhir masa aktif, jumlah shift otomatis,
+      // sedang dijeda (kelelahan) atau tidak, jam shift terakhir.
+      autoWork: {
+        active: (c.auto_work_until || 0) > Date.now(),
+        until: c.auto_work_until || 0,
+        shifts: c.auto_work_shifts || 0,
+        paused: !!(c.auto_work_paused),
+        lastAt: c.auto_work_last_at || 0,
+      },
     });
   }));
 
@@ -620,20 +637,29 @@ export function registerCore(app) {
     const { tier } = req.body || {};
     const t = Math.max(1, Math.min(5, Number(tier) || 1));
     const food = await one('SELECT id FROM commodities WHERE name = ?', ['Makanan']);
+    // (v4.5.0, perbaikan bug roti Premium): premium_until HANYA ada di
+    // tabel users — baris `locked` (SELECT * FROM citizens) TIDAK
+    // pernah punya kolom itu, jadi cap lama selalu tanpa bonus +20.
+    // Status Premium diambil dari req.citizen (loadCitizen JOIN users).
+    const isPremium = (req.citizen.premium_until || 0) > Date.now();
+    const limit = breadLimitFor(isPremium);
     const result = await tx(async (tx) => {
       const locked = await tx.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
-      if (locked.bread_today >= 10) throw Object.assign(new Error('Jatah roti harian (10) sudah habis.'), { status: 400 });
+      if (locked.bread_today >= limit) throw Object.assign(new Error(`Jatah roti harian (${limit}) sudah habis.`), { status: 400 });
       const ok = await takeItem(locked.id, food.id, t, 1, tx);
       if (!ok) throw Object.assign(new Error(`Tidak ada Makanan T${t} di inventaris.`), { status: 400 });
       const gain = foodEnergy(t);
       // Batas energi (Tahap 4): energyCapFor — 100 + 5×(level−1), +20
       // Premium, +10 RS Lapangan. Selaras dengan /api/me dan tick harian.
       const buildings = await convoyBuildings(locked.id, tx);
-      const cap = energyCapFor(locked.level, locked.premium_until > Date.now(), buildings.has('health'));
+      const cap = energyCapFor(locked.level, isPremium, buildings.has('health'));
       const energy = Math.min(cap, locked.energy + gain);
-      const upd = await tx.run('UPDATE citizens SET energy = ?, bread_today = bread_today + 1 WHERE id = ? AND bread_today < 10', [energy, locked.id]);
-      if (!upd.changes) throw Object.assign(new Error('Jatah roti harian (10) sudah habis.'), { status: 400 });
-      return { energy, gained: gain, locked };
+      const upd = await tx.run('UPDATE citizens SET energy = ?, bread_today = bread_today + 1 WHERE id = ? AND bread_today < ?', [energy, locked.id, limit]);
+      if (!upd.changes) throw Object.assign(new Error(`Jatah roti harian (${limit}) sudah habis.`), { status: 400 });
+      // `gained` = SELISIH energi nyata (bukan nominal): bila energi
+      // sudah di cap, roti tetap terpotong tapi gained = 0 — toast tidak
+      // boleh lagi berbohong "Energi +10".
+      return { energy, gained: energy - locked.energy, locked };
     });
     // (Tahap 7) Tulis misi 'bread' ke JSON dihapus — tulis itu mati: progres
     // roti dibaca dari bread_today (sudah +1 di UPDATE di atas). Kolom
@@ -672,7 +698,9 @@ export function registerCore(app) {
     const result = await tx(async (t) => {
       const locked = await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
       const buildings = await convoyBuildings(locked.id, t);
-      const cap = energyCapFor(locked.level, locked.premium_until > Date.now(), buildings.has('health'));
+      // (v4.5.0, perbaikan bug roti Premium — sama seperti /api/eat):
+      // premium_until hanya ada di users; status Premium dari req.citizen.
+      const cap = energyCapFor(locked.level, (req.citizen.premium_until || 0) > Date.now(), buildings.has('health'));
       const room = cap - locked.energy;
       if (room <= 0) throw Object.assign(new Error('Energi sudah penuh.'), { status: 400 });
       const stock = await t.one('SELECT * FROM inventory WHERE citizen_id = ? AND commodity_id = ? AND tier = 1', [locked.id, drink.id]);
@@ -1041,6 +1069,8 @@ export function registerCore(app) {
 
   app.post('/api/jobs/apply', authRequired, citizenRequired, r(async (req, res) => {
     const { job_id } = req.body || {};
+    const wasAutoWork = (req.citizen.auto_work_until || 0) > Date.now();
+    const oldJobId = req.citizen.job_id;
     // Atomik: kunci baris lowongan + baris warga, baca ulang syarat di dalam
     // tx, naikkan kursi hanya bila masih ada (WHERE seats_taken < seats).
     await tx(async (t) => {
@@ -1054,12 +1084,17 @@ export function registerCore(app) {
       // (jumlah pekerja dibaca dari citizens.job_id di GET /api/jobs).
       if (!job.is_admin && job.seats_taken >= job.seats) throw Object.assign(new Error('Kursi lowongan ini sudah penuh.'), { status: 400 });
       if (c.job_id) await t.run('UPDATE jobs SET seats_taken = seats_taken - 1 WHERE id = ? AND seats_taken > 0', [c.job_id]);
+      // Pindah pekerjaan mematikan kerja otomatis (v4.5.0): shift
+      // otomatis terikat pekerjaan saat aktivasi; nyalakan lagi manual
+      // di pekerjaan baru bila mau.
+      if (c.job_id && c.job_id !== job.id) await t.run('UPDATE citizens SET auto_work_until = 0, auto_work_started_at = 0, auto_work_paused = 0 WHERE id = ?', [c.id]);
       await t.run('UPDATE citizens SET job_id = ? WHERE id = ?', [job.id, c.id]);
       if (!job.is_admin) {
         const inc = await t.run('UPDATE jobs SET seats_taken = seats_taken + 1 WHERE id = ? AND seats_taken < seats', [job.id]);
         if (!inc.changes) throw Object.assign(new Error('Kursi lowongan ini sudah penuh.'), { status: 400 });
       }
     });
+    if (wasAutoWork && oldJobId && oldJobId !== Number(job_id)) await notify(req.citizen.id, 'SISTEM', 'Kerja otomatis dimatikan', 'Kamu pindah pekerjaan — kerja otomatis berhenti. Nyalakan lagi dari panel PEKERJAANMU bila mau.');
     await chronicleDone(req.citizen, 'job');
     res.json({ ok: true });
   }));
@@ -1067,17 +1102,28 @@ export function registerCore(app) {
   app.post('/api/jobs/quit', authRequired, citizenRequired, r(async (req, res) => {
     const c = req.citizen;
     if (!c.job_id) return res.status(400).json({ error: 'Kamu sedang tidak bekerja.' });
+    const wasAutoWork = (c.auto_work_until || 0) > Date.now();
     await tx(async (t) => {
       await t.run('UPDATE jobs SET seats_taken = seats_taken - 1 WHERE id = ? AND seats_taken > 0', [c.job_id]);
-      await t.run('UPDATE citizens SET job_id = NULL WHERE id = ?', [c.id]);
+      // Keluar pekerjaan mematikan kerja otomatis (v4.5.0).
+      await t.run('UPDATE citizens SET job_id = NULL, auto_work_until = 0, auto_work_started_at = 0, auto_work_paused = 0 WHERE id = ?', [c.id]);
     });
+    if (wasAutoWork) await notify(c.id, 'SISTEM', 'Kerja otomatis dimatikan', 'Kamu berhenti bekerja — kerja otomatis berhenti.');
     res.json({ ok: true });
   }));
 
-  app.post('/api/jobs/shift', authRequired, citizenRequired, r(async (req, res) => {
-    const c = await loadCitizen(req.userId);
-    if (!c.job_id) return res.status(400).json({ error: 'Kamu belum punya pekerjaan. Lamar dulu di Kantor Ketenagakerjaan.' });
+  // ---------- SHIFT (inti, dipakai endpoint manual + kerja otomatis) ----------
+  // Seluruh logika satu giliran kerja — gaji (tetap/bagi hasil/bahan
+  // ADMIN), XP proporsional, bonus perusahaan, kelelahan — dipusatkan di
+  // sini supaya shift manual (POST /api/jobs/shift) dan shift otomatis
+  // (modul auto-work.js) memakai rumus yang SAMA PERSIS. Hasil yang
+  // dikembalikan sama persis dengan yang dulu dikirim endpoint.
+  async function performShift(citizenId) {
+    const c = await loadCitizen(citizenId);
+    if (!c) throw Object.assign(new Error('Warga tidak ditemukan.'), { status: 404 });
+    if (!c.job_id) throw Object.assign(new Error('Kamu belum punya pekerjaan. Lamar dulu di Kantor Ketenagakerjaan.'), { status: 400 });
     const job = await one('SELECT * FROM jobs WHERE id = ?', [c.job_id]);
+    if (!job) throw Object.assign(new Error('Lowongan pekerjaanmu sudah tidak ada.'), { status: 400 });
     // Tarif pajak + pengali upah ADMIN yang berlaku (Tahap 5 — dari UU yang
     // disahkan, bukan hardcode). Gaji tetap dipotong tarif UU; lowongan
     // ADMIN dibayar bahan mentah × pengali UU (tanpa pajak). Tarif/pengali
@@ -1227,7 +1273,7 @@ export function registerCore(app) {
       const usdValue = Math.round(spent.qty * com.ref_usd * 100) / 100;
       const note = `${shiftPrefix(spent)}Dibayar ${spent.qty}× ${job.resource} (setara ~${fmtRp(usdValue)}).`;
       const xp = await rewardShift(spent);
-      return res.json({ ok: true, gross: usdValue, net: 0, tax: 0, goods: `${spent.qty}× ${job.resource}`, note: note + xpNoteSuffix(xp), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
+      return { ok: true, gross: usdValue, net: 0, tax: 0, goods: `${spent.qty}× ${job.resource}`, note: note + xpNoteSuffix(xp), xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
     }
     if (job.salary_type === 'share') {
       // Bagi hasil: 80–98% dibayar dalam bentuk barang (sumber daya perusahaan).
@@ -1245,7 +1291,7 @@ export function registerCore(app) {
       });
       goodsNote = `${shiftPrefix(spent)}Dibayar ${spent.units}× ${resource} (bagi hasil ${pct}%).${bonusNote(spent.bonus)}`;
       const xp = await rewardShift(spent);
-      return res.json({ ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, note: goodsNote + xpNoteSuffix(xp), companyBonus: spent.bonus || null, xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
+      return { ok: true, gross: spent.gross, net: 0, tax: 0, goods: `${spent.units}× ${resource}`, note: goodsNote + xpNoteSuffix(xp), companyBonus: spent.bonus || null, xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
     }
     const spent = await tx(async (t) => {
       const s = await spendEnergy(t);
@@ -1258,7 +1304,40 @@ export function registerCore(app) {
     });
     const xp = await rewardShift(spent);
     const baseNote = `${spent.full ? '' : `Shift ${spent.used} energi (${Math.round(spent.fraction * 100)}%).`}${bonusNote(spent.bonus)}`.trim();
-    res.json({ ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, note: (baseNote + xpNoteSuffix(xp)).trim(), companyBonus: spent.bonus || null, xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) });
+    return { ok: true, gross: spent.gross, net: spent.net, tax: spent.tax, note: (baseNote + xpNoteSuffix(xp)).trim(), companyBonus: spent.bonus || null, xpGained: xp.xpGained, doubleXp: xp.doubleXp, festivalXp: xp.festivalXp, energyUsed: spent.used, energyPct: Math.round(spent.fraction * 100) };
+  }
+
+  // Kerja otomatis memakai performShift yang sama — daftarkan di sini
+  // (registerCore berjalan sekali saat aplikasi dibuat).
+  shiftRunner.performShift = performShift;
+
+  // Endpoint manual: tipis — seluruh logika di performShift di atas.
+  app.post('/api/jobs/shift', authRequired, citizenRequired, r(async (req, res) => {
+    res.json(await performShift(req.citizen.id));
+  }));
+
+  // ---------- KERJA OTOMATIS 24 JAM (Premium, v4.5.0) ----------
+  // Toggle di panel PEKERJAANMU. Nyalakan: Premium + punya pekerjaan;
+  // aktif 24 jam sejak aktivasi, shift jalan otomatis di server (modul
+  // auto-work.js). Matikan: berhenti segera. Berhenti otomatis juga bila
+  // Premium habis / keluar-pindah pekerjaan / 24 jam habis (diurus runner).
+  app.post('/api/jobs/auto-work', authRequired, citizenRequired, r(async (req, res) => {
+    const { on } = req.body || {};
+    const c = req.citizen;
+    if (on) {
+      if ((c.premium_until || 0) <= Date.now()) return res.status(403).json({ error: 'Kerja otomatis khusus Premium.' });
+      if (!c.job_id) return res.status(400).json({ error: 'Kamu belum punya pekerjaan. Lamar dulu di Kantor Ketenagakerjaan.' });
+      const job = await one('SELECT id FROM jobs WHERE id = ?', [c.job_id]);
+      if (!job) return res.status(400).json({ error: 'Lowongan pekerjaanmu sudah tidak ada.' });
+      const now = Date.now();
+      const until = now + AUTO_WORK_DURATION_MS;
+      await run('UPDATE citizens SET auto_work_until = ?, auto_work_started_at = ?, auto_work_shifts = 0, auto_work_paused = 0, auto_work_last_at = 0 WHERE id = ?', [until, now, c.id]);
+      await notify(c.id, 'SISTEM', 'Kerja otomatis aktif', 'Shift berjalan otomatis di server selama 24 jam, walau aplikasi ditutup. Berhenti otomatis bila Premium habis, kamu pindah/keluar pekerjaan, atau waktunya habis.');
+      res.json({ ok: true, autoWork: { active: true, until, shifts: 0, paused: false, lastAt: 0 } });
+    } else {
+      await run('UPDATE citizens SET auto_work_until = 0, auto_work_started_at = 0, auto_work_paused = 0 WHERE id = ?', [c.id]);
+      res.json({ ok: true, autoWork: { active: false, until: 0, shifts: c.auto_work_shifts || 0, paused: false, lastAt: c.auto_work_last_at || 0 } });
+    }
   }));
 
   // ---------- PERUSAHAAN ----------

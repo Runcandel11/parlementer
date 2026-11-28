@@ -42,6 +42,7 @@
     "test:stage7-dom": "node test/stage7-dom.js",
     "test:bottom-nav": "node test/bottom-nav-dom.js",
     "test:ads": "node test/ads-dom.js",
+    "test:offside": "node test/offside-dom.js",
     "test:load": "node scripts/loadtest.mjs",
     "test:recovery": "node scripts/recovery-test.mjs"
   },

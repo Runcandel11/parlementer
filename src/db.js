@@ -371,6 +371,15 @@ CREATE TABLE IF NOT EXISTS citizens (
   train_eco_at BIGINT NOT NULL DEFAULT 0,
   fatigue INTEGER NOT NULL DEFAULT 0,
   bread_today INTEGER NOT NULL DEFAULT 0,
+  -- Kerja otomatis Premium 24 jam (v4.5.0): auto_work_until = akhir masa
+  -- aktif (epoch ms; 0 = mati); started_at = awal aktivasi; shifts =
+  -- jumlah shift otomatis pada aktivasi ini; paused = 1 bila dijeda
+  -- karena kelelahan >= 10.000; last_at = jam shift otomatis terakhir.
+  auto_work_until BIGINT NOT NULL DEFAULT 0,
+  auto_work_started_at BIGINT NOT NULL DEFAULT 0,
+  auto_work_shifts INTEGER NOT NULL DEFAULT 0,
+  auto_work_paused INTEGER NOT NULL DEFAULT 0,
+  auto_work_last_at BIGINT NOT NULL DEFAULT 0,
   energy_spent_today INTEGER NOT NULL DEFAULT 0,
   chat_today INTEGER NOT NULL DEFAULT 0,
   last_chat_at BIGINT NOT NULL DEFAULT 0,
@@ -1212,6 +1221,7 @@ export async function initDb() {
     await migrateStage6Columns(t);
     await migrateStage7Columns(t);
     await migrateStage8Columns(t);
+    await migrateAutoWorkColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1290,7 +1300,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 20;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1870,6 +1880,27 @@ async function migrateStage8Columns(t) {
     if (!keepIds.has(Number(row.id))) await t.run('DELETE FROM elections WHERE id = ?', [row.id]);
   }
   await t.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_elections_one_active ON elections(country_id, type) WHERE status IN ('scheduled','open')`);
+}
+
+// Migrasikan kolom kerja otomatis Premium 24 jam (v4.5.0) untuk database
+// yang sudah ada: citizens.auto_work_until / auto_work_started_at /
+// auto_work_shifts / auto_work_paused / auto_work_last_at. Idempotent:
+// kolom yang sudah ada tidak disentuh. Pola sama seperti
+// migrateOnlineColumns.
+async function migrateAutoWorkColumns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('citizens', 'auto_work_until', 'BIGINT NOT NULL DEFAULT 0');
+  await addCol('citizens', 'auto_work_started_at', 'BIGINT NOT NULL DEFAULT 0');
+  await addCol('citizens', 'auto_work_shifts', 'INTEGER NOT NULL DEFAULT 0');
+  await addCol('citizens', 'auto_work_paused', 'INTEGER NOT NULL DEFAULT 0');
+  await addCol('citizens', 'auto_work_last_at', 'BIGINT NOT NULL DEFAULT 0');
 }
 
 // Tanggal parlemen dibuka (redesain dunia 27 Nov 2026): disimpan di

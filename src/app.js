@@ -14,6 +14,7 @@ import { registerAdmin } from './api-admin.js';
 import { registerAppeals } from './api-appeals.js';
 import { getUserIdFromReq } from './util.js';
 import { maybeTick, ensureElections } from './tick.js';
+import { maybeAutoWork } from './auto-work.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,7 +83,10 @@ export function createApp() {
   // Tick harian dicek di setiap request API (jalan saat ada yang membuka game).
   // Ini satu-satunya mekanisme tick di serverless: tidak ada proses yang
   // jalan terus, jadi tidak ada setInterval di sana.
-  app.use('/api/', (req, res, next) => { maybeTick().catch(() => {}); next(); });
+  // Kerja otomatis Premium (v4.5.0) ikut dicek di sini — throttle internal
+  // (1× per 5 menit) membuatnya murah; di server biasa interval 10 menit
+  // di server.js juga memanggilnya.
+  app.use('/api/', (req, res, next) => { maybeTick().catch(() => {}); maybeAutoWork().catch(() => {}); next(); });
 
   // Penjaga akun banned: akun yang di-ban tidak bisa memakai API game apa
   // pun (klaim, latih, kerja, pasar, chat, dll.) walau sesinya masih hidup.
