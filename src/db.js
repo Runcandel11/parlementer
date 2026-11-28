@@ -8,7 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { ADMIN_JOB_SEATS, PARLIAMENT_OPENS_AT_DEFAULT } from './game.js';
+import { ACHIEVEMENTS, ADMIN_JOB_SEATS, PARLIAMENT_OPENS_AT_DEFAULT } from './game.js';
 
 // Email yang menjadi admin otomatis (satu-satunya admin; tidak ada endpoint
 // promosi admin). Dibandingkan case-insensitive (email selalu disimpan lowercase).
@@ -1189,7 +1189,7 @@ export async function initDb() {
     await migrateTravelColumns(t);
     await migrateCompanyColumns(t);
     await migrateCreditColumns(t);
-    await migrateXpScale(t);
+    await migrateXpRollback(t);
     await migrateStage6Columns(t);
     await migrateStage7Columns(t);
     await migrateStage8Columns(t);
@@ -1271,7 +1271,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 18;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -1512,14 +1512,236 @@ async function migrateCreditColumns(t) {
   await addCol('chat_reports', 'verdict', "TEXT NOT NULL DEFAULT ''");
 }
 
-// Skala XP v3.1.0 (tiket #22 LIO): threshold naik level dan semua sumber
-// XP dikali 20 (level*5 -> level*100, shift 1 -> 20 XP) supaya kecepatan
-// naik level tidak berubah. XP tersimpan pemain lama ikut dikali 20 agar
-// progres mereka (fraksi menuju level berikutnya) TETAP SAMA. Hanya jalan
-// sekali saat migrasi ke v14 (di dalam transaksi initDb — gagal = rollback
-// total, tidak bisa terkalikan dua kali).
-async function migrateXpScale(t) {
-  await t.run('UPDATE citizens SET xp = xp * 20 WHERE xp > 0');
+// INSIDEN 28 Nov 2026 — rollback inflasi XP (×160.000) + penghapusan
+// migrateXpScale (v4.3.4).
+// AKAR MASALAH: migrateXpScale (UPDATE citizens SET xp = xp * 20) dipanggil
+// TANPA PENJAGA di rantai migrasi initDb — bukan sekali saat rescale v3.1.0
+// (skema 14), melainkan di SETIAP kenaikan SCHEMA_VERSION (Tahap 6/7/8 =
+// skema 15/16/17). Total ×20^4 = ×160.000. Bukti: Vrix 1.760.000 XP =
+// 11 × 160.000 persis. Tombol "Pasokan Harian" (+40 XP via addXp) hanya
+// PEMICU: loop level-up di addXp memproses XP terinflasi sekaligus.
+// PERBAIKAN: pemanggilan migrateXpScale DIHAPUS dari rantai dan fungsinya
+// dihapus — rescale sudah selesai bersejarah; pemain baru mulai dari xp 0.
+// ROLLBACK (sekali, skema 18): untuk tiap warga, pool P = xp +
+// Σ_{k=1}^{level-1} k×100. Level legit L0 = (level terendah dari notifikasi
+// "Naik Level!" sejak awal inflasi) − 1; bila tidak ada notifikasi, L0 =
+// level saat ini. XP legit X0 = floor((P − Σ_{k=1}^{L0-1} k×100) / 8000) —
+// 8000 = 20^3, tiga perkalian BERLEBIH (satu perkalian pertama memang
+// rescale v3.1.0). Residu R = (P − Σ) − X0×8000 adalah XP legit yang
+// didapat setelah inflasi (< 8000); diproses lewat loop level-up normal
+// dari (L0, X0). ATURAN AKHIR (perintah pemilik 28 Nov 2026 08:41 WIB):
+// pemain yang terkena inflasi TIDAK dikembalikan ke level legit-nya —
+// mereka berakhir di Level 10 (lantai): level akhir = max(level legit,
+// 10), XP akhir = XP legit hasil inverse (bila tidak bisa dihitung
+// bersih, 0). Pemain yang level legit-nya sudah >= 10 tetap di level
+// legit-nya. Pemain yang TIDAK terinflasi (pool di atas L0 < 8000, atau
+// state valid tanpa kaskade) TIDAK berubah dan TIDAK dinaikkan ke 10.
+// IDEMPOTEN lewat penanda db_meta 'xp_rollback_2026_11_28' (jalan dua
+// kali = hasil sama) + ringkasan JSON di penanda yang sama.
+// Efek samping — HANYA yang terbukti palsu: payout referral TIDAK
+// dibatalkan (pemain kini sah di level >= 10) — hanya DIHITUNG berapa
+// payout yang terpicu oleh inflasi. Achievement level <= 10 kini sah
+// dipertahankan; hanya level_20/35/50 yang diklaim palsu yang
+// dikembalikan. Penghitung rekrutan tidak dikoreksi (rekrutan kini sah
+// di level >= 10). Bila data seorang warga tidak cocok dengan model,
+// warga itu DILEWATI (dicatat di log + ringkasan) — kecuali pool-nya
+// jelas tidak masuk akal (terinflasi tapi tak bisa dihitung bersih),
+// yang berakhir di (Lv10, 0 XP) sesuai perintah pemilik. Diekspor
+// untuk tes.
+// CATATAN KEJUJURAN: XP legit yang didapat DI ANTARA perkalian (03:54–
+// 05:16 WIB 28 Nov) ikut terlipat dan tidak bisa dipulihkan persis —
+// rollback membagi seluruh pool di atas L0 dengan 8000, jadi sebagian
+// kecil XP itu hilang (atau muncul sebagai residu R). Batas atas
+// selisihnya < 8000 XP per warga, dan hanya untuk warga yang aktif di
+// jendela tengah malam itu.
+const XP_ROLLBACK_KEY = 'xp_rollback_2026_11_28';
+// Awal inflasi: deploy Tahap 6 (skema 15) ~03:54 WIB 28 Nov 2026 =
+// 20:54 UTC 27 Nov 2026; diambil 20:30 UTC sebagai margin aman (level-up
+// legit tepat sebelum itu yang ikut tertangkap tetap benar karena ambang
+// levelnya masuk ke residu R dan dinaikkan lagi lewat loop level-up).
+const XP_INFLATION_START_MS = Date.parse('2026-11-27T20:30:00Z');
+const XP_INFLATION_DIVISOR = 8000; // 20^3 — tiga perkalian berlebih
+// paid_day (UTC) paling awal yang bisa berisi payout referral palsu:
+// kaskade pertama hanya mungkin setelah perkalian terakhir (~22:16 UTC
+// 27 Nov 2026). Payout 'paid' sebelum tanggal ini pasti legit.
+const XP_ROLLBACK_REFERRAL_SINCE = '2026-11-27';
+
+export async function migrateXpRollback(t) {
+  const done = await t.one('SELECT value FROM db_meta WHERE key = ?', [XP_ROLLBACK_KEY]);
+  if (done) {
+    console.log('[migrasi xp-rollback] sudah pernah jalan — dilewati.');
+    return { skipped: true };
+  }
+  const now = Date.now();
+  // Σ_{k=1}^{level-1} k×100 — XP yang sudah "dibelanjakan" untuk mencapai level ini.
+  const sumBelow = (level) => 100 * (Math.max(1, level) - 1) * Math.max(1, level) / 2;
+  const summary = {
+    citizensChecked: 0, citizensChanged: 0, citizensUnchanged: 0, flooredTo10: 0,
+    changed: [], skipped: [],
+    referralTriggeredByInflation: [], referralKept: 0, referralUnknown: [],
+    achievementsReverted: [], achievementsUnrecoverable: [],
+  };
+  const notes = new Map(); // citizen_id -> [catatan koreksi untuk notifikasi]
+  const note = (citizenId, text) => {
+    if (!notes.has(citizenId)) notes.set(citizenId, []);
+    notes.get(citizenId).push(text);
+  };
+  const legitLevel = new Map(); // citizen_id -> level legit (hasil inverse, sebelum lantai 10)
+  const finalLevel = new Map(); // citizen_id -> level akhir (pasca-rollback, sesudah lantai 10)
+  const userToCitizen = new Map(); // user_id -> { id, name, legitLevel, finalLevel }
+
+  // ---- 1. Rollback level + XP tiap warga ----
+  const citizens = await t.sql(
+    'SELECT c.id, c.user_id, c.level, c.xp, c.gold, c.recruits, u.username AS name FROM citizens c LEFT JOIN users u ON u.id = c.user_id ORDER BY c.id');
+  for (const c of citizens) {
+    summary.citizensChecked++;
+    const displayName = c.name || ('warga#' + c.id);
+    const level = Number(c.level);
+    const xp = Number(c.xp);
+    const recordLevels = (legitLvl, finalLvl) => {
+      legitLevel.set(c.id, legitLvl);
+      finalLevel.set(c.id, finalLvl);
+      userToCitizen.set(c.user_id, { id: c.id, name: displayName, legitLevel: legitLvl, finalLevel: finalLvl });
+    };
+    if (!Number.isFinite(level) || !Number.isFinite(xp) || level < 1 || xp < 0) {
+      summary.skipped.push({ citizen: displayName, reason: 'level/xp tidak valid' });
+      recordLevels(level >= 1 ? level : 1, level >= 1 ? level : 1);
+      continue;
+    }
+    const notifs = await t.sql(
+      "SELECT content FROM notifications WHERE citizen_id = ? AND title = 'Naik Level!' AND created_at >= ?",
+      [c.id, XP_INFLATION_START_MS]);
+    const levels = new Set();
+    for (const n of notifs) {
+      const m = /Level (\d+)/.exec(n.content || '');
+      if (m) levels.add(Number(m[1]));
+    }
+    // Warga yang tidak pernah kaskade DAN statenya valid (xp < ambang
+    // levelnya) TIDAK terinflasi: sisa XP terinflasi yang belum kaskade
+    // selalu jauh di atas ambang (minimal 160.000 untuk XP pra-inflasi
+    // >= 1), jadi state valid + tanpa notifikasi naik level di jendela
+    // inflasi = aman dilewati. Ini juga melindungi pemain level tinggi
+    // yang sah (xp mereka bisa >= 8000 — pembagi 8000 di bawah akan
+    // salah memangkasnya bila penjaga ini tidak ada).
+    if (levels.size === 0 && xp < level * 100) {
+      recordLevels(level, level);
+      summary.citizensUnchanged++;
+      continue;
+    }
+    let L0 = levels.size ? Math.min(...levels) - 1 : level;
+    if (L0 < 1) L0 = 1;
+    if (L0 > level) {
+      summary.skipped.push({ citizen: displayName, reason: 'level asli > level saat ini (data tidak cocok)' });
+      recordLevels(level, level);
+      continue;
+    }
+    const pool = xp + sumBelow(level);
+    const above = pool - sumBelow(L0);
+    if (above < 0) {
+      summary.skipped.push({ citizen: displayName, reason: 'pool XP negatif (data tidak cocok)' });
+      recordLevels(level, level);
+      continue;
+    }
+    const X0 = Math.floor(above / XP_INFLATION_DIVISOR);
+    const R = above - X0 * XP_INFLATION_DIVISOR;
+    // Penjaga model: X0 yang wajar untuk sisa level. Bila jauh di atas
+    // ambang (100×), pool-nya jelas terinflasi tapi tidak bisa dihitung
+    // bersih — perintah pemilik: berakhir di (Lv10, 0 XP).
+    if (X0 > 100 * Math.max(1, L0) * 100) {
+      recordLevels(10, 10);
+      await t.run('UPDATE citizens SET level = ?, xp = ? WHERE id = ?', [10, 0, c.id]);
+      summary.citizensChanged++;
+      summary.flooredTo10++;
+      summary.changed.push({ citizen: displayName, before: `Lv${level} (${xp} XP)`, after: 'Lv10 (0 XP)' });
+      note(c.id, `Level disesuaikan ke 10 dengan XP 0 — XP-mu terlipatganda oleh kesalahan sistem (×160.000) sampai tidak bisa dihitung bersih; sebagai pemulihan kamu dikembalikan ke Level 10. Progres aslimu (emas, barang, dan lainnya) tidak berubah.`);
+      continue;
+    }
+    let lvl = L0;
+    let rem = X0 + R;
+    while (rem >= lvl * 100) { rem -= lvl * 100; lvl += 1; }
+    // Level legit (lvl, rem) vs level saat ini: sama = TIDAK terinflasi.
+    const inflated = !(lvl === level && rem === xp);
+    // LANTAI 10 (perintah pemilik 28 Nov 2026 08:41 WIB): pemain yang
+    // terkena inflasi berakhir di max(level legit, 10); XP = XP legit.
+    let finalLvl = lvl;
+    let finalRem = rem;
+    if (inflated) {
+      finalLvl = Math.max(lvl, 10);
+      if (lvl < 10) summary.flooredTo10++;
+    }
+    recordLevels(lvl, finalLvl);
+    if (!inflated) { summary.citizensUnchanged++; continue; }
+    await t.run('UPDATE citizens SET level = ?, xp = ? WHERE id = ?', [finalLvl, finalRem, c.id]);
+    summary.citizensChanged++;
+    summary.changed.push({ citizen: displayName, before: `Lv${level} (${xp} XP)`, after: `Lv${finalLvl} (${finalRem} XP)` });
+    if (lvl < 10) note(c.id, `Level disesuaikan dari ${level} ke 10 — ada kesalahan sistem yang melipatgandakan XP (×160.000) sejak update kemarin. Sebagai pemulihan, semua pemain yang terkena dikembalikan ke Level 10 (bukan ke level awal). Progres aslimu (emas, barang, dan lainnya) tidak berubah.`);
+    else note(c.id, `Level dikembalikan dari ${level} ke ${finalLvl} — ada kesalahan sistem yang melipatgandakan XP (×160.000) sejak update kemarin; progres aslimu (emas, barang, dan lainnya) tidak berubah.`);
+  }
+
+  // ---- 2. Payout referral yang terpicu selama inflasi (HANYA DILAPORKAN) ----
+  // ATURAN BARU (perintah pemilik 28 Nov 2026 08:41 WIB): payout TIDAK
+  // dibatalkan — pemain yang terkena inflasi kini sah berada di level
+  // >= 10 (>= 3), jadi bonus referral tetap milik mereka. Di sini hanya
+  // DIHITUNG berapa payout yang terpicu oleh inflasi (pendaftar belum
+  // benar-benar mencapai Level 3 saat payout cair — level legit < 3).
+  const paidRows = await t.sql(
+    "SELECT id, referrer_id, newcomer_id FROM referral_pending WHERE status = 'paid' AND paid_day >= ? ORDER BY id",
+    [XP_ROLLBACK_REFERRAL_SINCE]);
+  for (const row of paidRows) {
+    const newcomer = userToCitizen.get(row.newcomer_id);
+    if (!newcomer) {
+      summary.referralUnknown.push({ newcomerUserId: row.newcomer_id, reason: 'warga pendaftar tidak ditemukan' });
+      continue;
+    }
+    if (newcomer.legitLevel >= 3) { summary.referralKept++; continue; }
+    const refCitizen = userToCitizen.get(row.referrer_id);
+    summary.referralTriggeredByInflation.push({ referrer: refCitizen?.name || ('user#' + row.referrer_id), newcomer: newcomer.name });
+  }
+
+  // ---- 3. Klaim achievement palsu (hanya level > 10) ----
+  // ATURAN BARU: achievement level <= 10 kini sah (pemain yang terkena
+  // inflasi berakhir di Level 10) — hanya level_20/35/50 yang diklaim
+  // palsu yang dikembalikan. recruit_/attack_/law_/buy_ tidak kena
+  // inflasi XP — tidak pernah disentuh (penghitung rekrutan tidak lagi
+  // dikoreksi: rekrutan kini sah berada di level >= 10).
+  const claimed = await t.sql('SELECT citizen_id, akey FROM achievements WHERE claimed = 1');
+  for (const row of claimed) {
+    const a = ACHIEVEMENTS.find((x) => x.key === row.akey);
+    if (!a || !a.key.startsWith('level_')) continue;
+    const falseClaim = (finalLevel.get(row.citizen_id) ?? 99) < a.target;
+    if (!falseClaim) continue;
+    const c = await t.one('SELECT c.id, c.gold, u.username AS name FROM citizens c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?', [row.citizen_id]);
+    const displayName = c?.name || ('warga#' + row.citizen_id);
+    const goldOk = !!c && Number(c.gold) >= a.reward;
+    await t.run('DELETE FROM achievements WHERE citizen_id = ? AND akey = ?', [row.citizen_id, row.akey]);
+    if (goldOk) {
+      await t.run('UPDATE citizens SET gold = ? WHERE id = ?', [Number(c.gold) - a.reward, c.id]);
+      summary.achievementsReverted.push({ citizen: displayName, akey: row.akey, reward: a.reward });
+    } else {
+      summary.achievementsReverted.push({ citizen: displayName, akey: row.akey, reward: a.reward, goldUnrecovered: true });
+      summary.achievementsUnrecoverable.push({ citizen: displayName, akey: row.akey, reward: a.reward, reason: 'saldo emas kurang — hadiah tidak bisa ditarik' });
+    }
+    note(row.citizen_id, `Pencapaian "${a.label}" dibatalkan — syaratnya terpenuhi karena bug XP. Hadiah ${a.reward} emas ditarik${goldOk ? '' : ' (tidak bisa ditarik penuh karena saldo kurang)'}; kamu bisa mengklaimnya lagi saat benar-benar mencapainya.`);
+  }
+
+  // ---- 4. Beri tahu warga yang dikoreksi (satu notifikasi per warga) ----
+  for (const [citizenId, texts] of notes) {
+    await t.run(
+      'INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?)',
+      [citizenId, 'SISTEM', 'Koreksi Level & Hadiah (Bug XP)', texts.join(' '), now]);
+  }
+
+  // ---- 5. Penanda idempotensi + ringkasan (JSON, tanpa email/ID pemain) ----
+  const existing = await t.one('SELECT value FROM db_meta WHERE key = ?', [XP_ROLLBACK_KEY]);
+  if (existing) await t.run('UPDATE db_meta SET value = ? WHERE key = ?', [JSON.stringify(summary), XP_ROLLBACK_KEY]);
+  else await t.run('INSERT INTO db_meta (key, value) VALUES (?, ?)', [XP_ROLLBACK_KEY, JSON.stringify(summary)]);
+
+  console.log(`[migrasi xp-rollback] warga dicek=${summary.citizensChecked} diubah=${summary.citizensChanged} tidak-berubah=${summary.citizensUnchanged} dilewati=${summary.skipped.length} berakhir-di-Lv10=${summary.flooredTo10} | referral terpicu-inflasi=${summary.referralTriggeredByInflation.length} dipertahankan=${summary.referralKept} tak-dikenal=${summary.referralUnknown.length} | achievement dikembalikan=${summary.achievementsReverted.length} tak-bisa-ditarik=${summary.achievementsUnrecoverable.length}`);
+  for (const ex of summary.changed.slice(0, 5)) console.log(`[migrasi xp-rollback] contoh: ${ex.citizen}: ${ex.before} -> ${ex.after}`);
+  for (const s of summary.skipped) console.log(`[migrasi xp-rollback] dilewati: ${s.citizen} (${s.reason})`);
+  for (const u of summary.referralUnknown) console.log(`[migrasi xp-rollback] referral tak-dikenal: ${JSON.stringify(u)}`);
+  for (const u of summary.achievementsUnrecoverable) console.log(`[migrasi xp-rollback] achievement tak-bisa-ditarik: ${JSON.stringify(u)}`);
+  return summary;
 }
 
 // Tahap 6 (v4.0.0): militer + kepemilikan wilayah + reputasi dagang.

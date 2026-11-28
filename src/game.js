@@ -68,7 +68,13 @@
 // Update kecil v4.3.3 = hitung penerima Hadiah Massal di atas 100 pemain
 // (laporan Khalid, 28 Nov 2026): GET /api/admin/players kini membawa
 // total + eligible (COUNT tanpa LIMIT), panel pakai angka itu.
-export const VERSION = '4.3.3';
+// Update kecil v4.3.4 = perbaikan eksploitasi XP + rollback (insiden
+// 28 Nov 2026): migrateXpScale yang mengalikan XP ×20 di setiap kenaikan
+// versi dihapus; rollback satu kali (skema 18) mengembalikan XP yang
+// terinflasi ×160.000 — pemain yang terkena berakhir di Level 10
+// (lantai), kecuali level legit-nya sudah >= 10; payout referral tidak
+// dibatalkan, klaim achievement level > 10 palsu dikembalikan.
+export const VERSION = '4.3.4';
 
 // --- Satuan waktu dasar (Tahap 7) ---
 // Satu sumber kebenaran untuk "sehari" dalam milidetik — semua konstanta
