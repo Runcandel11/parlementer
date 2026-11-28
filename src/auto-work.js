@@ -102,7 +102,11 @@ export async function maybeAutoWork(force = false) {
         // 6) Jalankan SATU shift penuh — rumus sama persis dengan shift
         // manual (performShift). Kunci baris warga di dalamnya membuat
         // dua runner paralel tidak bisa menghabiskan energi yang sama.
-        await shiftRunner.performShift(c.id);
+        // (hotfix v4.5.2, bug LIO/Kenzz): performShift menerima USER id —
+        // jangan kirim c.id (citizen id) karena loadCitizen memakai
+        // `WHERE c.user_id = ?` dan akan memuat warga yang salah bila
+        // citizens.id != users.id.
+        await shiftRunner.performShift(c.user_id);
         await run('UPDATE citizens SET auto_work_shifts = auto_work_shifts + 1, auto_work_last_at = ? WHERE id = ?', [now, c.id]);
         shifted++;
       } catch (e) {

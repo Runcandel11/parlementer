@@ -3285,6 +3285,58 @@ async function main() {
   check('Quit mematikan auto-kerja', meW.autoWork?.active === false && !meW.citizen.job_id, `active=${meW.autoWork?.active} job=${meW.citizen.job_id}`);
   dbAW.close();
 
+  console.log('\n[32] v4.5.2 — hotfix bug shift: citizen id vs user id (LIO + Kenzz)');
+  // Akar masalah: performShift dulu memanggil loadCitizen(citizenId)
+  // padahal loadCitizen memakai `WHERE c.user_id = ?`. Selama
+  // citizens.id == users.id tidak terlihat; begitu bergeser, shift memuat
+  // WARGA YANG SALAH (yang user_id-nya = citizen id pemanggil) — bila
+  // warga salah itu tidak bekerja, error "Kamu belum punya pekerjaan"
+  // padahal pemanggil SUDAH bekerja (panel PEKERJAANMU benar karena
+  // /api/me memakai user id — bukti Kenzz: panel menampilkan KERJA - PT
+  // BESI JABAR Rp900.000.039/shift, tapi tombol KERJAKAN SATU GILIRAN
+  // melempar error itu). Regresi: dua warga baru; citizen id Q digeser
+  // menjadi user id P (P tidak bekerja) — sebelum perbaikan, shift Q
+  // melempar error itu; sesudahnya shift Q berhasil, shift P (tanpa
+  // pekerjaan) tetap 400 dengan benar.
+  const SH1 = new Client();
+  const SH2 = new Client();
+  // IP berbeda lewat X-Forwarded-For (pola [23b]/[28]/[31]): limit
+  // pendaftaran per IP sudah habis untuk 127.0.0.1 di titik ini.
+  SH1.extraHeaders = { 'X-Forwarded-For': '127.0.0.41' };
+  SH2.extraHeaders = { 'X-Forwarded-For': '127.0.0.42' };
+  r = await SH1.post('/api/auth/register', { email: 'shift_p@test.local', password: 'rahasia123', username: 'shift_p' });
+  check('Warga P (tanpa pekerjaan) terdaftar', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || JSON.stringify(r.data).slice(0, 200)}`);
+  r = await SH2.post('/api/auth/register', { email: 'shift_q@test.local', password: 'rahasia123', username: 'shift_q' });
+  check('Warga Q terdaftar', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || JSON.stringify(r.data).slice(0, 200)}`);
+  const meP = (await SH1.get('/api/me')).data;
+  const meQ = (await SH2.get('/api/me')).data;
+  // Q melamar lowongan ADMIN di wilayahnya (pola [23d]: set region via DB).
+  const jobsSH = (await SH2.get('/api/jobs')).data;
+  const adminSH = jobsSH.jobs.find((j) => j.is_admin);
+  check('Lowongan ADMIN ada untuk Q', !!adminSH);
+  const dbSH = new DatabaseSync(DB_PATH);
+  // Geser PK citizens yang dirujuk baris anak (inventory, notifikasi,
+  // dsb.) — matikan FK di koneksi tes ini saja supaya UPDATE id lolos;
+  // baris anak yang yatim tidak dipakai tes ini (P/Q warga baru).
+  dbSH.exec('PRAGMA foreign_keys = OFF');
+  dbSH.prepare('UPDATE citizens SET region_id = ? WHERE id = ?').run(adminSH.region_id, meQ.citizen.id);
+  r = await SH2.post('/api/jobs/apply', { job_id: adminSH.id });
+  check('Q melamar lowongan ADMIN', r.status === 200, `status=${r.status} ${r.data.error || ''}`);
+  // Geser id: citizen P dipindah dulu (membebaskan id-nya), lalu citizen Q
+  // dijadikan = user id P. Setelah ini Q.citizen.id == P.user_id, dan P
+  // tidak bekerja — persis kondisi live LIO/Kenzz.
+  dbSH.prepare('UPDATE citizens SET id = 900000 WHERE id = ?').run(meP.citizen.id);
+  dbSH.prepare('UPDATE citizens SET id = ? WHERE id = ?').run(meP.user.id, meQ.citizen.id);
+  dbSH.close();
+  // Q: panel menampilkan pekerjaan (sumber benar), shift harus berhasil.
+  const meQ2 = (await SH2.get('/api/me')).data;
+  check('Panel Q tetap menampilkan pekerjaannya setelah geser id', !!meQ2.job && meQ2.job.id === adminSH.id, `job=${meQ2.job?.title}`);
+  r = await SH2.post('/api/jobs/shift');
+  check('Q yang SUDAH bekerja bisa shift (200, bukan "belum punya pekerjaan")', r.status === 200 && r.data.ok, `status=${r.status} ${r.data.error || ''}`);
+  // P: memang belum bekerja — error tetap muncul dengan benar.
+  r = await SH1.post('/api/jobs/shift');
+  check('P yang belum bekerja tetap ditolak 400 "belum punya pekerjaan"', r.status === 400 && /belum punya pekerjaan/.test(r.data.error || ''), `status=${r.status} ${r.data.error || ''}`);
+
   setDayO(1);
 
   dbS6.close();

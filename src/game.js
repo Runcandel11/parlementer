@@ -83,7 +83,7 @@
 // otomatis Premium 24 jam yang jalan di server walau aplikasi ditutup.
 // Update kecil v4.5.1 = tombol Nonton Iklan di top bar + dompet HUD jadi
 // dua pill uang+emas yang sejajar (perintah pemilik 28 Nov 2026).
-export const VERSION = '4.5.1';
+export const VERSION = '4.5.2';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum

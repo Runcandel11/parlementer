@@ -1118,8 +1118,22 @@ export function registerCore(app) {
   // sini supaya shift manual (POST /api/jobs/shift) dan shift otomatis
   // (modul auto-work.js) memakai rumus yang SAMA PERSIS. Hasil yang
   // dikembalikan sama persis dengan yang dulu dikirim endpoint.
-  async function performShift(citizenId) {
-    const c = await loadCitizen(citizenId);
+  async function performShift(userId) {
+    // PENTING: parameternya USER id — loadCitizen(userId) memakai
+    // `WHERE c.user_id = ?`. BUG LIO + Kenzz 28 Nov 2026 (hotfix v4.5.2):
+    // dulu parameter ini bernama citizenId dan dipanggil dengan
+    // req.citizen.id / c.id — selama citizens.id == users.id (kasus umum)
+    // tidak terlihat, tapi begitu id keduanya bergeser (pendaftaran gagal
+    // di tengah jalan, baris dihapus, dsb.) shift memuat WARGA YANG SALAH:
+    // warga lain yang user_id-nya kebetulan sama dengan citizen id
+    // pemanggil. Bila warga salah itu tidak bekerja → error "Kamu belum
+    // punya pekerjaan" padahal pemanggil SUDAH bekerja (panel PEKERJAANMU
+    // membaca lewat /api/me yang benar — buktinya screenshot Kenzz: panel
+    // menampilkan KERJA - PT BESI JABAR Rp900.000.039/shift, tapi tombol
+    // KERJAKAN SATU GILIRAN melempar error itu). Kerja otomatis kena
+    // dampak yang sama (shift warga salah, energi + gaji warga salah).
+    // Jangan pernah kirim citizen id ke sini.
+    const c = await loadCitizen(userId);
     if (!c) throw Object.assign(new Error('Warga tidak ditemukan.'), { status: 404 });
     if (!c.job_id) throw Object.assign(new Error('Kamu belum punya pekerjaan. Lamar dulu di Kantor Ketenagakerjaan.'), { status: 400 });
     const job = await one('SELECT * FROM jobs WHERE id = ?', [c.job_id]);
@@ -1313,7 +1327,7 @@ export function registerCore(app) {
 
   // Endpoint manual: tipis — seluruh logika di performShift di atas.
   app.post('/api/jobs/shift', authRequired, citizenRequired, r(async (req, res) => {
-    res.json(await performShift(req.citizen.id));
+    res.json(await performShift(req.userId));
   }));
 
   // ---------- KERJA OTOMATIS 24 JAM (Premium, v4.5.0) ----------

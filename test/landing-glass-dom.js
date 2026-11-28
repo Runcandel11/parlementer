@@ -9,7 +9,7 @@
 //   (4) PETA LANGSUNG: wilayah tanpa negara = kaca abu-abu (kelas free) +
 //       tanda "?" (17 ubin, semua belum bernegara di DB segar);
 //   (5) UI KACA: CSS memakai backdrop-filter; ikon atas diperkecil (32px);
-//   (6) VERSI: footer landing + drawer menampilkan "Parlementer v4.5.1"
+//   (6) VERSI: footer landing + drawer menampilkan "Parlementer v4.5.2"
 //       dari konstanta VERSION (API /api/world + /api/me).
 // Jalankan: node test/landing-glass-dom.js
 import { spawn } from 'node:child_process';
@@ -22,7 +22,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3462;
 const DB_PATH = '/tmp/parlementer-landing-glass-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '4.5.1';
+const EXPECTED_VERSION = '4.5.2';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -96,7 +96,7 @@ async function main() {
     check('landing: 3 badge bawah ada', html.includes('GRATIS DIMAINKAN') && html.includes('DIMAINKAN DI BROWSER') && html.includes('SEMUA BISA DIDAPAT DENGAN BERMAIN'));
     check('landing: badge 100% PEMAIN ASLI (tanpa klaim beta)', html.includes('100% PEMAIN ASLI') && !html.toUpperCase().includes('BETA'));
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 4.5.1 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 4.5.2 (publik, tanpa login)', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     // --- Kredit pembuat + SEO JSON-LD (28 Nov 2026) ---
     const ldMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
@@ -119,7 +119,7 @@ async function main() {
     check('tamu: #auth-view tampil, #app tersembunyi', !document.querySelector('#auth-view').hidden && document.querySelector('#app').hidden === true);
     check('tamu: hero landing tampil', !document.querySelector('#landing-hero').hidden);
     check('tamu: kartu login/daftar tersembunyi di awal', document.querySelector('#auth-card-wrap').hidden === true);
-    check('tamu: footer landing menampilkan Parlemen v4.5.1', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
+    check('tamu: footer landing menampilkan Parlemen v4.5.2', (document.querySelector('#landing-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#landing-version')?.textContent);
     const landingCredits = document.querySelector('#landing-credits')?.textContent || '';
     check('tamu: footer landing menampilkan kredit pembuat (Khalid + Angelica)', landingCredits.includes('Khalid Talal Muhammad Zain Al-Ghunaim') && landingCredits.includes('Angelica'), landingCredits);
     check('tamu: kredit landing menyebut Khalid CEO & Pengembang', landingCredits.includes('CEO & Pengembang'), landingCredits);
@@ -147,7 +147,7 @@ async function main() {
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await sleep(2500);
     check('daftar dari landing: aplikasi tampil (#app), landing tidak menghadang', document.querySelector('#app').hidden === false && document.querySelector('#auth-view').hidden === true);
-    check('login: footer drawer menampilkan Parlemen v4.5.1', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
+    check('login: footer drawer menampilkan Parlemen v4.5.2', (document.querySelector('#drawer-version')?.textContent || '').includes('Parlementer v' + EXPECTED_VERSION), document.querySelector('#drawer-version')?.textContent);
     const drawerCredits = document.querySelector('#drawer-credits')?.textContent || '';
     check('login: footer drawer menampilkan kredit pembuat (Khalid + Angelica)', drawerCredits.includes('Khalid Talal Muhammad Zain Al-Ghunaim') && drawerCredits.includes('Angelica'), drawerCredits);
     check('login: kredit drawer menyebut Khalid CEO & Pengembang', drawerCredits.includes('CEO & Pengembang'), drawerCredits);

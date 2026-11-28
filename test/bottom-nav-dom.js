@@ -14,7 +14,7 @@
 //       bawah ekstra + .energy-bar naik di atas bar;
 //   (7) aksesibilitas: <nav aria-label="Navigasi utama"> + tiap tab punya
 //       aria-label yang jelas;
-//   (8) VERSI: /api/world melaporkan 4.5.1.
+//   (8) VERSI: /api/world melaporkan 4.5.2.
 // Jalankan: node test/bottom-nav-dom.js
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -25,7 +25,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 3467;
 const DB_PATH = '/tmp/parlementer-bottom-nav-dom.db';
 const BASE = `http://127.0.0.1:${PORT}`;
-const EXPECTED_VERSION = '4.5.1';
+const EXPECTED_VERSION = '4.5.2';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0;
@@ -93,7 +93,7 @@ async function main() {
 
     // (8) Versi dulu (tanpa login).
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 4.5.1', world.version === EXPECTED_VERSION, `version=${world.version}`);
+    check('API /api/world: versi 4.5.2', world.version === EXPECTED_VERSION, `version=${world.version}`);
 
     const jar = makeJar();
     const r = await api(jar, '/api/auth/register', { email: 'domNav@test.local', password: 'rahasia123', username: 'warga_nav' });
