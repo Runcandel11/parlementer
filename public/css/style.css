@@ -656,6 +656,12 @@ button.food-card:disabled { cursor: default; }
 .map-tile.mine { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
 .map-tile .mt-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--teal); margin-right: 3px; vertical-align: 1px; }
 .map-tile .mt-dot.free { background: var(--muted2); }
+/* Titik "kamu di sini" di ubin PETA LANGSUNG ikut berdenyut pelan (v5.7.3). */
+.map-tile.mine .mt-dot { background: var(--gold-bright); animation: map-dot-pulse 2s ease-in-out infinite; }
+@keyframes map-dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.5); opacity: .55; }
+}
 
 /* Papan pemimpin: baris peringkat + nama + nilai + bar proporsional. */
 .leader-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid #16213a; }
@@ -798,8 +804,15 @@ body {
   overflow: auto;
   background: radial-gradient(ellipse at 50% 30%, #0d1526 0%, #070b14 70%);
   border: 1px solid var(--line); border-radius: 12px;
+  scroll-behavior: smooth;
 }
-#big-map { display: block; width: 100%; height: auto; }
+/* Peta hidup (v5.7.3, poles berkelanjutan Lane 4; referensi: maplibrary.org
+   "9 Map Animation Techniques" — zoom 300–500ms ease-in-out, pulsing
+   location marker — + expertbeacon.com SVG map pulse): zoom tidak lagi
+   loncat instan, wilayah memudar halus saat dicari, penanda KAMU berdenyut
+   supaya terasa menjelajahi dunia, bukan gambar diam. Murni visual —
+   tidak mengubah aturan main, data, atau harga apa pun. */
+#big-map { display: block; width: 100%; height: auto; transition: width .45s ease-in-out; }
 .map-ocean { fill: transparent; }
 .map-bg-land { fill: #101a2e; stroke: #1c2a44; stroke-width: 1; }
 .map-sea {
@@ -809,8 +822,9 @@ body {
 }
 .map-region {
   fill: #2a3648; stroke: #0a0f1c; stroke-width: 1.2;
-  cursor: pointer; transition: opacity .15s ease;
+  cursor: pointer; transition: opacity .15s ease, fill .25s ease, stroke .25s ease;
 }
+.map-region-g { transition: opacity .3s ease; }
 .map-region-g.free .map-region { fill: rgba(148,163,184,.30); stroke: rgba(203,213,225,.85); }
 .map-region-g.owned .map-region { stroke: rgba(10,15,28,.9); }
 .map-region:hover, .map-region:focus-visible { stroke: var(--gold); stroke-width: 2.5; outline: none; }
@@ -835,6 +849,18 @@ body {
   paint-order: stroke; stroke: #0a0f1c; stroke-width: 3px;
 }
 .map-you-ring { fill: rgba(212,175,55,.18); stroke: var(--gold); stroke-width: 1.5; }
+/* Cincin denyut penanda KAMU: mengembang + memudar berulang (2 detik),
+   transform-box: fill-box supaya scale berpusat di lingkaran itu sendiri. */
+.map-you-pulse {
+  fill: none; stroke: var(--gold); stroke-width: 1.5;
+  transform-box: fill-box; transform-origin: center;
+  animation: map-you-pulse 2s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes map-you-pulse {
+  0% { transform: scale(1); opacity: .65; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
 .map-you-dot { fill: var(--gold); stroke: #0a0f1c; stroke-width: 1.5; }
 .map-you-label {
   font-family: 'Oswald', sans-serif; font-size: 12px; font-weight: 700;
@@ -845,6 +871,13 @@ body {
   .map-label { font-size: 10px; }
   .map-country-label { font-size: 12px; }
   .map-q { font-size: 17px; }
+}
+/* Hormati preferensi sistem: matikan semua animasi/transisi peta bila
+   pengguna memilih reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  #big-map, .map-region, .map-region-g { transition: none; }
+  .map-you-pulse, .map-tile.mine .mt-dot { animation: none; }
+  .big-map-wrap { scroll-behavior: auto; }
 }
 
 /* ---------- landing page (sebelum login) ---------- */

@@ -468,6 +468,21 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **Peta hidup v5.7.3 (28 Nov 2026, poles berkelanjutan Lane 4 —
+  perintah pemilik 18:12 WIB; antrean Lane 4 kosong):** murni visual,
+  tidak mengubah aturan main/data/harga. Referensi: maplibrary.org "9
+  Map Animation Techniques" (zoom 300–500ms ease-in-out, pulsing
+  location marker) + expertbeacon.com (SVG pulse). (1) Penanda KAMU di
+  peta besar punya cincin denyut `.map-you-pulse` (SVG circle, keyframes
+  scale 1→2,4 + opacity .65→0, 2 detik, `transform-box: fill-box`). (2)
+  Zoom peta bertransisi `#big-map { transition: width .45s ease-in-out }`
+  (sebelumnya loncat instan 100→150→220%). (3) `.map-region` transisi
+  fill/stroke .25s + `.map-region-g` transisi opacity .3s (pencarian
+  meredup halus). (4) Titik "kamu" di ubin PETA LANGSUNG dashboard
+  (`.map-tile.mine .mt-dot`) berdenyut pelan (keyframes
+  `map-dot-pulse`). (5) `prefers-reduced-motion: reduce` mematikan
+  semua animasi/transisi peta. Dicek map-dom (8) (denyut sepusat dengan
+  cincin KAMU + semua aturan CSS ada).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

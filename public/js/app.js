@@ -3036,7 +3036,7 @@ ROUTES.map = async () => {
           </g>`;
         }).join('')}
         ${countryLabels}
-        ${mineXY ? `<g class="map-you" data-region-id="${data.mine}"><circle class="map-you-ring" cx="${mineXY[0].toFixed(1)}" cy="${mineXY[1].toFixed(1)}" r="15"></circle><circle class="map-you-dot" cx="${mineXY[0].toFixed(1)}" cy="${mineXY[1].toFixed(1)}" r="7"></circle><text class="map-you-label" x="${mineXY[0].toFixed(1)}" y="${(mineXY[1] - 22).toFixed(1)}">📍 KAMU</text></g>` : ''}
+        ${mineXY ? `<g class="map-you" data-region-id="${data.mine}"><circle class="map-you-pulse" cx="${mineXY[0].toFixed(1)}" cy="${mineXY[1].toFixed(1)}" r="15"></circle><circle class="map-you-ring" cx="${mineXY[0].toFixed(1)}" cy="${mineXY[1].toFixed(1)}" r="15"></circle><circle class="map-you-dot" cx="${mineXY[0].toFixed(1)}" cy="${mineXY[1].toFixed(1)}" r="7"></circle><text class="map-you-label" x="${mineXY[0].toFixed(1)}" y="${(mineXY[1] - 22).toFixed(1)}">📍 KAMU</text></g>` : ''}
       </svg>
     </div>
     <p class="muted small" style="margin:8px 0 0">Wilayah abu-abu + "?" = belum bernegara. Warna = negara pemiliknya.</p>

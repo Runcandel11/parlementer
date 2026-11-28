@@ -14,8 +14,10 @@
 //       keduanya kehilangan kelas free + "?" dan memakai warna negara
 //       deterministik (#d43d2a untuk negara id 1), label nama negara
 //       tampil; 15 wilayah lain tetap abu-abu + "?".
-//   (7) KRONIK: membuka peta menandai tugas 'map' (Jelajahi peta) selesai
-//       lewat POST /api/chronicle/visit (kunci lain ditolak 400).
+//   (8) PETA HIDUP v5.7.3 (poles berkelanjutan Lane 4): penanda KAMU
+//       punya cincin denyut (.map-you-pulse); CSS peta berisi transisi
+//       zoom 0,45 detik, transisi wilayah, keyframes denyut, dan
+//       prefers-reduced-motion yang mematikan animasi.
 // Jalankan: node test/map-dom.js
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -133,6 +135,19 @@ async function main() {
     const you = document.querySelector('.map-you');
     check('Peta: penanda KAMU (.map-you) ada', !!you && (you.textContent || '').includes('KAMU'), you?.textContent?.trim());
     check('Peta: penanda KAMU di wilayah pemain (data-region-id = mine)', !!you && Number(you.dataset.regionId) === mineId, `you=${you?.dataset.regionId} mine=${mineId}`);
+
+    // --- (8) PETA HIDUP v5.7.3: cincin denyut KAMU + transisi CSS ---
+    const pulse = document.querySelector('.map-you .map-you-pulse');
+    const ring = document.querySelector('.map-you .map-you-ring');
+    check('Peta hidup: cincin denyut KAMU (.map-you-pulse) ada', !!pulse);
+    check('Peta hidup: denyut sepusat dengan cincin KAMU', !!pulse && !!ring && pulse.getAttribute('cx') === ring.getAttribute('cx') && pulse.getAttribute('cy') === ring.getAttribute('cy'), pulse ? `cx=${pulse.getAttribute('cx')} cy=${pulse.getAttribute('cy')}` : '');
+    const css = fs.readFileSync(ROOT + 'public/css/style.css', 'utf8');
+    check('Peta hidup: keyframes map-you-pulse ada di CSS', /@keyframes map-you-pulse/.test(css));
+    check('Peta hidup: #big-map transisi width 0,45 detik (zoom halus)', /#big-map \{[^}]*transition:\s*width \.45s ease-in-out/.test(css));
+    check('Peta hidup: .map-region transisi fill/stroke', /\.map-region \{[^}]*transition:[^}]*fill \.25s ease/.test(css));
+    check('Peta hidup: .map-region-g transisi opacity (cari meredup halus)', /\.map-region-g \{[^}]*transition:\s*opacity \.3s ease/.test(css));
+    check('Peta hidup: keyframes map-dot-pulse ada (ubin dashboard)', /@keyframes map-dot-pulse/.test(css));
+    check('Peta hidup: prefers-reduced-motion mematikan animasi peta', /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.map-you-pulse[\s\S]*?animation:\s*none/.test(css));
     check('Peta: kolom Cari wilayah ada (placeholder)', document.querySelector('#map-search')?.getAttribute('placeholder') === 'Cari wilayah...');
     const pageTxt = document.querySelector('#page')?.textContent || '';
     check('Peta: teks "Belum Bernegara" tampil', pageTxt.includes('Belum Bernegara'));
