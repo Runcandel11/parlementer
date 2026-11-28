@@ -393,6 +393,10 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   .page > *, .modal-card, .toast { animation: none; }
   .btn-gold, .btn-ghost, .btn-danger, .hud-icon, .nav-item, .tab { transition: none; }
+  /* v5.7.5: matikan juga animasi baru (denyut KAMU, rute, modal, perang). */
+  .modal, .map-you-ring, .map-dest-ring, .map-route, .map-tile.mine .mt-dot, .map-war .map-region { animation: none; }
+  #big-map { transition: none; }
+  .page > *:nth-child(2), .page > *:nth-child(3), .page > *:nth-child(n+4) { animation-delay: 0s; }
 }
 
 /* ---------- rombak UI gaya Parlamentum: papan pasar, kartu penawaran,
@@ -791,16 +795,22 @@ body {
 /* Latar gelap seperti referensi; wilayah tanpa negara = kaca abu-abu +
    "?" (aturan warna wilayah, pemilik 27 Nov 2026); wilayah bernegara =
    warna negaranya (inline style dari COUNTRY_COLORS). */
-.big-map-panel { padding: 10px; }
+/* Full-bleed ala World Dominion (v5.7.5): panel peta tanpa krom kartu,
+   menembus padding halaman (14px) sampai tepi konten. */
+.big-map-panel { padding: 0; border: none; background: none; box-shadow: none; margin-left: -14px; margin-right: -14px; }
 .map-zoom { display: flex; gap: 6px; margin-bottom: 8px; }
 .map-zoom .btn-ghost { min-width: 36px; font-size: 16px; }
 .big-map-wrap {
-  overflow: auto;
-  background: radial-gradient(ellipse at 50% 30%, #0d1526 0%, #070b14 70%);
-  border: 1px solid var(--line); border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  background: radial-gradient(ellipse at 50% 30%, #0a0f1c 0%, #04060b 70%);
+  border: 1px solid var(--line); border-left: none; border-right: none; border-radius: 0;
 }
+.big-map-wrap.map-panning { cursor: grabbing; }
 #big-map { display: block; width: 100%; height: auto; }
-.map-ocean { fill: transparent; }
+.map-ocean { fill: #070b14; }
 .map-bg-land { fill: #101a2e; stroke: #1c2a44; stroke-width: 1; }
 .map-sea {
   font-family: 'Oswald', sans-serif; font-size: 11px; font-weight: 600;
@@ -811,8 +821,8 @@ body {
   fill: #2a3648; stroke: #0a0f1c; stroke-width: 1.2;
   cursor: pointer; transition: opacity .15s ease;
 }
-.map-region-g.free .map-region { fill: rgba(148,163,184,.30); stroke: rgba(203,213,225,.85); }
-.map-region-g.owned .map-region { stroke: rgba(10,15,28,.9); }
+.map-region-g.free .map-region { fill: rgba(148,163,184,.42); stroke: rgba(255,255,255,.75); }
+.map-region-g.owned .map-region { stroke: rgba(255,255,255,.5); }
 .map-region:hover, .map-region:focus-visible { stroke: var(--gold); stroke-width: 2.5; outline: none; }
 .map-region-g.selected .map-region { stroke: var(--gold); stroke-width: 2.5; filter: drop-shadow(0 0 6px rgba(212,175,55,.55)); }
 .map-region-g.match .map-region { stroke: var(--gold); stroke-width: 2.5; }
@@ -845,6 +855,75 @@ body {
   .map-label { font-size: 10px; }
   .map-country-label { font-size: 12px; }
   .map-q { font-size: 17px; }
+}
+
+/* ---------- v5.7.5 — UI fluid + peta imersif ----------
+   Referensi POLA (bukan aset): kamera pan + pinch-zoom ala game strategi
+   mobile (Infestation: kamera bisa pan + zoom, petunjuk arah berdenyut di
+   tepi layar; roguelike touch: drag = pan, cubit = zoom, tap = aksi
+   kontekstual); game feel (Steve Swink: kontrol real-time + ruang
+   simulasi + polish; Celia Hodent: usability + engage-ability). Animasi
+   HANYA transform + opacity demi 60fps di HP lemah (SitePoint/Kirupa:
+   jangan animasikan left/top/width — itu memicu layout tiap frame).
+   Aturan warna wilayah tidak berubah: tanpa negara = kaca abu-abu + "?". */
+#big-map { transition: transform .25s ease; transform-origin: 0 0; will-change: transform; }
+.big-map-wrap.map-panning #big-map { transition: none; }
+.map-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(0,0,0,.38) 100%); }
+.big-map-wrap.map-zoomed .map-label { font-size: 13px; }
+.big-map-wrap.map-zoomed .map-q { font-size: 22px; }
+/* Penanda KAMU berdenyut (cincin membesar + memudar, transform saja). */
+.map-you-ring { transform-box: fill-box; transform-origin: center; animation: youPulse 2.2s ease-out infinite; }
+@keyframes youPulse { 0% { transform: scale(1); opacity: .9; } 70% { transform: scale(1.9); opacity: 0; } 100% { transform: scale(1.9); opacity: 0; } }
+/* Rute perjalanan: garis putus-putus berjalan + cincin tujuan berdenyut. */
+.map-route { stroke: var(--gold-bright); stroke-width: 2.5; stroke-dasharray: 7 6; fill: none; opacity: .9; animation: routeMarch 1s linear infinite; pointer-events: none; }
+@keyframes routeMarch { to { stroke-dashoffset: -13; } }
+.map-dest-ring { fill: rgba(45,212,191,.15); stroke: var(--teal); stroke-width: 1.5; transform-box: fill-box; transform-origin: center; animation: youPulse 2.2s ease-out infinite; pointer-events: none; }
+.map-dest-label { font-family: 'Oswald', sans-serif; font-size: 12px; font-weight: 700; fill: var(--teal); text-anchor: middle; pointer-events: none; paint-order: stroke; stroke: #0a0f1c; stroke-width: 3px; }
+/* Umpan balik tekan di kartu/ubin yang bisa ditekan (tahap 4 hanya tombol). */
+.map-tile, .stat-cell, .inv-card, .food-card { transition: transform .12s ease, border-color .15s ease, box-shadow .15s ease; }
+.map-tile:active, .stat-cell:active, .inv-card:active, .food-card:active { transform: scale(.98); }
+/* Titik "KAMU" di ubin PETA LANGSUNG berdenyut pelan. */
+.map-tile.mine .mt-dot { animation: dotPulse 1.6s ease-in-out infinite; }
+@keyframes dotPulse { 50% { opacity: .3; } }
+/* Modal: overlay memudar (opacity saja), kartu tetap popIn. */
+.modal { animation: modalFade .18s ease; }
+@keyframes modalFade { from { opacity: 0; } }
+/* Halaman masuk berjenjang tipis (panel ke-2/3 menyusul 30/60ms). */
+.page > *:nth-child(2) { animation-delay: .03s; }
+.page > *:nth-child(3) { animation-delay: .06s; }
+.page > *:nth-child(n+4) { animation-delay: .09s; }
+/* Reduced motion untuk animasi v5.7.5 digabung ke blok utama di atas
+   (Tahap 4) — satu blok saja supaya tidak tercecer. */
+
+/* --- World Dominion (referensi Khalid 28 Nov 18:15 WIB, screenshot peta
+   full-bleed): kontrol overlay kanan atas, cari kiri atas, panel Lapisan
+   Peta kiri bawah — semua di atas peta, bukan panel terpisah. --- */
+.map-overlay { position: absolute; z-index: 6; background: rgba(7,11,20,.85); border: 1px solid var(--glass-border); border-radius: 10px; padding: 8px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.map-overlay-tl { top: 10px; left: 10px; }
+.map-overlay-tl input { width: 200px; margin: 0; }
+.map-overlay-tl p { margin: 4px 0 0; }
+.map-overlay-tr { top: 10px; right: 10px; display: flex; flex-direction: column; gap: 6px; }
+.map-ctl-row { display: flex; gap: 6px; align-items: center; }
+.map-ctl-row .btn-ghost { min-width: 36px; }
+#map-zoom-slider { width: 120px; accent-color: var(--gold); margin: 0; }
+.map-overlay-bl { bottom: 10px; left: 10px; }
+.map-overlay-bl h4 { margin: 0 0 6px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--gold-bright); }
+.map-layers { display: flex; gap: 6px; flex-wrap: wrap; }
+.map-layers button { background: var(--glass-bg); border: 1px solid var(--glass-border); color: var(--text); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+.map-layers button.active { border-color: var(--gold); color: var(--gold-bright); box-shadow: 0 0 0 1px var(--gold); }
+/* Lapisan: label negara hanya bila Politik aktif; populasi hanya bila
+   Populasi aktif; penanda perang hanya bila Perang aktif. */
+.big-map-wrap:not(.map-layer-politics) .map-country-label { display: none; }
+.map-pop { display: none; font-family: 'Oswald', sans-serif; font-size: 10px; fill: rgba(219,228,238,.75); text-anchor: middle; pointer-events: none; paint-order: stroke; stroke: #0a0f1c; stroke-width: 3px; }
+.big-map-wrap.map-layer-pop .map-pop { display: block; }
+.map-war-badge { display: none; font-size: 13px; text-anchor: middle; pointer-events: none; }
+.big-map-wrap.map-layer-war .map-war-badge { display: block; }
+.big-map-wrap.map-layer-war .map-war .map-region { stroke: #ef4444; stroke-width: 2.5; animation: warPulse 1.4s ease-in-out infinite; }
+@keyframes warPulse { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: .25; } }
+@media (max-width: 560px) {
+  .map-overlay-tl input { width: 150px; }
+  #map-zoom-slider { width: 90px; }
+  .map-overlay-bl { max-width: 46vw; }
 }
 
 /* ---------- landing page (sebelum login) ---------- */

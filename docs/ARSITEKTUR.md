@@ -468,6 +468,56 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **UI fluid + peta imersif v5.7.5 (28 Nov 2026, perintah pemilik 17:58 WIB
+  "ui nya agak aneh… benerin, cari referensi, poles, semuanya fluid" +
+  referensi World Dominion dari pemilik 18:15 WIB):** presentasi saja,
+  tanpa perubahan aturan main. **Kamera peta** (`ROUTES.map`): pan +
+  zoom via `transform: translate() scale()` (GPU, 60fps) — ganti zoom
+  lama yang mengubah lebar SVG (layout tiap frame); drag 1 jari = pan,
+  cubit 2 jari = pinch-zoom, roda mouse = zoom di titik kursor, tombol
+  +/−/Reset + slider zoom 1–3 (sinkron dua arah), clamp pan + skala
+  1–3, `touch-action: none` + `overflow: hidden` di wadah; klik setelah
+  drag diabaikan 200ms supaya geser tidak memindah pilihan wilayah;
+  label membesar di zoom ≥1.5 (kelas `.map-zoomed`). **World Dominion:**
+  peta full-bleed (panel tanpa krom kartu, margin −14px menembus padding
+  halaman), laut gelap `#070b14`, daratan abu-abu garis putih (free
+  `rgba(148,163,184,.42)` + stroke putih .75; bernegara stroke putih
+  .5), kontrol overlay (cari kiri atas, zoom/slider/Reset/◎ Lokasi saya
+  kanan atas, panel Lapisan Peta kiri bawah — ketukan di overlay tidak
+  memulai pan); **◎ Lokasi saya** menerbangkan kamera ke wilayah pemain
+  (zoom 2×, marker di tengah, pakai transisi .25s); **Lapisan Peta:**
+  Politik (label nama negara, default ON), Populasi (teks "N warga" di
+  bawah nama wilayah, default OFF), Perang (wilayah perang aktif dari
+  `/api/wars` — garis merah berdenyut `warPulse` + lencana ⚔️, default
+  ON; tanpa endpoint baru). **Marker hidup:** cincin KAMU berdenyut
+  (`youPulse`, `transform-box: fill-box`), titik `.mine` di ubin PETA
+  LANGSUNG berdenyut (`dotPulse`). **Rute perjalanan:** garis
+  putus-putus beranimasi (`routeMarch`) + cincin tujuan berdenyut +
+  label tujuan + hitung mundur berdetak tiap detik (banner + chip,
+  `fmtCountdown`); timer berhenti sendiri bila SVG lepas dari halaman
+  atau `ME.travel` hilang (refreshMe 30 detik melunasi travel — chip
+  ditutup jadi "sebentar lagi", tanpa TypeError). **Poles global:**
+  umpan tekan `:active scale(.98)` di kartu/ubin, modal overlay memudar
+  (`modalFade`), halaman masuk berjenjang 30/60/90ms, skeleton di panel
+  peta; semua animasi baru dimatikan `prefers-reduced-motion`. Aturan
+  tampilan lama tetap: wilayah tanpa negara = kaca abu-abu + "?" + label
+  "Belum Bernegara". **Referensi pola (bukan aset):** Infestation
+  (liquidelectron.com — kamera pan + pinch-zoom, petunjuk arah
+  berdenyut), roguelike touch (drwjf.github.io — drag = pan, cubit =
+  zoom, tap = aksi kontekstual), Celia Hodent (Game UX: usability +
+  engage-ability), Steve Swink (Game Feel: kontrol real-time + ruang
+  simulasi + polish), SitePoint/Kirupa (animasikan hanya transform +
+  opacity demi 60fps; jangan left/top/width), World Dominion (screenshot
+  pemilik — peta dunia full-bleed, laut gelap, daratan abu-abu garis
+  putih, kontrol kanan atas, cari kiri atas, Lapisan Peta kiri bawah).
+  Dicek map-dom (5)/(8)/(9)/(10) (zoom transform, roda, drag, pinch,
+  klik-setelah-drag, rute + hitung mundur, overlay + lapisan + slider +
+  Lokasi saya + perang aktif) + ui-fluid-dom baru (port 3476) (aturan
+  CSS + reduced-motion + ubin/dashboard/peta live). Pelajaran tes:
+  `MAP_PROJ` lon 94–142 (bukan 95–141) — rumus harapan di tes harus
+  pakai konstanta yang sama; `route()` tidak me-refresh `ME` (cache) —
+  tes yang menulis travel langsung ke DB harus memanggil `window.refreshMe()`
+  dulu; referensi `svg` lama di tes basi setelah reload halaman.
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

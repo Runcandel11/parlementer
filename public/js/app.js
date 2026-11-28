@@ -2968,11 +2968,18 @@ const MAP_SMALL = new Set(['Jakarta', 'Bali', 'Kepulauan Riau']);
 
 ROUTES.map = async () => {
   const data = await api('/api/regions');
+  // Lapisan Perang (v5.7.5, ala World Dominion): wilayah dengan perang
+  // aktif ditandai — data nyata dari /api/wars, tanpa endpoint baru.
+  let warRegionIds = new Set();
+  try {
+    const w = await api('/api/wars');
+    (w.wars || []).filter((x) => x.status === 'active').forEach((x) => warRegionIds.add(x.region_id));
+  } catch { /* daftar perang gagal dimuat — lapisan tetap jalan */ }
   // Tandai tugas kronik 'map' (Jelajahi peta) — gagal diam-diam bila sesi habis.
   post('/api/chronicle/visit', { key: 'map' }).catch(() => {});
   // Banner transit (27 Nov 2026): selama bepergian, tombol travel di
   // semua kartu nonaktif — warga tiba saat waktunya habis.
-  const transitBanner = ME.travel ? `<div class="panel"><p class="teal-text" style="margin:0">✈️ Dalam perjalanan ke <b>${esc(ME.travel.toRegionName)}</b> — tiba dalam ${fmtCountdown(ME.travel.remainingMs)} lagi.</p></div>` : '';
+  const transitBanner = ME.travel ? `<div class="panel"><p class="teal-text" style="margin:0">✈️ Dalam perjalanan ke <b>${esc(ME.travel.toRegionName)}</b> — tiba dalam <span id="map-transit-countdown">${fmtCountdown(ME.travel.remainingMs)}</span> lagi.</p></div>` : '';
   const byId = new Map(data.regions.map((r) => [r.id, r]));
   const freeCount = data.regions.filter((r) => !r.country_name).length;
   const pts = (poly) => poly.map(([lo, la]) => `${mapX(lo).toFixed(1)},${mapY(la).toFixed(1)}`).join(' ');
@@ -2997,20 +3004,11 @@ ROUTES.map = async () => {
   const mineXY = mine?.coords ? [mapX(mine.coords[1]), mapY(mine.coords[0])] : null;
   $('#page').innerHTML = page('PETA DUNIA', `${freeCount} wilayah belum bernegara · klik wilayah untuk memilih, klik dua kali untuk detail.`, `
   ${transitBanner}
-  <div class="panel"><h3>🔍 CARI WILAYAH</h3>
-    <input id="map-search" placeholder="Cari wilayah..." autocomplete="off">
-    <p class="muted small" id="map-search-count" style="margin:6px 0 0"></p>
-  </div>
   <div class="panel"><h3>🧭 MAU PINDAH KE JAKARTA?</h3>
     <p class="muted small">Klik wilayah di peta untuk detailnya. <b>Bepergian</b> = kunjungan saja (1 Tiket, perjalanan ~2–30 menit, kewarganegaraanmu tetap di wilayah asal). <b>Pindah kewarganegaraan</b> = negara, pajak, dan hak memilihmu ikut pindah ke wilayah itu — gratis, bisa pindah lagi setelah 7 hari. Gabung partai <b>tidak</b> memindahkan kewarganegaraanmu — itu dua hal berbeda.</p>
   </div>
   <div class="panel big-map-panel">
-    <div class="map-zoom">
-      <button class="btn-ghost btn-sm" id="map-zoom-out" type="button" aria-label="Perkecil peta">−</button>
-      <button class="btn-ghost btn-sm" id="map-zoom-in" type="button" aria-label="Perbesar peta">+</button>
-      <button class="btn-ghost btn-sm" id="map-zoom-reset" type="button" aria-label="Reset zoom">⟲</button>
-    </div>
-    <div class="big-map-wrap" id="big-map-wrap">
+    <div class="big-map-wrap map-layer-politics map-layer-war" id="big-map-wrap">
       <svg id="big-map" viewBox="0 0 1000 360" role="img" aria-label="Peta dunia Parlementer — 17 wilayah Indonesia">
         <rect class="map-ocean" x="0" y="0" width="1000" height="360"></rect>
         ${MAP_BG_LAND.map((poly) => `<polygon class="map-bg-land" points="${pts(poly)}"></polygon>`).join('')}
@@ -3028,20 +3026,48 @@ ROUTES.map = async () => {
             ${shape.extra ? `<polygon class="map-region" data-region-id="${r.id}" points="${pts(shape.extra)}" ${free ? '' : `style="fill:${countryColor(r.country_id)}"`} tabindex="0" role="button" aria-label="${esc(r.name)} — ${esc(r.country_name || 'Belum Bernegara')}"></polygon>` : ''}
             ${(shape.sats || []).map(([lo, la, rad]) => `<circle class="map-region map-sat" data-region-id="${r.id}" cx="${mapX(lo).toFixed(1)}" cy="${mapY(la).toFixed(1)}" r="${(rad * MAP_PROJ.w / (MAP_PROJ.lonMax - MAP_PROJ.lonMin)).toFixed(1)}" ${free ? '' : `style="fill:${countryColor(r.country_id)}"`}></circle>`).join('')}`
             : `<circle class="map-region" data-region-id="${r.id}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="10" ${free ? '' : `style="fill:${countryColor(r.country_id)}"`} tabindex="0" role="button" aria-label="${esc(r.name)}"><title>${esc(r.name)}</title></circle>`;
-          return `<g class="map-region-g ${free ? 'free' : 'owned'}" data-region-id="${r.id}" data-name="${esc(r.name.toLowerCase())}">
+          const atWar = warRegionIds.has(r.id);
+          return `<g class="map-region-g ${free ? 'free' : 'owned'}${atWar ? ' map-war' : ''}" data-region-id="${r.id}" data-name="${esc(r.name.toLowerCase())}">
             ${poly}
             ${free ? `<text class="map-q" x="${qx.toFixed(1)}" y="${(qy + 7).toFixed(1)}">?</text>` : ''}
             <text class="map-label" x="${cx.toFixed(1)}" y="${ly.toFixed(1)}">${esc(r.name.toUpperCase())}</text>
+            <text class="map-pop" x="${cx.toFixed(1)}" y="${(ly + 13).toFixed(1)}">${r.population} warga</text>
+            ${atWar ? `<text class="map-war-badge" x="${cx.toFixed(1)}" y="${(ly - 14).toFixed(1)}">⚔️</text>` : ''}
             ${MAP_SMALL.has(r.name) ? `<circle class="map-hit" data-region-id="${r.id}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="16"></circle>` : ''}
           </g>`;
         }).join('')}
         ${countryLabels}
         ${mineXY ? `<g class="map-you" data-region-id="${data.mine}"><circle class="map-you-ring" cx="${mineXY[0].toFixed(1)}" cy="${mineXY[1].toFixed(1)}" r="15"></circle><circle class="map-you-dot" cx="${mineXY[0].toFixed(1)}" cy="${mineXY[1].toFixed(1)}" r="7"></circle><text class="map-you-label" x="${mineXY[0].toFixed(1)}" y="${(mineXY[1] - 22).toFixed(1)}">📍 KAMU</text></g>` : ''}
       </svg>
+      <div class="map-vignette" aria-hidden="true"></div>
+      <div class="map-overlay map-overlay-tl">
+        <input id="map-search" placeholder="🔍 Cari wilayah..." autocomplete="off">
+        <p class="muted small" id="map-search-count"></p>
+      </div>
+      <div class="map-overlay map-overlay-tr">
+        <div class="map-ctl-row">
+          <button class="btn-ghost btn-sm" id="map-zoom-out" type="button" aria-label="Perkecil peta">−</button>
+          <input type="range" id="map-zoom-slider" min="1" max="3" step="0.1" value="1" aria-label="Zoom peta">
+          <button class="btn-ghost btn-sm" id="map-zoom-in" type="button" aria-label="Perbesar peta">+</button>
+        </div>
+        <div class="map-ctl-row">
+          <button class="btn-ghost btn-sm" id="map-zoom-reset" type="button">⟲ Reset</button>
+          <button class="btn-ghost btn-sm" id="map-locate-me" type="button">◎ Lokasi saya</button>
+        </div>
+      </div>
+      <div class="map-overlay map-overlay-bl">
+        <h4>🗺️ Lapisan Peta</h4>
+        <div class="map-layers">
+          <button type="button" id="map-layer-politics" class="active">Politik</button>
+          <button type="button" id="map-layer-pop">Populasi</button>
+          <button type="button" id="map-layer-war" class="active">Perang</button>
+        </div>
+      </div>
     </div>
-    <p class="muted small" style="margin:8px 0 0">Wilayah abu-abu + "?" = belum bernegara. Warna = negara pemiliknya.</p>
+    <p class="muted small" style="margin:8px 14px 0">Wilayah abu-abu + "?" = belum bernegara. Warna = negara pemiliknya. Garis merah berdenyut = wilayah sedang berperang.</p>
+    ${ME.travel ? `<p class="muted small" id="map-travel-line" style="margin:4px 0 0">✈️ Menuju <b>${esc(ME.travel.toRegionName)}</b> — tiba <span id="map-travel-countdown">${fmtCountdown(ME.travel.remainingMs)}</span> lagi.</p>` : ''}
   </div>
-  <div class="panel" id="map-panel"><h3>📖 POLITIK · NEGARA</h3><div id="map-panel-body"><p class="muted small">Memuat…</p></div></div>`);
+  <div class="panel" id="map-panel"><h3>📖 POLITIK · NEGARA</h3><div id="map-panel-body"><div class="skel skel-h"></div><div class="skel skel-p"></div></div></div>`);
   // --- Panel bawah: ringkasan wilayah yang dipilih ---
   let selectedId = data.mine;
   const panelHtml = (r, d) => `
@@ -3071,13 +3097,18 @@ ROUTES.map = async () => {
     } catch { /* panel dasar tetap tampil */ }
   };
   // Klik = pilih (panel terisi); klik dua kali = langsung buka detail.
+  // suppressUntil (v5.7.5): klik yang datang tepat setelah drag/pinch
+  // diabaikan — menggeser peta tidak boleh memindahkan pilihan wilayah.
+  let suppressUntil = 0;
   const onPick = (e) => {
+    if (Date.now() < suppressUntil) return;
     const g = e.target.closest('[data-region-id]');
     if (!g) return;
     selectRegion(Number(g.dataset.regionId));
   };
   $('#big-map').addEventListener('click', onPick);
   $('#big-map').addEventListener('dblclick', (e) => {
+    if (Date.now() < suppressUntil) return;
     const g = e.target.closest('[data-region-id]');
     if (g) location.hash = '#/regions/' + g.dataset.regionId;
   });
@@ -3114,14 +3145,182 @@ ROUTES.map = async () => {
     const matches = $$('.map-region-g.match');
     if (matches.length === 1) selectRegion(Number(matches[0].dataset.regionId));
   });
-  // Zoom: lebar SVG 100% → 150% → 220% (wadah bisa di-scroll di HP).
-  const zoomLevels = [100, 150, 220];
-  let zoomIdx = 0;
+  // Kamera peta (v5.7.5): pan + zoom via transform (GPU, 60fps) — ganti
+  // zoom lama yang mengubah lebar SVG (layout tiap frame = patah-patah).
+  // Pola referensi: drag = pan, cubit/scroll = zoom, tap = pilih wilayah
+  // (roguelike touch + Infestation). Transisi .25s untuk tombol/roda;
+  // saat drag, transisi dimatikan supaya peta menempel di jari.
   const svg = $('#big-map');
-  const applyZoom = () => { svg.style.width = zoomLevels[zoomIdx] + '%'; };
-  $('#map-zoom-in').onclick = () => { zoomIdx = Math.min(zoomLevels.length - 1, zoomIdx + 1); applyZoom(); };
-  $('#map-zoom-out').onclick = () => { zoomIdx = Math.max(0, zoomIdx - 1); applyZoom(); };
-  $('#map-zoom-reset').onclick = () => { zoomIdx = 0; applyZoom(); };
+  const wrap = $('#big-map-wrap');
+  const zoomLevels = [1, 1.5, 2.2];
+  let zoomIdx = 0;
+  const cam = { k: 1, tx: 0, ty: 0 };
+  const clampCam = () => {
+    // Fallback 800×300 bila wadah belum terukur (jsdom: clientWidth = 0).
+    const w = wrap.clientWidth || wrap.getBoundingClientRect().width || 800;
+    const h = wrap.clientHeight || wrap.getBoundingClientRect().height || 300;
+    const contentW = w * cam.k;
+    const contentH = (w * 360 / 1000) * cam.k;
+    cam.tx = Math.min(0, Math.max(w - contentW, cam.tx));
+    cam.ty = Math.min(0, Math.max(h - contentH, cam.ty));
+    if (cam.k <= 1) { cam.tx = 0; cam.ty = 0; }
+  };
+  const applyCam = () => {
+    clampCam();
+    svg.style.transform = `translate(${cam.tx.toFixed(1)}px, ${cam.ty.toFixed(1)}px) scale(${cam.k})`;
+    wrap.classList.toggle('map-zoomed', cam.k >= 1.5);
+    // Slider mengikuti zoom tombol/roda/pinch — kecuali saat pengguna
+    // sedang menggeser slider itu sendiri (jangan berebut nilai).
+    const sl = $('#map-zoom-slider');
+    if (sl && document.activeElement !== sl) sl.value = String(cam.k.toFixed(1));
+  };
+  const zoomAt = (cx, cy, k2) => {
+    const k1 = cam.k;
+    const nk = Math.min(3, Math.max(1, k2));
+    cam.tx = cx - ((cx - cam.tx) * nk) / k1;
+    cam.ty = cy - ((cy - cam.ty) * nk) / k1;
+    cam.k = nk;
+    zoomIdx = zoomLevels.reduce((best, lv, i) => (Math.abs(lv - nk) < Math.abs(zoomLevels[best] - nk) ? i : best), 0);
+    applyCam();
+  };
+  const zoomCenter = (dir) => {
+    const r = wrap.getBoundingClientRect();
+    zoomIdx = Math.min(zoomLevels.length - 1, Math.max(0, zoomIdx + dir));
+    zoomAt(r.width / 2, r.height / 2, zoomLevels[zoomIdx]);
+  };
+  $('#map-zoom-in').onclick = () => zoomCenter(1);
+  $('#map-zoom-out').onclick = () => zoomCenter(-1);
+  $('#map-zoom-reset').onclick = () => { zoomIdx = 0; cam.k = 1; cam.tx = 0; cam.ty = 0; applyCam(); };
+  // Slider zoom (ala World Dominion): zoom ke tengah wadah.
+  $('#map-zoom-slider')?.addEventListener('input', (e) => {
+    const r = wrap.getBoundingClientRect();
+    zoomAt(r.width / 2, r.height / 2, parseFloat(e.target.value) || 1);
+  });
+  // "Lokasi saya": terbang ke wilayah pemain (zoom 2×, marker di tengah).
+  $('#map-locate-me').onclick = () => {
+    if (!mineXY) return;
+    const w = wrap.clientWidth || wrap.getBoundingClientRect().width || 800;
+    const h = wrap.clientHeight || wrap.getBoundingClientRect().height || 300;
+    const px = (mineXY[0] / 1000) * w;
+    const py = (mineXY[1] / 1000) * w;
+    cam.k = 2;
+    cam.tx = w / 2 - px * 2;
+    cam.ty = h / 2 - py * 2;
+    zoomIdx = 2;
+    applyCam();
+  };
+  // Roda mouse = zoom di titik kursor.
+  wrap.addEventListener('wheel', (e) => {
+    if (e.target.closest('.map-overlay')) return;
+    e.preventDefault();
+    const r = wrap.getBoundingClientRect();
+    zoomAt(e.clientX - r.left, e.clientY - r.top, cam.k * (e.deltaY < 0 ? 1.25 : 0.8));
+  }, { passive: false });
+  // Pointer: 1 jari = pan, 2 jari = pinch-zoom (jarak + titik tengah).
+  const pointers = new Map();
+  let dragMoved = 0;
+  let pinchD0 = 0;
+  let pinchK0 = 1;
+  let pinchMid = null;
+  const wrapXY = (e) => { const r = wrap.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  wrap.addEventListener('pointerdown', (e) => {
+    // Ketukan di panel overlay (cari / kontrol / lapisan) bukan pan.
+    if (e.target.closest('.map-overlay')) return;
+    try { wrap.setPointerCapture(e.pointerId); } catch { /* jsdom / browser lama */ }
+    pointers.set(e.pointerId ?? 0, { x: e.clientX, y: e.clientY });
+    dragMoved = 0;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinchD0 = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      pinchK0 = cam.k;
+      pinchMid = wrapXY({ clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 });
+    }
+    wrap.classList.add('map-panning');
+  });
+  wrap.addEventListener('pointermove', (e) => {
+    const key = e.pointerId ?? 0;
+    if (!pointers.has(key)) return;
+    const prev = pointers.get(key);
+    const dx = e.clientX - prev.x;
+    const dy = e.clientY - prev.y;
+    pointers.set(key, { x: e.clientX, y: e.clientY });
+    dragMoved += Math.abs(dx) + Math.abs(dy);
+    if (pointers.size === 1) {
+      cam.tx += dx; cam.ty += dy; applyCam();
+    } else if (pointers.size === 2 && pinchD0 > 0) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const mid = wrapXY({ clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 });
+      if (pinchMid) { cam.tx += mid.x - pinchMid.x; cam.ty += mid.y - pinchMid.y; }
+      pinchMid = mid;
+      zoomAt(mid.x, mid.y, pinchK0 * (d / pinchD0));
+    }
+  });
+  const endPointer = (e) => {
+    pointers.delete(e.pointerId ?? 0);
+    if (pointers.size < 2) { pinchD0 = 0; pinchMid = null; }
+    if (pointers.size === 0) {
+      wrap.classList.remove('map-panning');
+      if (dragMoved > 8) suppressUntil = Date.now() + 200;
+    }
+  };
+  wrap.addEventListener('pointerup', endPointer);
+  wrap.addEventListener('pointercancel', endPointer);
+  // Lapisan peta (v5.7.5, ala World Dominion): tombol mengalihkan kelas
+  // di wadah — CSS yang menampilkan/menyembunyikan tiap lapisan.
+  const layerToggle = (btnId, cls) => {
+    const b = $(btnId);
+    if (!b) return;
+    b.onclick = () => { const on = wrap.classList.toggle(cls); b.classList.toggle('active', on); };
+  };
+  layerToggle('#map-layer-politics', 'map-layer-politics');
+  layerToggle('#map-layer-pop', 'map-layer-pop');
+  layerToggle('#map-layer-war', 'map-layer-war');
+  // Rute perjalanan (v5.7.5): garis putus-putus beranimasi dari wilayah
+  // saat ini ke tujuan + hitung mundur yang berdetak tiap detik. Timer
+  // berhenti sendiri bila SVG sudah tidak ada di halaman (pindah route).
+  if (ME.travel) {
+    const from = byId.get(data.mine);
+    const to = byId.get(ME.travel.toRegionId);
+    if (from?.coords && to?.coords) {
+      const [x1, y1] = [mapX(from.coords[1]), mapY(from.coords[0])];
+      const [x2, y2] = [mapX(to.coords[1]), mapY(to.coords[0])];
+      const ns = 'http://www.w3.org/2000/svg';
+      const line = document.createElementNS(ns, 'line');
+      line.setAttribute('class', 'map-route');
+      line.setAttribute('x1', x1.toFixed(1)); line.setAttribute('y1', y1.toFixed(1));
+      line.setAttribute('x2', x2.toFixed(1)); line.setAttribute('y2', y2.toFixed(1));
+      const dest = document.createElementNS(ns, 'circle');
+      dest.setAttribute('class', 'map-dest-ring');
+      dest.setAttribute('cx', x2.toFixed(1)); dest.setAttribute('cy', y2.toFixed(1)); dest.setAttribute('r', '12');
+      const label = document.createElementNS(ns, 'text');
+      label.setAttribute('class', 'map-dest-label');
+      label.setAttribute('x', x2.toFixed(1)); label.setAttribute('y', (y2 - 20).toFixed(1));
+      label.textContent = '✈️ ' + ME.travel.toRegionName.toUpperCase();
+      svg.append(line, dest, label);
+    }
+    const travelTimer = setInterval(() => {
+      if (!document.body.contains(svg)) { clearInterval(travelTimer); return; }
+      // Perjalanan sudah selesai & ME tersegar (refreshMe 30 detik):
+      // server melunasi travel → ME.travel hilang; chip menutup jadi
+      // "sebentar lagi" supaya tidak melempar TypeError tiap detik.
+      if (!ME.travel) {
+        const chip0 = $('#map-travel-countdown');
+        if (chip0) chip0.textContent = 'sebentar lagi';
+        const banner0 = $('#map-transit-countdown');
+        if (banner0) banner0.textContent = 'sebentar lagi';
+        clearInterval(travelTimer);
+        return;
+      }
+      const left = ME.travel.arrivesAt - Date.now();
+      const txt = left > 0 ? fmtCountdown(left) : 'sebentar lagi';
+      const chip = $('#map-travel-countdown');
+      if (chip) chip.textContent = txt;
+      const banner = $('#map-transit-countdown');
+      if (banner) banner.textContent = txt;
+      if (left <= 0) clearInterval(travelTimer);
+    }, 1000);
+  }
   await selectRegion(selectedId);
 };
 
