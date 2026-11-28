@@ -10,7 +10,7 @@ import {
   isHeicDataUrl, HEIC_ERROR_MESSAGE,
   requireCredit, creditScoreSettled,
 } from './util.js';
-import { dbRateLimit } from './rate-limit.js';
+import { dbRateLimit, checkRateLimit, getRateLimitCount, resetRateLimit } from './rate-limit.js';
 import { getMyCountry, getIncomeTaxRate, getImportTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary, countryDisplayName, militaryPowerOf, militaryUnitsOf } from './api-civic.js';
 import {
   VERSION, WA_TOPUP_URL, MINT_RATE, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
@@ -341,18 +341,50 @@ export function registerCore(app) {
     res.json({ ok: true, user: { id: result.userId, publicId: publicId(result.userId), email: email.toLowerCase(), username, referralCode: result.myCode } });
   }));
 
+  // Kunci brute-force login (v5.7.4, Lane 14 — Keamanan & Anti-Cheat):
+  // kegagalan login dihitung PER AKUN (email), bukan per IP — penyerang
+  // yang memutar IP tetap terkunci (OWASP Authentication Cheat Sheet:
+  // "count failures against the account, not the source IP address";
+  // NCSC menyarankan 5–10 percobaan; NIST SP 800-63B-4 mematok
+  // langit-langit 100). Batas in-memory 30/menit/IP di app.js tetap jadi
+  // lapis kedua (anti-spraying: satu password ke banyak akun). Hitungan
+  // disimpan di tabel rate_limits (DB-backed) supaya berlaku di semua
+  // instance serverless — batas in-memory saja bisa dilewati dengan
+  // menyebar request ke instance lain. Email tak dikenal TIDAK dihitung
+  // (tidak ada akun yang dilindungi + tidak mengisi tabel dengan kunci
+  // sampah). Pemulihan: tunggu jendela habis, atau alur Lupa Password
+  // (v5.5.0) bila password memang lupa.
+  const LOGIN_FAIL_MAX = 10;
+  const LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000;
+
   app.post('/api/auth/login', r(async (req, res) => {
     const { email, password } = req.body || {};
     if (!isValidEmail(email) || !password) return res.status(400).json({ error: 'Email dan password wajib diisi.' });
     const user = await one('SELECT * FROM users WHERE email = ?', [email.toLowerCase()]);
     if (!user) return res.status(400).json({ error: 'Email belum terdaftar.' });
+    // Akun sudah terkunci oleh kegagalan beruntun → tolak SEBELUM cek
+    // password (password benar pun ditolak selama jendela kunci berjalan;
+    // kalau tidak, penyerang tinggal menebak sampai batas lalu memakai
+    // password benar dari daftar bocor). Akun banned yang terkunci ikut
+    // tertunda 15 menit sebelum bisa mengajukan banding — trade-off yang
+    // diterima (banding tidak hilang, hanya tertunda).
+    const failKey = 'login-fail:' + email.toLowerCase();
+    const fails = await getRateLimitCount(failKey, LOGIN_FAIL_WINDOW_MS);
+    if (fails >= LOGIN_FAIL_MAX) return res.status(429).json({ error: 'Terlalu banyak percobaan login yang gagal. Coba lagi dalam 15 menit.' });
     // Password dicek DULU (sebelum status banned) agar status ban tidak bisa
     // ditebak tanpa password. Akun banned TETAP diberi sesi login — tapi
     // hanya untuk membuka layar banned + sistem banding; semua API game
     // diblokir middleware penjaga banned (lihat src/app.js). Tanpa sesi ini,
     // pemain yang ke-ban tidak akan pernah bisa mengajukan banding.
     const ok = await verifyPassword(password, user.pass_hash);
-    if (!ok) return res.status(400).json({ error: 'Password salah.' });
+    if (!ok) {
+      // Hanya kegagalan yang dihitung — login sukses tidak menghabiskan kuota.
+      // Gagal catat (DB error) tidak mengubah hasil: tetap 400.
+      try { await checkRateLimit(failKey, LOGIN_FAIL_MAX, LOGIN_FAIL_WINDOW_MS); } catch { /* abaikan */ }
+      return res.status(400).json({ error: 'Password salah.' });
+    }
+    // Login sukses mereset hitungan gagal akun ini.
+    await resetRateLimit(failKey);
     res.cookie(COOKIE_NAME, signToken(user.id, user.token_version || 0), cookieOptions());
     const citizen = await loadCitizen(user.id);
     res.json({

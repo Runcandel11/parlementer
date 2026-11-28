@@ -8,7 +8,7 @@
 //   (4) Ketua bisa mengangkat anggota jadi Sekretaris lalu mencopotnya
 //       (tombol berubah Angkat ↔ Copot, label jabatan berubah);
 //   (5) Ketua bisa menolak lamaran dari halaman detail (tombol Tolak).
-//   (6) v5.7.3 — Ketua bisa mengeluarkan anggota (tombol Keluarkan) dan
+//   (6) v5.7.4 — Ketua bisa mengeluarkan anggota (tombol Keluarkan) dan
 //       membubarkan partai (tombol Bubarkan Partai); anggota biasa tidak
 //       melihat kedua tombol itu.
 // Jalankan: node test/party-dom.js
@@ -99,7 +99,7 @@ async function main() {
     check('server menyala dan /api/world merespons', up);
     if (!up) { process.exitCode = 1; return; }
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.3', world.version === '5.7.3', `version=${world.version}`);
+    check('API /api/world: versi 5.7.4', world.version === '5.7.4', `version=${world.version}`);
 
     const jarL = makeJar(); const jarM = makeJar(); const jarA = makeJar();
     let r = await api(jarL, '/api/auth/register', { email: 'ketua-dom@test.local', password: 'rahasia123', username: 'ketua_dom' });
@@ -173,7 +173,7 @@ async function main() {
     await sleep(900);
     check('Setelah Tolak: panel lamaran menampilkan "Tidak ada lamaran menunggu"', txt().includes('Tidak ada lamaran menunggu'));
 
-    // --- (6) v5.7.3 — Keluarkan anggota + bubarkan partai ---
+    // --- (6) v5.7.4 — Keluarkan anggota + bubarkan partai ---
     // Anggota biasa tidak melihat tombol Keluarkan / Bubarkan Partai.
     const domM = await bootDom(BASE + '/#/parties/' + partyId, jarM);
     const docM = domM.window.document;

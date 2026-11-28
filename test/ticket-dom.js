@@ -145,7 +145,7 @@ async function main() {
     check('server menyala dan /api/world merespons', up);
     if (!up) { process.exitCode = 1; return; }
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.3', world.version === '5.7.3', `version=${world.version}`);
+    check('API /api/world: versi 5.7.4', world.version === '5.7.4', `version=${world.version}`);
 
     const jarA = makeJar();
     const jarB = makeJar();

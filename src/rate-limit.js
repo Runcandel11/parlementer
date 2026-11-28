@@ -4,7 +4,7 @@
 // INSERT baris jendela bila belum ada (di luar tx, abaikan bentrok), lalu
 // tx() + SELECT ... FOR UPDATE + update kondisional — dua request paralel
 // pada kunci yang sama ter-serialisasi, jadi hitungan tidak pernah lolos.
-import { run, tx, forUpdate } from './db.js';
+import { run, tx, forUpdate, one } from './db.js';
 
 // Cek + tambah hitungan untuk `key` dalam jendela `windowMs`.
 // Mengembalikan { allowed, count }. Jendela dihitung dari epoch (bukan
@@ -26,6 +26,26 @@ export async function checkRateLimit(key, max, windowMs) {
     await t.run('UPDATE rate_limits SET count = count + 1 WHERE key = ?', [key]);
     return { allowed: true, count: Number(row.count) + 1 };
   });
+}
+
+// Baca hitungan saat ini dalam jendela berjalan TANPA menambah (peek).
+// Dipakai kunci login (v5.7.4): akun terkunci BILA hitungan sudah mencapai
+// batas — pengecekan dilakukan SEBELUM verifikasi password, jadi password
+// yang benar pun ditolak selama jendela kunci berjalan. Gagal baca (DB
+// error) = fail-open (0) agar gangguan DB tidak mengunci semua pemain.
+export async function getRateLimitCount(key, windowMs) {
+  const windowStart = Math.floor(Date.now() / windowMs) * windowMs;
+  try {
+    const row = await one('SELECT * FROM rate_limits WHERE key = ?', [key]);
+    if (!row || Number(row.window_start) !== windowStart) return 0;
+    return Number(row.count);
+  } catch { return 0; }
+}
+
+// Hapus hitungan kunci (dipakai login sukses: hitungan gagal direset, jadi
+// pemain yang akhirnya ingat passwordnya tidak langsung terkunci).
+export async function resetRateLimit(key) {
+  try { await run('DELETE FROM rate_limits WHERE key = ?', [key]); } catch { /* abaikan */ }
 }
 
 // Middleware Express: keyFn(req) mengembalikan kunci (atau null = lewati).

@@ -4551,6 +4551,58 @@ async function main() {
   r = await LV.post('/api/chronicle/claim', { chapter: 3 });
   check('Klaim Babak III 2× ditolak 400', r.status === 400, `status=${r.status}`);
 
+  // [45] v5.7.4 — Kunci brute-force login (Lane 14) — ditaruh PALING AKHIR
+  // supaya 2 akun uji (warga_brute, warga_reset) tidak menggeser hitungan
+  // populasi / ID publik yang di-assert seksi-seksi sebelumnya: 10 gagal / 15 menit
+  // per email (DB-backed, bukan per IP — penyerang yang memutar IP tetap
+  // terkunci). Klien uji pakai X-Forwarded-For sendiri (dua IP berbeda
+  // untuk dua alur) supaya tidak menabrak batas in-memory 30/menit/IP
+  // di app.js — batas itu lapis kedua, bukan yang sedang diuji.
+  console.log('\n[45] v5.7.4 — Kunci brute-force login (10 gagal / 15 menit per akun)');
+  const BR = new Client();
+  BR.extraHeaders = { 'X-Forwarded-For': '203.0.113.99' };
+  r = await BR.post('/api/auth/register', { email: 'warga_brute@test.local', password: 'rahasia123', username: 'warga_brute' });
+  check('Daftar akun uji brute-force berhasil', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const BR2 = new Client();
+  BR2.extraHeaders = { 'X-Forwarded-For': '203.0.113.99' };
+  let lockedEarly = false;
+  for (let i = 1; i <= 10; i++) {
+    r = await BR2.post('/api/auth/login', { email: 'warga_brute@test.local', password: 'salah123' });
+    if (r.status === 429) lockedEarly = true;
+    check(`Gagal login ke-${i} ditolak (400)`, r.status === 400, `status=${r.status}`);
+  }
+  check('10 kegagalan belum mengunci (kunci mulai percobaan ke-11)', !lockedEarly);
+  r = await BR2.post('/api/auth/login', { email: 'warga_brute@test.local', password: 'salah123' });
+  check('Percobaan gagal ke-11 ditolak (429)', r.status === 429, `status=${r.status} ${r.data.error || ''}`);
+  r = await BR2.post('/api/auth/login', { email: 'warga_brute@test.local', password: 'rahasia123' });
+  check('Password benar pun ditolak selama terkunci (429)', r.status === 429, `status=${r.status}`);
+  // Akun lain tidak ikut terkunci (kunci per akun, bukan per IP).
+  const BR3 = new Client();
+  BR3.extraHeaders = { 'X-Forwarded-For': '203.0.113.99' };
+  r = await BR3.post('/api/auth/login', { email: 'warga1@test.local', password: 'rahasia123' });
+  check('Akun lain tetap bisa login (kunci tidak menular)', r.status === 200 && r.data.ok, `status=${r.status}`);
+  // Login sukses mereset hitungan: 3 gagal → sukses → 9 gagal lagi tetap 400.
+  const BR4 = new Client();
+  BR4.extraHeaders = { 'X-Forwarded-For': '203.0.113.98' };
+  r = await BR4.post('/api/auth/register', { email: 'warga_reset@test.local', password: 'rahasia123', username: 'warga_reset' });
+  check('Daftar akun uji reset berhasil', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const BR5 = new Client();
+  BR5.extraHeaders = { 'X-Forwarded-For': '203.0.113.98' };
+  for (let i = 0; i < 3; i++) { r = await BR5.post('/api/auth/login', { email: 'warga_reset@test.local', password: 'salah123' }); }
+  check('3 gagal awal ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await BR5.post('/api/auth/login', { email: 'warga_reset@test.local', password: 'rahasia123' });
+  check('Login sukses setelah 3 gagal', r.status === 200 && r.data.ok, `status=${r.status}`);
+  let okAfterReset = true;
+  for (let i = 1; i <= 9; i++) {
+    r = await BR5.post('/api/auth/login', { email: 'warga_reset@test.local', password: 'salah123' });
+    if (r.status !== 400) okAfterReset = false;
+  }
+  check('9 gagal setelah reset tetap 400 (hitungan direset)', okAfterReset, `status terakhir=${r.status}`);
+  r = await BR5.post('/api/auth/login', { email: 'warga_reset@test.local', password: 'salah123' });
+  check('Gagal ke-10 setelah reset tetap 400', r.status === 400, `status=${r.status}`);
+  r = await BR5.post('/api/auth/login', { email: 'warga_reset@test.local', password: 'salah123' });
+  check('Gagal ke-11 setelah reset ditolak (429)', r.status === 429, `status=${r.status}`);
+
   setDayO(1);
 
   dbS6.close();

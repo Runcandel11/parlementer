@@ -496,6 +496,30 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   klaim Babak III +25 emas, 2× ditolak) + pg-verify [33] (migrasi 31→32:
   lv11+lv5 di-backfill, lv4+lv1 tidak, lv7 yang sudah ditandai tidak
   didobel, penanda + ringkasan JSON, idempotensi).
+- **Kunci brute-force login v5.7.4 (28 Nov 2026, Lane 14 — Keamanan &
+  Anti-Cheat; audit celah):** `POST /api/auth/login` sebelumnya HANYA
+  dilindungi batas in-memory 30/menit/IP di `src/app.js` — di serverless
+  (Vercel) batas itu per instance, jadi penyerang yang menyebar request
+  ke banyak instance + memutar IP bisa menebak password satu akun tanpa
+  batas. Kini: 10 kegagalan login / 15 menit PER AKUN (email, lowercase)
+  → 429 "Terlalu banyak percobaan login yang gagal. Coba lagi dalam
+  15 menit." — dicek SEBELUM verifikasi password, jadi password benar pun
+  ditolak selama jendela kunci berjalan; login sukses mereset hitungan.
+  Hitungan memakai tabel `rate_limits` yang sudah ada (DB-backed, tanpa
+  migrasi skema) lewat helper baru `getRateLimitCount` (peek tanpa
+  menambah) + `resetRateLimit` di `src/rate-limit.js`; `checkRateLimit`
+  yang sudah ada dipakai untuk menambah hitungan gagal (fail-open bila DB
+  error, hasil tetap 400). Email tak dikenal TIDAK dihitung (tidak ada akun
+  yang dilindungi; tidak mengisi tabel dengan kunci sampah). Ambang 10/15
+  menit mengikuti OWASP Authentication Cheat Sheet ("count failures
+  against the account, not the source IP") + NCSC 5–10 percobaan;
+  langit-langit NIST SP 800-63B-4 adalah 100. Batas in-memory per IP tetap
+  jadi lapis kedua (anti-spraying: satu password ke banyak akun).
+  Trade-off yang diterima: akun banned yang terkunci ikut tertunda 15 menit
+  sebelum bisa mengajukan banding (banding tidak hilang, hanya tertunda);
+  pemulihan normal lewat alur Lupa Password (v5.5.0). Dicek e2e [45]
+  (10×400 → ke-11 429; password benar saat terkunci 429; akun lain tetap
+  login; 3 gagal → sukses → 9 gagal tetap 400 → ke-11 429).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;
