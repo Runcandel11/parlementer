@@ -207,6 +207,12 @@ TIDAK jadi admin; kode bootstrap benar jadi admin)** → ban (login akun banned
 tetap bisa, ditandai `banned:true`, untuk banding) + banding (ajukan/balas/
 terima/tolak) + avatar + hadiah/pembelian + hadiah massal + inbox admin.
 
+Hasil terakhir (28 Nov 2026, v5.6.0 "Manajemen Partai"): **e2e 1201/1201 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 270/270 lolos,
+pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, tutorial-dom 43/43 lolos,
+landing-glass-dom 79/79 lolos, ads-dom 44/44 lolos, conversion-dom 20/20 lolos, chat-dom 70/70 lolos, password-reset-dom 23/23 lolos, party-dom 24/24 lolos** — dan semua suite DOM lain hijau (24 suite DOM = 971/971,
+xp-rollback 49/49, ssl 6/6; total 2581/2581, 0 gagal). Manajemen Partai: klik partai di #/parties → halaman detail (nama, deskripsi, ideologi, ketua, tipe, jumlah member, kursi) + daftar member dengan label peran (👑 Ketua, 📋 Sekretaris, Anggota, ⏳ Menunggu); ketua bisa mengangkat anggota jadi sekretaris dan mencopotnya kembali (POST /api/parties/:id/secretary); sekretaris bisa menyetujui/menolak lamaran gabung sama seperti ketua (POST /api/parties/:id/reject baru); semua hak dicek di server (ketua/sekretaris), daftar lamaran hanya terlihat oleh ketua/sekretaris; tanpa migrasi skema (role 'secretary' tanpa CHECK constraint, skema tetap 29).
+
 **Verifikasi Postgres sungguhan (27 Nov 2026, Tahap 2):** `test/pg-verify.mjs`
 menguji `initDb` di Postgres 16 lokal — idempotent (2× + 3× paralel),
 perbaikan state lama (kolom timestamp INTEGER → BIGINT, tipe komposit yatim,

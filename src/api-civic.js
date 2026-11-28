@@ -628,12 +628,78 @@ export function registerCivic(app) {
     const pending = mine ? await sql(
       `SELECT pm.*, u.username FROM party_members pm JOIN citizens c ON c.id = pm.citizen_id JOIN users u ON u.id = c.user_id
        WHERE pm.party_id = ? AND pm.role = 'pending'`, [mine.id]) : [];
-    // Anggota partaiku (leader + member) — dipakai halaman Pemilu untuk
-    // nominasi calon presiden oleh kepala partai (redesain dunia).
+    // Anggota partaiku (leader + secretary + member) — dipakai halaman
+    // Pemilu untuk nominasi calon presiden oleh kepala partai (redesain
+    // dunia) dan halaman detail partai (v5.6.0).
     const members = mine ? await sql(
       `SELECT pm.citizen_id, pm.role, u.username FROM party_members pm JOIN citizens c ON c.id = pm.citizen_id JOIN users u ON u.id = c.user_id
-       WHERE pm.party_id = ? AND pm.role IN ('leader','member') ORDER BY u.username`, [mine.id]) : [];
+       WHERE pm.party_id = ? AND pm.role IN ('leader','secretary','member') ORDER BY u.username`, [mine.id]) : [];
     res.json({ parties: rows, mine, pending, members });
+  }));
+
+  // ---------- MANAJEMEN PARTAI (v5.6.0) ----------
+  // Role di party_members: 'leader' (ketua) | 'secretary' (sekretaris) |
+  // 'member' (anggota) | 'pending' (lamaran menunggu). Kolom role tidak
+  // punya CHECK constraint, jadi 'secretary' tidak butuh migrasi skema.
+  async function partyRoleOf(partyId, citizenId) {
+    const m = await one('SELECT role FROM party_members WHERE party_id = ? AND citizen_id = ?', [partyId, citizenId]);
+    return m?.role || null;
+  }
+  // Ketua atau sekretaris boleh mengurus lamaran (setujui/tolak).
+  async function partyCanManage(party, citizenId) {
+    if (party.leader_id === citizenId) return true;
+    return (await partyRoleOf(party.id, citizenId)) === 'secretary';
+  }
+
+  // Detail partai: isi + daftar member (publik — nama warga sudah tampil
+  // di chat, peringkat, dan daftar partai; pola privasi yang sama). Lamaran
+  // pending hanya terlihat oleh ketua/sekretaris partai itu.
+  app.get('/api/parties/:id', authRequired, citizenRequired, r(async (req, res) => {
+    const p = await one(
+      `SELECT p.id, p.name, p.tag, p.ideology, p.leader_id, p.type, p.created_at,
+        u.username AS leader_name,
+        (SELECT COUNT(*) FROM party_members WHERE party_id = p.id) AS members
+       FROM parties p JOIN citizens c ON c.id = p.leader_id JOIN users u ON u.id = c.user_id WHERE p.id = ?`,
+      [req.params.id]);
+    if (!p) return res.status(404).json({ error: 'Partai tidak ditemukan.' });
+    const myCountry = await getMyCountry({ one }, req.citizen);
+    const seatsRow = await one('SELECT seats FROM party_seats WHERE party_id = ? AND country_id = ?', [p.id, myCountry?.id || -1]);
+    const members = await sql(
+      `SELECT pm.citizen_id, pm.role, pm.joined_at, u.username FROM party_members pm
+       JOIN citizens c ON c.id = pm.citizen_id JOIN users u ON u.id = c.user_id
+       WHERE pm.party_id = ? AND pm.role IN ('leader','secretary','member')
+       ORDER BY CASE pm.role WHEN 'leader' THEN 0 WHEN 'secretary' THEN 1 ELSE 2 END, u.username`,
+      [p.id]);
+    const myRole = await partyRoleOf(p.id, req.citizen.id);
+    const pending = (myRole === 'leader' || myRole === 'secretary') ? await sql(
+      `SELECT pm.citizen_id, pm.joined_at, u.username FROM party_members pm
+       JOIN citizens c ON c.id = pm.citizen_id JOIN users u ON u.id = c.user_id
+       WHERE pm.party_id = ? AND pm.role = 'pending' ORDER BY pm.joined_at`,
+      [p.id]) : [];
+    res.json({ party: { ...p, seats: Number(seatsRow?.seats) || 0 }, members, pending, myRole });
+  }));
+
+  // Angkat/copot sekretaris — HANYA ketua. Target harus anggota biasa
+  // (angkat) atau sekretaris (copot) dari partai ini.
+  app.post('/api/parties/:id/secretary', authRequired, citizenRequired, r(async (req, res) => {
+    const p = await one('SELECT * FROM parties WHERE id = ?', [req.params.id]);
+    if (!p) return res.status(404).json({ error: 'Partai tidak ditemukan.' });
+    if (p.leader_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya ketua partai yang bisa mengangkat/mencopot sekretaris.' });
+    const { citizen_id, action } = req.body || {};
+    if (!['appoint', 'remove'].includes(action)) return res.status(400).json({ error: 'Aksi tidak dikenal.' });
+    if (Number(citizen_id) === p.leader_id) return res.status(400).json({ error: 'Ketua tidak bisa diangkat jadi sekretaris.' });
+    const m = await one('SELECT * FROM party_members WHERE party_id = ? AND citizen_id = ?', [p.id, citizen_id]);
+    if (!m) return res.status(404).json({ error: 'Warga itu bukan anggota partai ini.' });
+    if (action === 'appoint') {
+      if (m.role !== 'member') return res.status(400).json({ error: 'Hanya anggota biasa yang bisa diangkat jadi sekretaris.' });
+      await run("UPDATE party_members SET role = 'secretary' WHERE party_id = ? AND citizen_id = ?", [p.id, citizen_id]);
+      await notify(citizen_id, 'PARTAI', 'Kamu diangkat jadi Sekretaris', `Ketua mengangkatmu jadi sekretaris partai ${p.name}. Kamu kini bisa membantu menyetujui lamaran gabung.`);
+    } else {
+      if (m.role !== 'secretary') return res.status(400).json({ error: 'Warga itu bukan sekretaris partai ini.' });
+      await run("UPDATE party_members SET role = 'member' WHERE party_id = ? AND citizen_id = ?", [p.id, citizen_id]);
+      await notify(citizen_id, 'PARTAI', 'Jabatan Sekretaris dicopot', `Ketua mencopot jabatan sekretarismu di partai ${p.name}.`);
+    }
+    res.json({ ok: true, role: action === 'appoint' ? 'secretary' : 'member' });
   }));
 
   app.post('/api/parties', authRequired, citizenRequired, requireCredit(CREDIT_MIN_FOR.party, 'mendirikan partai'),  r(async (req, res) => {
@@ -683,12 +749,29 @@ export function registerCivic(app) {
 
   app.post('/api/parties/:id/approve', authRequired, citizenRequired, r(async (req, res) => {
     const p = await one('SELECT * FROM parties WHERE id = ?', [req.params.id]);
-    if (!p || p.leader_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya ketua partai yang bisa menyetujui lamaran.' });
+    if (!p) return res.status(404).json({ error: 'Partai tidak ditemukan.' });
+    // v5.6.0: sekretaris boleh menyetujui lamaran sama seperti ketua.
+    if (!(await partyCanManage(p, req.citizen.id))) return res.status(403).json({ error: 'Hanya ketua atau sekretaris partai yang bisa menyetujui lamaran.' });
     const { citizen_id } = req.body || {};
     const m = await one("SELECT * FROM party_members WHERE party_id = ? AND citizen_id = ? AND role = 'pending'", [p.id, citizen_id]);
     if (!m) return res.status(404).json({ error: 'Lamaran tidak ditemukan.' });
     await run("UPDATE party_members SET role = 'member' WHERE party_id = ? AND citizen_id = ?", [p.id, citizen_id]);
     await run('UPDATE citizens SET party_id = ? WHERE id = ?', [p.id, citizen_id]);
+    await notify(citizen_id, 'PARTAI', 'Lamaranmu disetujui', `Kamu resmi bergabung dengan partai ${p.name}.`);
+    res.json({ ok: true });
+  }));
+
+  // Tolak lamaran (v5.6.0) — ketua atau sekretaris; baris pending dihapus
+  // sehingga pelamar bisa melamar lagi bila mau.
+  app.post('/api/parties/:id/reject', authRequired, citizenRequired, r(async (req, res) => {
+    const p = await one('SELECT * FROM parties WHERE id = ?', [req.params.id]);
+    if (!p) return res.status(404).json({ error: 'Partai tidak ditemukan.' });
+    if (!(await partyCanManage(p, req.citizen.id))) return res.status(403).json({ error: 'Hanya ketua atau sekretaris partai yang bisa menolak lamaran.' });
+    const { citizen_id } = req.body || {};
+    const m = await one("SELECT * FROM party_members WHERE party_id = ? AND citizen_id = ? AND role = 'pending'", [p.id, citizen_id]);
+    if (!m) return res.status(404).json({ error: 'Lamaran tidak ditemukan.' });
+    await run('DELETE FROM party_members WHERE party_id = ? AND citizen_id = ?', [p.id, citizen_id]);
+    await notify(citizen_id, 'PARTAI', 'Lamaranmu ditolak', `Lamaranmu ke partai ${p.name} ditolak.`);
     res.json({ ok: true });
   }));
 

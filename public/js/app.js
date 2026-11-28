@@ -3444,15 +3444,19 @@ ROUTES.contracts = async () => {
 };
 
 // ---------- PARTAI ----------
-ROUTES.parties = async () => {
+const PARTY_ROLE_LABEL = { leader: '👑 Ketua', secretary: '📋 Sekretaris', member: 'Anggota', pending: '⏳ Menunggu' };
+ROUTES.parties = async (arg) => {
+  // Detail partai: #/parties/<id> — isi + daftar member + urus lamaran.
+  if (arg && /^\d+$/.test(arg)) { await partyDetail(Number(arg)); return; }
   const data = await api('/api/parties');
   $('#page').innerHTML = page('PARTAI-PARTAI', 'Bergabunglah dengan salah satu partai — atau dirikan partaimu sendiri dan bawa ke parlemen.', `
   <div class="panel"><h3>🚩 PARTAIMU</h3>
     ${data.mine ? `
       <div class="kv"><span class="k">${esc(data.mine.name)} [${esc(data.mine.tag)}]</span><span class="v">${esc(data.mine.ideology)} · ${data.mine.seats} kursi</span></div>
       <p class="muted small">Ketua: ${esc(data.mine.leader_name)}</p>
+      <button class="btn-ghost btn-sm" data-goto="#/parties/${data.mine.id}" style="margin-top:6px">Lihat Detail & Member Partai</button>
       ${data.pending.length ? `<h3 style="margin-top:12px">📥 LAMARAN MASUK</h3>
-        ${data.pending.map((p) => `<div class="kv"><span class="k">${esc(p.username)}</span><span class="v"><button class="btn-gold btn-sm" data-approve="${p.citizen_id}">Setujui</button></span></div>`).join('')}` : ''}
+        ${data.pending.map((p) => `<div class="kv"><span class="k">${esc(p.username)}</span><span class="v"><button class="btn-gold btn-sm" data-approve="${p.citizen_id}">Setujui</button> <button class="btn-ghost btn-sm" data-reject="${p.citizen_id}">Tolak</button></span></div>`).join('')}` : ''}
       <button class="btn-ghost btn-sm" data-leave="${data.mine.id}" style="margin-top:10px">Keluar dari Partai</button>`
     : `<div class="empty"><div class="big-ico">🚩</div><h3>BELUM PUNYA PARTAI</h3>
       <p class="muted">Bergabunglah dengan salah satu partai di sini — atau dirikan partaimu sendiri dan bawa ke parlemen.</p></div>
@@ -3464,6 +3468,7 @@ ROUTES.parties = async () => {
     ${data.parties.length ? data.parties.map((p) => `
       <div class="card"><div class="panel-head"><h4>${esc(p.name)} [${esc(p.tag)}]</h4><span class="chip">${p.seats} kursi</span></div>
       <p class="muted small">Ketua: ${esc(p.leader_name)} · ${esc(p.ideology)} · ${p.members} anggota · ${p.type === 'open' ? 'Terbuka' : p.type === 'application' ? 'Lewat Lamaran' : 'Tertutup'}</p>
+      <button class="btn-ghost btn-sm" data-goto="#/parties/${p.id}">LIHAT DETAIL</button>
       ${!data.mine ? `<button class="btn-gold btn-sm" data-join="${p.id}">${p.type === 'application' ? 'KIRIM LAMARAN' : 'GABUNG'}</button>` : ''}</div>`).join('')
       : '<p class="muted">Belum ada partai. Jadilah pendiri pertama!</p>'}
   </div>
@@ -3500,6 +3505,10 @@ ROUTES.parties = async () => {
     try { await post(`/api/parties/${data.mine.id}/approve`, { citizen_id: Number(b.dataset.approve) }); toast('Lamaran disetujui.'); route(); }
     catch (e) { toast(e.message); }
   });
+  $$('[data-reject]').forEach((b) => b.onclick = async () => {
+    try { await post(`/api/parties/${data.mine.id}/reject`, { citizen_id: Number(b.dataset.reject) }); toast('Lamaran ditolak.'); route(); }
+    catch (e) { toast(e.message); }
+  });
   $$('[data-leave]').forEach((b) => b.onclick = async () => {
     // Tahap 3: keluar partai itu destruktif (kehilangan jabatan/kursi partai
     // bila ada) — minta konfirmasi dulu.
@@ -3508,6 +3517,61 @@ ROUTES.parties = async () => {
     catch (e) { toast(e.message); }
   });
 };
+
+// Detail partai (v5.6.0): isi partai + daftar member dengan jabatan +
+// urus lamaran (ketua/sekretaris) + angkat/copot sekretaris (ketua saja).
+async function partyDetail(id) {
+  const d = await api('/api/parties/' + id);
+  const p = d.party;
+  const canManage = d.myRole === 'leader' || d.myRole === 'secretary';
+  $('#page').innerHTML = page('PARTAI — ' + p.name.toUpperCase(), 'Isi partai, daftar member, dan jabatan di dalamnya.', `
+  <div class="panel"><h3>🚩 ${esc(p.name)} [${esc(p.tag)}]</h3>
+    <div class="kv"><span class="k">Ideologi</span><span class="v">${esc(p.ideology)}</span></div>
+    <div class="kv"><span class="k">Ketua</span><span class="v">${esc(p.leader_name)}</span></div>
+    <div class="kv"><span class="k">Jenis</span><span class="v">${p.type === 'open' ? 'Terbuka — gabung langsung' : p.type === 'application' ? 'Lewat Lamaran' : 'Tertutup'}</span></div>
+    <div class="kv"><span class="k">Anggota</span><span class="v">${p.members} warga · ${p.seats} kursi di parlemen negaramu</span></div>
+    ${d.myRole ? `<p class="muted small">Jabatanmu: ${PARTY_ROLE_LABEL[d.myRole] || d.myRole}</p>` : ''}
+    ${!d.myRole ? `<button class="btn-gold btn-sm" data-join="${p.id}">${p.type === 'application' ? 'KIRIM LAMARAN' : 'GABUNG'}</button>` : ''}
+    ${d.myRole === 'pending' ? `<p class="muted small">Lamaranmu sedang menunggu persetujuan ketua/sekretaris.</p>` : ''}
+    ${(d.myRole === 'member' || d.myRole === 'secretary') ? `<button class="btn-ghost btn-sm" data-leave="${p.id}">Keluar dari Partai</button>` : ''}
+  </div>
+  <div class="panel"><h3>👥 DAFTAR MEMBER (${d.members.length})</h3>
+    ${d.members.length ? d.members.map((m) => `<div class="kv"><span class="k">${esc(m.username)}</span><span class="v">${PARTY_ROLE_LABEL[m.role] || m.role}
+      ${d.myRole === 'leader' && m.role === 'member' ? `<button class="btn-gold btn-sm" data-appoint="${m.citizen_id}">Angkat jadi Sekretaris</button>` : ''}
+      ${d.myRole === 'leader' && m.role === 'secretary' ? `<button class="btn-ghost btn-sm" data-remove-sec="${m.citizen_id}">Copot Sekretaris</button>` : ''}
+    </span></div>`).join('') : '<p class="muted">Belum ada member.</p>'}
+  </div>
+  ${canManage ? `<div class="panel"><h3>📥 LAMARAN MASUK</h3>
+    ${d.pending.length ? d.pending.map((x) => `<div class="kv"><span class="k">${esc(x.username)}</span><span class="v"><button class="btn-gold btn-sm" data-approve="${x.citizen_id}">Setujui</button> <button class="btn-ghost btn-sm" data-reject="${x.citizen_id}">Tolak</button></span></div>`).join('') : '<p class="muted">Tidak ada lamaran menunggu.</p>'}
+  </div>` : ''}
+  <button class="btn-ghost" data-goto="#/parties">← Kembali ke Daftar Partai</button>`);
+  $$('[data-join]').forEach((b) => b.onclick = async () => {
+    try { const r = await post(`/api/parties/${b.dataset.join}/join`); toast(r.role === 'pending' ? 'Lamaran dikirim. Menunggu persetujuan ketua.' : 'Kamu resmi bergabung dengan partai!'); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-leave]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Keluar dari partai ini? Kamu kehilangan keanggotaan dan jabatan di partai bila ada.')) return;
+    try { await post(`/api/parties/${b.dataset.leave}/leave`); toast('Kamu keluar dari partai.'); await refreshMe(); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-approve]').forEach((b) => b.onclick = async () => {
+    try { await post(`/api/parties/${id}/approve`, { citizen_id: Number(b.dataset.approve) }); toast('Lamaran disetujui.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-reject]').forEach((b) => b.onclick = async () => {
+    try { await post(`/api/parties/${id}/reject`, { citizen_id: Number(b.dataset.reject) }); toast('Lamaran ditolak.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-appoint]').forEach((b) => b.onclick = async () => {
+    try { await post(`/api/parties/${id}/secretary`, { citizen_id: Number(b.dataset.appoint), action: 'appoint' }); toast('Diangkat jadi Sekretaris.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+  $$('[data-remove-sec]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Copot jabatan sekretaris warga ini?')) return;
+    try { await post(`/api/parties/${id}/secretary`, { citizen_id: Number(b.dataset.removeSec), action: 'remove' }); toast('Jabatan Sekretaris dicopot.'); route(); }
+    catch (e) { toast(e.message); }
+  });
+}
 
 // ---------- PARLEMEN ----------
 ROUTES.parliament = async () => {
@@ -3686,7 +3750,7 @@ ROUTES.elections = async () => {
         : '<p class="muted">Belum ada kandidat.</p>'}
       ${e.status === 'open' && e.type === 'president' ? (isLeader ? `
         <label style="margin-top:10px">NOMINASIKAN CALON PRESIDEN (KEPALA PARTAI)<select id="nominate-${e.id}">
-          ${(parties.members || []).map((m) => `<option value="${m.citizen_id}">${esc(m.username)}${m.role === 'leader' ? ' (ketua)' : ''}</option>`).join('')}
+          ${(parties.members || []).map((m) => `<option value="${m.citizen_id}">${esc(m.username)}${m.role === 'leader' ? ' (ketua)' : m.role === 'secretary' ? ' (sekretaris)' : ''}</option>`).join('')}
         </select></label>
         <button class="btn-gold btn-sm" data-nominate="${e.id}">NOMINASIKAN</button>
         <p class="muted small">Calon presiden harus lewat partai — kepala partai yang menominasikan (satu kandidat per partai).</p>`

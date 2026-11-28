@@ -56,6 +56,16 @@ Ditulis di Tahap 7 (v4.1.0, 28 Nov 2026). Perilaku game yang lengkap ada di
 - **Militer:** 3 unit (Infanteri / Drone Perang / Kendaraan Berat); batas
   pasukan 50 + 10×level; pengali kerusakan perang 1 + min(power,100)/200
   (maks ×1,5); perawatan harian di tick.
+- **Partai (v5.6.0):** halaman detail `#/parties/<id>` menampilkan isi +
+  daftar member dengan jabatan (publik — nama warga sudah tampil di chat /
+  peringkat / daftar partai). Role: ketua (`leader`) | sekretaris
+  (`secretary`) | anggota (`member`) | lamaran (`pending`). Hanya ketua
+  yang bisa mengangkat/mencopot sekretaris; sekretaris membantu
+  menyetujui/menolak lamaran sama seperti ketua; hanya ketua yang bisa
+  mengeluarkan anggota/membubarkan partai. Semua hak dicek di server
+  (`partyCanManage`), bukan cuma di client. Lamaran pending hanya terlihat
+  oleh ketua/sekretaris partai itu. Kolom `party_members.role` tidak punya
+  CHECK constraint, jadi role `secretary` tidak butuh migrasi skema.
 - **Event dunia mingguan:** rotasi 6 minggu deterministik dari nomor hari
   dunia (`worldEventFor(day)`): Panen Raya, Festival Rakyat, Badai Besar,
   Wabah Melanda, Pasar Bergairah, Darurat Militer.

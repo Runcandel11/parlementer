@@ -100,7 +100,7 @@ async function main() {
     check('server menyala dan /api/world merespons', up);
     if (!up) { process.exitCode = 1; return; }
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.5.0', world.version === '5.5.0', `version=${world.version}`);
+    check('API /api/world: versi 5.6.0', world.version === '5.6.0', `version=${world.version}`);
 
     // --- (1) Fungsi murni: satu sumber kebenaran (Tahap 7) ---
     const g = await import('../src/game.js');

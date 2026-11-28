@@ -2724,6 +2724,7 @@ async function main() {
   check('Bubarkan semua: kekuatan 0, pengali 1', r.status === 200 && r.data.power === 0 && r.data.mult === 1 && r.data.count === 0, JSON.stringify(r.data));
 
   // --- (b) Serangan perang memakai pengali militer.
+
   setDayO(1); // minggu Panen Raya — bukan Darurat Militer, supaya pengali murni dari unit
   const warO = dbS6.prepare("INSERT INTO wars (name, region_id, attacker_label, defender_label, score_a, score_d, status, winner, ends_at, created_at) VALUES (?,?,?,?,0,0,'active','',?,?)")
     .run('Perang Tahap 6', safeRegionO, 'Pemberontak Tahap 6', 'Pembela Tahap 6', Date.now() + 7 * 86400000, Date.now());
@@ -3983,6 +3984,86 @@ async function main() {
     check('Log admin: 1 reject tercatat', Number(rej.n) === 1, `n=${rej.n}`);
     dbW.close();
   }
+
+  console.log('\n[39] v5.6.0 — Manajemen partai: detail, sekretaris, lamaran');
+  const PL = new Client(); const PM = new Client(); const PS = new Client();
+  const PP = new Client(); const PO = new Client(); const PQ = new Client();
+  // Batas daftar 20/IP/24 jam sudah habis oleh 20 pendaftaran 127.0.0.1
+  // di section sebelumnya — pemain tambahan memakai IP berbeda lewat
+  // X-Forwarded-For (pola yang sama seperti [23b]/[28]/[5b]).
+  [PL, PM, PS, PP, PO, PQ].forEach((c, i) => { c.extraHeaders = { 'X-Forwarded-For': '127.0.0.' + (21 + i) }; });
+  const partyUsers = [
+    [PL, 'ketua@test.local', 'ketua_partai'], [PM, 'anggota@test.local', 'anggota_partai'],
+    [PS, 'sekretaris@test.local', 'sekretaris_partai'], [PP, 'pelamar@test.local', 'pelamar_partai'],
+    [PO, 'luar@test.local', 'luar_partai'], [PQ, 'pelamar2@test.local', 'pelamar2_partai'],
+  ];
+  const partyIds = {};
+  for (const [c, email, username] of partyUsers) {
+    r = await c.post('/api/auth/register', { email, password: 'rahasia123', username });
+    check(`Daftar ${username}`, r.status === 200 && r.data.ok, `status=${r.status}`);
+    partyIds[username] = (await c.get('/api/me')).data.citizen.id;
+  }
+  {
+    const dbP = new DatabaseSync(DB_PATH);
+    dbP.prepare('UPDATE citizens SET level = 10, gold = 200 WHERE id = ?').run(partyIds.ketua_partai);
+    dbP.close();
+  }
+  r = await PL.post('/api/parties', { name: 'Partai Manajemen', tag: 'MNJ', ideology: 'Progresif', type: 'application' });
+  check('Ketua dirikan partai (lamaran)', r.status === 200 && r.data.ok && r.data.partyId, `status=${r.status}`);
+  const partyId = r.data.partyId;
+  r = await PL.get(`/api/parties/${partyId}`);
+  check('Detail partai: 200, ketua + 1 member, myRole leader, pending kosong',
+    r.status === 200 && r.data.party.name === 'Partai Manajemen' && r.data.members.length === 1
+    && r.data.members[0].role === 'leader' && r.data.myRole === 'leader' && r.data.pending.length === 0,
+    JSON.stringify(r.data.party));
+  r = await PM.post(`/api/parties/${partyId}/join`, {});
+  check('Anggota lamar (application → pending)', r.status === 200 && r.data.role === 'pending', `status=${r.status} role=${r.data.role}`);
+  r = await PL.post(`/api/parties/${partyId}/approve`, { citizen_id: partyIds.anggota_partai });
+  check('Ketua setujui lamaran anggota', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await PS.post(`/api/parties/${partyId}/join`, {});
+  check('Calon sekretaris lamar (pending)', r.status === 200 && r.data.role === 'pending');
+  r = await PL.post(`/api/parties/${partyId}/approve`, { citizen_id: partyIds.sekretaris_partai });
+  check('Ketua setujui lamaran calon sekretaris', r.status === 200 && r.data.ok);
+  r = await PP.post(`/api/parties/${partyId}/join`, {});
+  check('Pelamar lamar (pending)', r.status === 200 && r.data.role === 'pending');
+  r = await PM.post(`/api/parties/${partyId}/approve`, { citizen_id: partyIds.pelamar_partai });
+  check('Anggota biasa TIDAK bisa menyetujui lamaran (403)', r.status === 403, `status=${r.status}`);
+  r = await PS.post(`/api/parties/${partyId}/approve`, { citizen_id: partyIds.pelamar_partai });
+  check('Calon sekretaris (belum diangkat) TIDAK bisa menyetujui (403)', r.status === 403, `status=${r.status}`);
+  r = await PM.post(`/api/parties/${partyId}/secretary`, { citizen_id: partyIds.sekretaris_partai, action: 'appoint' });
+  check('Anggota biasa TIDAK bisa mengangkat sekretaris (403)', r.status === 403, `status=${r.status}`);
+  r = await PL.post(`/api/parties/${partyId}/secretary`, { citizen_id: partyIds.sekretaris_partai, action: 'appoint' });
+  check('Ketua angkat anggota jadi sekretaris', r.status === 200 && r.data.role === 'secretary', `status=${r.status}`);
+  r = await PL.get('/api/parties');
+  check('GET /api/parties (mine): members berisi sekretaris',
+    (r.data.members || []).some((m) => m.role === 'secretary' && m.username === 'sekretaris_partai'), JSON.stringify(r.data.members));
+  r = await PS.post(`/api/parties/${partyId}/approve`, { citizen_id: partyIds.pelamar_partai });
+  check('Sekretaris bisa menyetujui lamaran sama seperti ketua', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await PQ.post(`/api/parties/${partyId}/join`, {});
+  check('Pelamar kedua lamar (pending)', r.status === 200 && r.data.role === 'pending');
+  r = await PS.post(`/api/parties/${partyId}/reject`, { citizen_id: partyIds.pelamar2_partai });
+  check('Sekretaris bisa menolak lamaran', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await PQ.post(`/api/parties/${partyId}/join`, {});
+  check('Setelah ditolak, pelamar bisa melamar lagi (pending)', r.status === 200 && r.data.role === 'pending', `status=${r.status}`);
+  r = await PL.post(`/api/parties/${partyId}/secretary`, { citizen_id: partyIds.sekretaris_partai, action: 'remove' });
+  check('Ketua copot sekretaris (kembali jadi anggota)', r.status === 200 && r.data.role === 'member', `status=${r.status}`);
+  r = await PS.post(`/api/parties/${partyId}/approve`, { citizen_id: partyIds.pelamar2_partai });
+  check('Mantan sekretaris TIDAK bisa lagi menyetujui (403)', r.status === 403, `status=${r.status}`);
+  r = await PL.post(`/api/parties/${partyId}/secretary`, { citizen_id: partyIds.ketua_partai, action: 'appoint' });
+  check('Ketua tidak bisa mengangkat dirinya jadi sekretaris (400)', r.status === 400, `status=${r.status}`);
+  r = await PL.post(`/api/parties/${partyId}/secretary`, { citizen_id: partyIds.luar_partai, action: 'appoint' });
+  check('Angkat warga luar partai ditolak (404)', r.status === 404, `status=${r.status}`);
+  r = await PL.post(`/api/parties/${partyId}/secretary`, { citizen_id: partyIds.anggota_partai, action: 'naikkan' });
+  check('Aksi sekretaris tidak dikenal ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await PL.post(`/api/parties/${partyId}/reject`, { citizen_id: partyIds.pelamar2_partai });
+  check('Ketua bisa menolak lamaran', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await PO.get(`/api/parties/${partyId}`);
+  check('Detail dilihat orang luar: member terlihat, pending disembunyikan, myRole null',
+    r.status === 200 && r.data.members.length === 4 && r.data.pending.length === 0 && r.data.myRole === null
+    && r.data.members.some((m) => m.role === 'leader') && r.data.members.some((m) => m.role === 'member'),
+    `members=${r.data.members.length} pending=${r.data.pending.length} myRole=${r.data.myRole}`);
+  r = await PO.get('/api/parties/999999');
+  check('Detail partai tak ada ditolak (404)', r.status === 404, `status=${r.status}`);
 
   setDayO(1);
 
