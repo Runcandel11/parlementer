@@ -239,7 +239,7 @@ async function main() {
   // steady state hanya baca penanda (tanpa lock/DDL); migrasi penuh hanya
   // bila penanda dihapus / versi lama.
   const ver = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Penanda versi skema = 32', ver.rows[0]?.value === '32', `value=${ver.rows[0]?.value}`);
+  check('Penanda versi skema = 33', ver.rows[0]?.value === '33', `value=${ver.rows[0]?.value}`);
   const t9a = Date.now();
   await Promise.all([initDb(), initDb(), initDb(), initDb(), initDb()]);
   const t9b = Date.now() - t9a;
@@ -306,7 +306,7 @@ async function main() {
   const archive = await pool.query("SELECT kind, currency, amount FROM treasury_tx WHERE kind = 'pembubaran' ORDER BY created_at");
   check('Migrasi: kas RI diarsip sebagai treasury_tx pembubaran (−100 emas, −50 USD)', archive.rows.length === 2 && archive.rows.some((r) => r.currency === 'gold' && Number(r.amount) === -100) && archive.rows.some((r) => r.currency === 'usd' && Number(r.amount) === -50), JSON.stringify(archive.rows));
   const ver10 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver10.rows[0]?.value === '32', `value=${ver10.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver10.rows[0]?.value === '33', `value=${ver10.rows[0]?.value}`);
 
   console.log('\n[11] Regresi bug Partai — GET /api/parties di Postgres (ORDER BY ambigu)');
   // Bug live 27 Nov 2026: begitu ada ≥1 partai, GET /api/parties 500 di
@@ -412,7 +412,7 @@ async function main() {
   const tCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('travel_to_region_id', 'travel_arrives_at', 'home_changed_at')");
   check('Migrasi: kolom perjalanan ditambah kembali', Number(tCols2.rows[0].n) === 3, `n=${tCols2.rows[0].n}`);
   const ver11 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver11.rows[0]?.value === '32', `value=${ver11.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver11.rows[0]?.value === '33', `value=${ver11.rows[0]?.value}`);
 
   console.log('\n[12b] Perusahaan v2.4.0 — migrasi v12 (foto + bonus shift)');
   const coCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'companies' AND column_name IN ('photo', 'photo_sm', 'bonus_credit', 'bonus_given', 'bonus_warned_at')");
@@ -425,7 +425,7 @@ async function main() {
   const coCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'companies' AND column_name IN ('photo', 'photo_sm', 'bonus_credit', 'bonus_given', 'bonus_warned_at')");
   check('Migrasi: kolom perusahaan ditambah kembali', Number(coCols2.rows[0].n) === 5, `n=${coCols2.rows[0].n}`);
   const ver12 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver12.rows[0]?.value === '32', `value=${ver12.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver12.rows[0]?.value === '33', `value=${ver12.rows[0]?.value}`);
 
   console.log('\n[12c] Kredit skor v3.0.0 — migrasi v13 (kolom skor + verdict + riwayat)');
   const crCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('credit_score', 'credit_updated_at')");
@@ -441,7 +441,7 @@ async function main() {
   const crCols2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('credit_score', 'credit_updated_at')");
   check('Migrasi: kolom kredit skor ditambah kembali', Number(crCols2.rows[0].n) === 2, `n=${crCols2.rows[0].n}`);
   const ver13 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver13.rows[0]?.value === '32', `value=${ver13.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver13.rows[0]?.value === '33', `value=${ver13.rows[0]?.value}`);
 
   console.log('\n[12d] Fitur tiket v3.1.0 — Minuman Energi (skala XP ×20 PENSIUN)');
   const drinkRow = await pool.query("SELECT ref_usd, ref_gold, category FROM commodities WHERE name = 'Minuman Energi'");
@@ -463,7 +463,7 @@ async function main() {
   check('Migrasi: XP 7 tetap 7 (tidak ada lagi ×20)', xpRows.rows[0]?.xp === 7, `xp=${xpRows.rows[0]?.xp}`);
   check('Migrasi: XP 0 tetap 0', xpRows.rows[1]?.xp === 0, `xp=${xpRows.rows[1]?.xp}`);
   const ver14 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver14.rows[0]?.value === '32', `value=${ver14.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver14.rows[0]?.value === '33', `value=${ver14.rows[0]?.value}`);
   // Aturan durasi (unit, tanpa server): Kepri → Jakarta ±830 km = 10 mnt;
   // Jakarta → Bandung ±116 km = 3 mnt; terjauh dipangkas ke 30 mnt.
   const { travelMinutesFor } = await import('../src/game.js');
@@ -550,7 +550,7 @@ async function main() {
   const tradeCol = await pool.query("SELECT column_name, column_default FROM information_schema.columns WHERE table_name = 'citizens' AND column_name = 'trades_completed'");
   check('Kolom citizens.trades_completed ada, default 0', tradeCol.rowCount === 1 && String(tradeCol.rows[0].column_default || '').includes('0'), JSON.stringify(tradeCol.rows[0]));
   const ver15 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver15.rows[0]?.value === '32', `value=${ver15.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver15.rows[0]?.value === '33', `value=${ver15.rows[0]?.value}`);
   // Migrasi: hapus tabel + kolom v15, initDb mengembalikannya; backfill
   // wilayah bernegara -> controller='negara'.
   await pool.query("INSERT INTO country (id, name, ideology, system, founder_id, capital, founded, treasury, treasury_usd, tax_income, tax_production, tax_import, tax_export) VALUES (999001, 'Negara Uji Lima Belas', 'Konservatisme', 'presidensial', 999001, 'Jakarta', '2026-11-28', 0, 0, 2, 1, 2, 2)");
@@ -571,7 +571,7 @@ async function main() {
   const tradeCol2 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name = 'citizens' AND column_name = 'trades_completed'");
   check('Migrasi: kolom trades_completed kembali', Number(tradeCol2.rows[0].n) === 1, `n=${tradeCol2.rows[0].n}`);
   const ver15b = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi ulang = 32', ver15b.rows[0]?.value === '32', `value=${ver15b.rows[0]?.value}`);
+  check('Versi skema setelah migrasi ulang = 33', ver15b.rows[0]?.value === '33', `value=${ver15b.rows[0]?.value}`);
   // CHECK menolak jenis unit tak dikenal; baris valid masuk.
   await pool.query("INSERT INTO users (id, email, username, pass_hash, created_at) VALUES (999005, 'mil@test.local', 'warga_mil', 'x', 0)");
   await pool.query("INSERT INTO citizens (id, user_id, region_id, home_region_id, created_at) VALUES (999005, 999005, 1, 1, 0)");
@@ -608,7 +608,7 @@ async function main() {
   const jsonCols = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('missions', 'chronicle_done', 'chronicle_claimed')");
   check('Kolom JSON lama (missions/chronicle_done/chronicle_claimed) sudah tidak ada di citizens', jsonCols.rowCount === 0, `n=${jsonCols.rowCount}`);
   const ver16 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver16.rows[0]?.value === '32', `value=${ver16.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver16.rows[0]?.value === '33', `value=${ver16.rows[0]?.value}`);
   // Migrasi backfill: kembalikan kolom JSON lama + satu warga legacy,
   // jalankan initDb, pastikan datanya pindah ke tabel baru lalu kolom
   // lama dihapus. Kunci mati ('energy'/'bread' — tidak pernah dibaca)
@@ -633,7 +633,7 @@ async function main() {
   const jsonCols2 = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'citizens' AND column_name IN ('missions', 'chronicle_done', 'chronicle_claimed')");
   check('Migrasi: kolom JSON lama dihapus setelah backfill', jsonCols2.rowCount === 0, `n=${jsonCols2.rowCount}`);
   const ver16b = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi ulang = 32', ver16b.rows[0]?.value === '32', `value=${ver16b.rows[0]?.value}`);
+  check('Versi skema setelah migrasi ulang = 33', ver16b.rows[0]?.value === '33', `value=${ver16b.rows[0]?.value}`);
   // UNIQUE: klaim/tugas ganda ditolak di level database.
   let dupClaimRejected = false;
   try { await pool.query("INSERT INTO mission_claims (citizen_id, mkey, claimed_at) VALUES (999016, 'energy', 0)"); } catch { dupClaimRejected = true; }
@@ -654,7 +654,7 @@ async function main() {
   const idxEl = await pool.query("SELECT COUNT(*) AS n FROM pg_indexes WHERE indexname = 'idx_elections_one_active'");
   check('Indeks unik parsial idx_elections_one_active ada', Number(idxEl.rows[0].n) === 1, `n=${idxEl.rows[0].n}`);
   const ver17 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver17.rows[0]?.value === '32', `value=${ver17.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver17.rows[0]?.value === '33', `value=${ver17.rows[0]?.value}`);
   // Migrasi dedup: negara uji + 2 pemilu presiden terjadwal ganda (tanpa
   // indeks), lalu resetVersion + initDb → tersisa 1 (id terkecil) + indeks kembali.
   const c8 = await pool.query("INSERT INTO country (name) VALUES ('Negara Delapan') RETURNING id");
@@ -672,7 +672,7 @@ async function main() {
   const idxEl2 = await pool.query("SELECT COUNT(*) AS n FROM pg_indexes WHERE indexname = 'idx_elections_one_active'");
   check('Migrasi: indeks unik dibuat kembali', Number(idxEl2.rows[0].n) === 1, `n=${idxEl2.rows[0].n}`);
   const ver17b = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi ulang = 32', ver17b.rows[0]?.value === '32', `value=${ver17b.rows[0]?.value}`);
+  check('Versi skema setelah migrasi ulang = 33', ver17b.rows[0]?.value === '33', `value=${ver17b.rows[0]?.value}`);
   // Indeks menolak pemilu aktif kedua secara langsung (bukan hanya via migrasi).
   let dupElRejected = false;
   try {
@@ -727,7 +727,7 @@ async function main() {
   xpB = await pool.query('SELECT level, xp FROM citizens WHERE id = 999019');
   check('Bump versi #2: XP warga B (234) tetap tidak berubah', Number(xpB.rows[0].xp) === 234 && Number(xpB.rows[0].level) === 5, `Lv${xpB.rows[0].level} ${xpB.rows[0].xp} XP`);
   const ver18 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver18.rows[0]?.value === '32', `value=${ver18.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver18.rows[0]?.value === '33', `value=${ver18.rows[0]?.value}`);
 
   // (b) Rollback ujung-ke-ujung lewat rantai migrasi nyata: data terinflasi
   // -> resetVersion + initDb -> level/XP pulih; ulangi -> tidak berubah.
@@ -797,7 +797,7 @@ async function main() {
   const rwTbl = await pool.query("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name = 'ad_rewards'");
   check('Tabel ad_rewards ada', Number(rwTbl.rows[0].n) === 1, `n=${rwTbl.rows[0].n}`);
   const ver19 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver19.rows[0]?.value === '32', `value=${ver19.rows[0].value}`);
+  check('Versi skema setelah migrasi = 33', ver19.rows[0]?.value === '33', `value=${ver19.rows[0].value}`);
   // Kolom + FK: token milik warga uji, hadiah tercatat, token terpakai.
   await pool.query("INSERT INTO users (id, email, username, pass_hash, created_at) VALUES (999024, 'ads19@test.local', 'warga_ads', 'x', 0)");
   await pool.query("INSERT INTO citizens (id, user_id, level, xp, energy, gold, usd, region_id, home_region_id, created_at) VALUES (999024, 999024, 1, 0, 100, 50, 500, 1, 1, 0)");
@@ -825,7 +825,7 @@ async function main() {
   const awNames = awCols.rows.map((r) => r.column_name).sort();
   check('Kolom auto_work_* ada di citizens (5 kolom)', JSON.stringify(awNames) === JSON.stringify(['auto_work_last_at', 'auto_work_paused', 'auto_work_shifts', 'auto_work_started_at', 'auto_work_until']), awNames.join(','));
   const ver20 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver20.rows[0]?.value === '32', `value=${ver20.rows[0].value}`);
+  check('Versi skema setelah migrasi = 33', ver20.rows[0]?.value === '33', `value=${ver20.rows[0].value}`);
   // Nilai default 0 + tulis/baca status auto-work.
   await pool.query("INSERT INTO users (id, email, username, pass_hash, created_at) VALUES (999025, 'aw20@test.local', 'warga_aw', 'x', 0)");
   await pool.query("INSERT INTO citizens (id, user_id, level, xp, energy, gold, usd, region_id, home_region_id, created_at) VALUES (999025, 999025, 1, 0, 100, 50, 500, 1, 1, 0)");
@@ -845,7 +845,7 @@ async function main() {
   const shTbl = await pool.query("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name = 'share_clicks'");
   check('Tabel share_clicks ada', Number(shTbl.rows[0].n) === 1, `n=${shTbl.rows[0].n}`);
   const ver21 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver21.rows[0]?.value === '32', `value=${ver21.rows[0].value}`);
+  check('Versi skema setelah migrasi = 33', ver21.rows[0]?.value === '33', `value=${ver21.rows[0].value}`);
   // share_code unik (kode yang sama ditolak) — NULL tetap boleh ganda.
   await pool.query("INSERT INTO users (id, email, username, pass_hash, created_at) VALUES (999026, 'sh21@test.local', 'warga_sh', 'x', 0)");
   await pool.query("INSERT INTO citizens (id, user_id, level, xp, energy, gold, usd, region_id, home_region_id, created_at) VALUES (999026, 999026, 1, 0, 100, 50, 500, 1, 1, 0)");
@@ -912,13 +912,13 @@ async function main() {
   const sh22 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name = 'share_clicks'");
   check('Setelah migrasi: tabel share_clicks ada', Number(sh22.rows[0].n) === 1, `n=${sh22.rows[0].n}`);
   const ver22 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver22.rows[0]?.value === '32', `value=${ver22.rows[0].value}`);
+  check('Versi skema setelah migrasi = 33', ver22.rows[0]?.value === '33', `value=${ver22.rows[0].value}`);
   // Warga legacy selamat + initDb kedua (steady state) tetap jalan.
   const w22 = await pool.query('SELECT level, xp FROM citizens WHERE id = 999028');
   check('Warga legacy selamat dari migrasi (Lv1, 0 XP)', w22.rowCount === 1 && Number(w22.rows[0].level) === 1 && Number(w22.rows[0].xp) === 0, JSON.stringify(w22.rows[0] || {}));
   await initDb();
   const ver22b = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('initDb ulang: versi tetap 32', ver22b.rows[0]?.value === '32', `value=${ver22b.rows[0].value}`);
+  check('initDb ulang: versi tetap 33', ver22b.rows[0]?.value === '33', `value=${ver22b.rows[0].value}`);
   await pool.query('DELETE FROM citizens WHERE id = 999028');
   await pool.query('DELETE FROM users WHERE id = 999028');
 
@@ -1001,7 +1001,7 @@ async function main() {
   check('Idempotent: LIO tetap 100.000 setelah initDb ulang', Math.abs(Number(lio23b.usd) - 100000) < 0.01 && Math.abs(Number(lio23b.total_salary) - 100000) < 0.01, `usd=${lio23b.usd}`);
   check('Idempotent: gaji Makmur tetap 100.000 setelah initDb ulang', Math.abs(await qJob(999042) - 100000) < 0.01, `salary=${await qJob(999042)}`);
   const ver23 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver23.rows[0]?.value === '32', `value=${ver23.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver23.rows[0]?.value === '33', `value=${ver23.rows[0]?.value}`);
   await pool.query('DELETE FROM jobs WHERE id IN (999042, 999043, 999044, 999045, 999046)');
   await pool.query('DELETE FROM companies WHERE id IN (999040, 999041)');
   await pool.query('DELETE FROM notifications WHERE citizen_id IN (999030, 999031, 999032, 999033, 999034, 999035)');
@@ -1134,7 +1134,7 @@ async function main() {
   const notif25 = await pool.query("SELECT content FROM notifications WHERE citizen_id = 999050 AND title = 'Lowongan duplikat dibersihkan'");
   check('Dedup: pemilik mendapat 1 notifikasi (9 lowongan dihapus)', notif25.rows.length === 1 && /9 lowongan duplikat/.test(notif25.rows[0]?.content || ''), `n=${notif25.rows.length}`);
   const ver25 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver25.rows[0]?.value === '32', `value=${ver25.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver25.rows[0]?.value === '33', `value=${ver25.rows[0]?.value}`);
   // Idempotensi: migrasi kedua tidak menghapus apa-apa lagi.
   await pool.query("UPDATE db_meta SET value = '23' WHERE key = 'schema_version'");
   await initDb();
@@ -1162,7 +1162,7 @@ async function main() {
   const old26 = await pool.query('SELECT tutorial_done FROM citizens WHERE id = 999080');
   check('Backfill: warga LAMA ditandai selesai (tutorial_done = 1)', Number(old26.rows[0]?.tutorial_done) === 1, `tutorial_done=${old26.rows[0]?.tutorial_done}`);
   const ver26 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver26.rows[0]?.value === '32', `value=${ver26.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver26.rows[0]?.value === '33', `value=${ver26.rows[0]?.value}`);
   const mark26 = await pool.query("SELECT value FROM db_meta WHERE key = 'tutorial_backfill_2026_11_28'");
   check('Backfill: penanda tersimpan', mark26.rowCount === 1, `value=${mark26.rows[0]?.value}`);
   // Warga BARU (dibuat setelah migrasi): default 0 → melihat overlay.
@@ -1194,7 +1194,7 @@ async function main() {
   const colR27 = await pool.query("SELECT column_default FROM information_schema.columns WHERE table_name = 'ad_rewards' AND column_name = 'kind'");
   check('Migrasi: ad_rewards.kind ada (default video)', colR27.rowCount === 1 && String(colR27.rows[0]?.column_default) === "'video'::text", `default=${colR27.rows[0]?.column_default}`);
   const ver27 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver27.rows[0]?.value === '32', `value=${ver27.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver27.rows[0]?.value === '33', `value=${ver27.rows[0]?.value}`);
   // Grant lama (tanpa kind eksplisit) tetap 'video'.
   await pool.query(`INSERT INTO users (id, email, username, pass_hash, created_at) VALUES
     (999090, 'w27@test.local', 'w27', 'x', 0)`);
@@ -1228,7 +1228,7 @@ async function main() {
   const col28 = await pool.query("SELECT column_default FROM information_schema.columns WHERE table_name = 'citizens' AND column_name = 'first_shift_done'");
   check('Migrasi: kolom first_shift_done ada (default 0)', col28.rowCount === 1 && String(col28.rows[0]?.column_default) === '0', `default=${col28.rows[0]?.column_default}`);
   const ver28 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver28.rows[0]?.value === '32', `value=${ver28.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver28.rows[0]?.value === '33', `value=${ver28.rows[0]?.value}`);
   // Warga baru: default 0 (belum pernah shift).
   await pool.query(`INSERT INTO users (id, email, username, pass_hash, created_at) VALUES
     (999091, 'w28@test.local', 'w28', 'x', 0)`);
@@ -1257,7 +1257,7 @@ async function main() {
   const tbl29 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name = 'chat_read'");
   check('Migrasi: tabel chat_read ada', Number(tbl29.rows[0]?.n) === 1, `n=${tbl29.rows[0]?.n}`);
   const ver29 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver29.rows[0]?.value === '32', `value=${ver29.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver29.rows[0]?.value === '33', `value=${ver29.rows[0]?.value}`);
   // UPSERT jejak baca (pola endpoint /api/chat/read).
   await pool.query(`INSERT INTO users (id, email, username, pass_hash, created_at) VALUES
     (999092, 'w29@test.local', 'w29', 'x', 0)`);
@@ -1295,7 +1295,7 @@ async function main() {
   const col30 = await pool.query("SELECT column_default FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'pw_reset_required'");
   check('Migrasi: kolom pw_reset_required ada (default 0)', col30.rowCount === 1 && String(col30.rows[0]?.column_default) === '0', `default=${col30.rows[0]?.column_default}`);
   const ver30 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver30.rows[0]?.value === '32', `value=${ver30.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver30.rows[0]?.value === '33', `value=${ver30.rows[0]?.value}`);
   // Pengguna baru: default 0 (tidak wajib ganti password).
   await pool.query(`INSERT INTO users (id, email, username, pass_hash, created_at) VALUES
     (999093, 'w30@test.local', 'w30', 'x', 0)`);
@@ -1355,7 +1355,7 @@ async function main() {
   await pool.query("UPDATE db_meta SET value = '29' WHERE key = 'schema_version'");
   await initDb();
   const ver31 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver31.rows[0]?.value === '32', `value=${ver31.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver31.rows[0]?.value === '33', `value=${ver31.rows[0]?.value}`);
   const tbl31 = await pool.query(`SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name IN
     ('country_alliances','war_motions','war_motion_votes','name_motions','name_motion_votes','election_petitions')`);
   check('Migrasi: 6 tabel baru v5.7.0 ada', Number(tbl31.rows[0]?.n) === 6, `n=${tbl31.rows[0]?.n}`);
@@ -1400,7 +1400,7 @@ async function main() {
     ('country_alliances','war_motions','war_motion_votes','name_motions','name_motion_votes','election_petitions')`);
   check('Idempotent: migrasi ulang tidak menduplikat tabel', Number(tbl31b.rows[0]?.n) === 6, `n=${tbl31b.rows[0]?.n}`);
   const ver31b = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Idempotent: versi tetap 32', ver31b.rows[0]?.value === '32', `value=${ver31b.rows[0]?.value}`);
+  check('Idempotent: versi tetap 33', ver31b.rows[0]?.value === '33', `value=${ver31b.rows[0]?.value}`);
   // Bersih-bersih fixture [31].
   await pool.query(`DELETE FROM election_petitions WHERE election_id = ${el31Id} AND citizen_id = 999094`);
   await pool.query("DELETE FROM country_alliances WHERE proposer_id = 999094");
@@ -1417,7 +1417,7 @@ async function main() {
   await pool.query("UPDATE db_meta SET value = '30' WHERE key = 'schema_version'");
   await initDb();
   const ver32 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver32.rows[0]?.value === '32', `value=${ver32.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver32.rows[0]?.value === '33', `value=${ver32.rows[0]?.value}`);
   const col32 = await pool.query(`SELECT COUNT(*) AS n FROM information_schema.columns WHERE
     (table_name = 'chat_messages' AND column_name = 'party_id') OR
     (table_name = 'citizens' AND column_name = 'total_goods_usd')`);
@@ -1432,7 +1432,7 @@ async function main() {
     (table_name = 'citizens' AND column_name = 'total_goods_usd')`);
   check('Idempotent: migrasi ulang tidak menduplikat kolom', Number(col32b.rows[0]?.n) === 2, `n=${col32b.rows[0]?.n}`);
   const ver32b = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Idempotent: versi tetap 32', ver32b.rows[0]?.value === '32', `value=${ver32b.rows[0]?.value}`);
+  check('Idempotent: versi tetap 33', ver32b.rows[0]?.value === '33', `value=${ver32b.rows[0]?.value}`);
 
   console.log('\n[33] v5.7.3 — Kronik level5: backfill migrasi untuk warga level >= 5 (skema 32)');
   // Skenario Vincent (Discord #bugs 28 Nov 2026): warga level 11 stuck
@@ -1457,7 +1457,7 @@ async function main() {
   await pool.query("UPDATE db_meta SET value = '31' WHERE key = 'schema_version'");
   await initDb();
   const ver33 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Versi skema setelah migrasi = 32', ver33.rows[0]?.value === '32', `value=${ver33.rows[0]?.value}`);
+  check('Versi skema setelah migrasi = 33', ver33.rows[0]?.value === '33', `value=${ver33.rows[0]?.value}`);
   const done33 = await pool.query("SELECT citizen_id FROM chronicle_done WHERE ckey = 'level5' AND citizen_id BETWEEN 999060 AND 999064 ORDER BY citizen_id");
   check('Backfill: warga level 11 + 5 + 7 punya level5 (3 warga)', done33.rows.map((x) => x.citizen_id).join(',') === '999060,999061,999064', JSON.stringify(done33.rows));
   const not33 = await pool.query("SELECT COUNT(*) AS n FROM chronicle_done WHERE ckey = 'level5' AND citizen_id IN (999062, 999063)");
@@ -1475,11 +1475,61 @@ async function main() {
   const done33b = await pool.query("SELECT COUNT(*) AS n FROM chronicle_done WHERE ckey = 'level5' AND citizen_id BETWEEN 999060 AND 999064");
   check('Idempotent: migrasi ulang tidak mendobel baris (tetap 3)', Number(done33b.rows[0]?.n) === 3, `n=${done33b.rows[0]?.n}`);
   const ver33b = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
-  check('Idempotent: versi tetap 32', ver33b.rows[0]?.value === '32', `value=${ver33b.rows[0]?.value}`);
+  check('Idempotent: versi tetap 33', ver33b.rows[0]?.value === '33', `value=${ver33b.rows[0]?.value}`);
   // Bersihkan seed.
   await pool.query('DELETE FROM chronicle_done WHERE citizen_id BETWEEN 999060 AND 999064');
   await pool.query('DELETE FROM citizens WHERE id BETWEEN 999060 AND 999064');
   await pool.query('DELETE FROM users WHERE id BETWEEN 999060 AND 999064');
+
+  console.log('\n[34] v5.7.4 — Customer Service: tabel cs_threads/cs_messages + kolom is_cs_agent + last_cs_at (skema 33)');
+  // Simulasi DB versi lama: hapus tabel + kolom baru, turunkan versi ke 32.
+  await pool.query('DROP TABLE IF EXISTS cs_messages, cs_threads CASCADE');
+  await pool.query('ALTER TABLE users DROP COLUMN IF EXISTS is_cs_agent');
+  await pool.query('ALTER TABLE citizens DROP COLUMN IF EXISTS last_cs_at');
+  await pool.query("UPDATE db_meta SET value = '32' WHERE key = 'schema_version'");
+  await initDb();
+  const ver34 = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
+  check('Versi skema setelah migrasi = 33', ver34.rows[0]?.value === '33', `value=${ver34.rows[0]?.value}`);
+  const tbl34 = await pool.query("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name IN ('cs_threads', 'cs_messages')");
+  check('Tabel cs_threads + cs_messages dibuat', Number(tbl34.rows[0]?.n) === 2, `n=${tbl34.rows[0]?.n}`);
+  const col34a = await pool.query("SELECT column_default FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'is_cs_agent'");
+  check('Kolom users.is_cs_agent ada (default 0)', col34a.rowCount === 1 && String(col34a.rows[0]?.column_default) === '0', `default=${col34a.rows[0]?.column_default}`);
+  const col34b = await pool.query("SELECT column_default FROM information_schema.columns WHERE table_name = 'citizens' AND column_name = 'last_cs_at'");
+  check('Kolom citizens.last_cs_at ada (default 0)', col34b.rowCount === 1 && String(col34b.rows[0]?.column_default) === '0', `default=${col34b.rows[0]?.column_default}`);
+  await pool.query(`INSERT INTO users (id, email, username, pass_hash, created_at) VALUES
+    (999070, 'w34_cs@test.local', 'w34_cs', 'x', 0),
+    (999071, 'w34_cs2@test.local', 'w34_cs2', 'x', 0)`);
+  await pool.query(`INSERT INTO citizens (id, user_id, level, xp, energy, gold, usd, total_salary, region_id, home_region_id, created_at) VALUES
+    (999070, 999070, 1, 0, 100, 0, 0, 0, 2, 2, 0),
+    (999071, 999071, 1, 0, 100, 0, 0, 0, 2, 2, 0)`);
+  await pool.query("INSERT INTO cs_threads (citizen_id, status, created_at, last_message_at) VALUES (999070, 'open', 0, 0)");
+  let dup34 = false;
+  try { await pool.query("INSERT INTO cs_threads (citizen_id, status, created_at, last_message_at) VALUES (999070, 'open', 0, 0)"); } catch { dup34 = true; }
+  check('UNIQUE: satu warga hanya punya 1 thread CS', dup34);
+  let badStatus34 = false;
+  try { await pool.query("INSERT INTO cs_threads (citizen_id, status, created_at, last_message_at) VALUES (999071, 'ngaco', 0, 0)"); } catch { badStatus34 = true; }
+  check('CHECK: status thread di luar open/closed ditolak', badStatus34);
+  const th34 = await pool.query('SELECT id FROM cs_threads WHERE citizen_id = 999070');
+  let badSender34 = false;
+  try { await pool.query("INSERT INTO cs_messages (thread_id, sender, body, created_at) VALUES ($1, 'bot', 'x', 0)", [th34.rows[0].id]); } catch { badSender34 = true; }
+  check('CHECK: sender di luar player/agent/admin ditolak', badSender34);
+  await pool.query("INSERT INTO cs_messages (thread_id, sender, body, created_at) VALUES ($1, 'player', 'halo', 0)", [th34.rows[0].id]);
+  const msg34 = await pool.query('SELECT COUNT(*) AS n FROM cs_messages WHERE thread_id = $1', [th34.rows[0].id]);
+  check('Pesan CS tersimpan di thread', Number(msg34.rows[0]?.n) === 1, `n=${msg34.rows[0]?.n}`);
+  // Idempotent: migrasi ulang (turunkan versi lagi) tidak mendobel/gagal.
+  await pool.query("UPDATE db_meta SET value = '32' WHERE key = 'schema_version'");
+  await initDb();
+  const ver34b = await pool.query("SELECT value FROM db_meta WHERE key = 'schema_version'");
+  check('Idempotent: versi tetap 33', ver34b.rows[0]?.value === '33', `value=${ver34b.rows[0]?.value}`);
+  const tbl34b = await pool.query("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name IN ('cs_threads', 'cs_messages')");
+  check('Idempotent: tabel tetap 2 (tidak duplikat)', Number(tbl34b.rows[0]?.n) === 2, `n=${tbl34b.rows[0]?.n}`);
+  const th34b = await pool.query('SELECT COUNT(*) AS n FROM cs_threads WHERE citizen_id = 999070');
+  check('Idempotent: thread seed tetap 1', Number(th34b.rows[0]?.n) === 1, `n=${th34b.rows[0]?.n}`);
+  // Bersihkan seed.
+  await pool.query('DELETE FROM cs_messages WHERE thread_id IN (SELECT id FROM cs_threads WHERE citizen_id IN (999070, 999071))');
+  await pool.query('DELETE FROM cs_threads WHERE citizen_id IN (999070, 999071)');
+  await pool.query('DELETE FROM citizens WHERE id IN (999070, 999071)');
+  await pool.query('DELETE FROM users WHERE id IN (999070, 999071)');
 
   await pool.end();
   console.log(`\n[pg-verify] SELESAI: ${passed} lolos, ${failed} gagal`);

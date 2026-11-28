@@ -357,6 +357,24 @@
     <span class="energy-segs" id="energy-segs"></span>
     <span class="energy-num" id="energy-num">100/100</span>
   </div>
+
+  <!-- Customer Service (v5.7.4): tombol mengambang di tepi kanan-tengah
+       layar — terlihat di semua halaman setelah login (di dalam #app,
+       jadi tidak muncul di layar login/landing). Ketuk → panel chat.
+       Balasan dijawab manusia (agen CS / admin), bukan bot. -->
+  <button id="btn-cs" class="cs-float" type="button" aria-label="Customer Service" title="Customer Service">💬<span class="badge" id="badge-cs" hidden>0</span></button>
+  <div id="cs-panel" class="cs-panel" hidden>
+    <div class="cs-panel-head">
+      <b>💬 CUSTOMER SERVICE</b>
+      <button id="cs-close" class="btn-ghost btn-sm" type="button" aria-label="Tutup Customer Service">✕</button>
+    </div>
+    <div id="cs-status" class="cs-status muted small">Menunggu balasan customer service…</div>
+    <div id="cs-list" class="cs-list"></div>
+    <div class="chat-input">
+      <input id="cs-text" aria-label="Tulis pesan untuk Customer Service" placeholder="Tulis pertanyaan atau laporanmu…" maxlength="1000" autocomplete="off">
+      <button class="btn-gold" id="btn-cs-send" type="button">KIRIM</button>
+    </div>
+  </div>
 </div>
 
 <!-- ============ MODAL LAPORKAN KONTEN ============ -->

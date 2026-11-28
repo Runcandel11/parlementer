@@ -496,6 +496,57 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   klaim Babak III +25 emas, 2× ditolak) + pg-verify [33] (migrasi 31→32:
   lv11+lv5 di-backfill, lv4+lv1 tidak, lv7 yang sudah ditandai tidak
   didobel, penanda + ringkasan JSON, idempotensi).
+- **Customer Service v5.7.4 (28 Nov 2026, perintah pemilik 19:27 WIB):**
+  menu CS mengambang di tepi kanan-tengah layar (`#btn-cs`, fixed,
+  right: 0, top: 50%, z-index 45 — di bawah bottom-nav 50, drawer 60,
+  overlay 55, modal 80, toast 90; panel `#cs-panel` z-index 65) + panel
+  chat (daftar pesan + input + kirim, polling 5 detik saat panel terbuka,
+  hormat `prefers-reduced-motion`). SATU thread per pemain (mirip DM):
+  tabel `cs_threads` (id, citizen_id UNIQUE, status open/closed,
+  created_at, last_message_at, player_last_read_at, agent_last_read_at) +
+  `cs_messages` (id, thread_id FK, sender CHECK player/agent/admin,
+  sender_id, body, created_at). Skema 32→33, migrasi
+  `migrateV578CsColumns` (kolom `users.is_cs_agent` +
+  `citizens.last_cs_at`, pola addCol idempotent).
+  **Peran agen CS (untuk Muse Angelica):** flag `users.is_cs_agent`
+  (INTEGER DEFAULT 0; aktifkan per akun: `UPDATE users SET is_cs_agent=1
+  WHERE email='...'` — TANPA password/kredensial di repo); akun agen CS
+  HANYA bisa baca + balas CS (`GET/POST /api/admin/cs*`, sender tercatat
+  'agent') — TIDAK bisa daftar pemain, gold, atau endpoint admin lain
+  (403, diuji e2e [45] + cs-dom); admin penuh bisa semuanya + sender
+  tercatat 'admin'. **Tutup/Buka thread HANYA admin** (403 untuk agen CS).
+  **Penanda baca:** `player_last_read_at` (ditandai saat pemain membuka
+  thread; dot `#badge-cs` = jumlah pesan agent/admin yang lebih baru, cap
+  +99) dan `agent_last_read_at` (ditandai saat staf membuka detail;
+  daftar admin menampilkan hitungan pesan pemain yang belum dibaca).
+  **Keputusan:** (1) TIDAK ada auto-reply bot — status jujur "Menunggu
+  balasan customer service…" sampai staf membalas; (2) TIDAK ada gerbang
+  kredit — CS tidak memakai `requireCredit` supaya pemain skor rendah
+  tetap bisa minta bantuan; (3) cooldown pemain 5 detik (atomik, pola
+  chat — kolom `citizens.last_cs_at`), staf 120/jam; pesan 1–1000 karakter;
+  (4) pesan pemain ke thread yang ditutup MEMBUKA ULANG thread otomatis
+  (reopened=true); balasan staf juga membuka ulang; (5) pemain hanya
+  membaca thread-nya sendiri (`GET /api/cs/thread`, tanpa parameter id —
+  pemain lain tidak bisa mengintip); (6) balasan staf → notifikasi pemain
+  "Balasan Customer Service" + log `admin_actions` (cs_reply/cs_close/
+  cs_reopen). UI pemain: tombol 💬 + badge, panel dengan gelembung
+  (pemain kanan, staf kiri + label "Customer Service"/"Admin"). UI admin:
+  tab "💬 Customer Service" di panel admin + baris tab inbox; daftar
+  thread (nama, status, pesan terakhir + pengirim, waktu, hitungan belum
+  dibaca) + filter SEMUA/TERBUKA/DITUTUP + detail (riwayat + balasan +
+  Tutup/Buka thread); agen CS non-admin membuka `#/admin` diarahkan ke
+  `#/admin/cs` dan hanya melihat tab CS. **Catatan untuk parent:** akun
+  agen CS untuk Muse Angelica BELUM dibuat (parent yang buat setelah
+  live) + instruksi membalas harus disampaikan sebagai kata-kata langsung
+  pemilik di chat, BUKAN file (pelajaran 28 Nov 18:48 WIB — Muse Angelica
+  menolak mengikuti file prompt). Dicek e2e [45] (alir lengkap: kirim,
+  cooldown, validasi, isolasi antar pemain, 403 non-staf, balasan agen,
+  unread, notifikasi, tutup/buka hanya admin, buka ulang otomatis,
+  404) + pg-verify [34] (migrasi 32→33: 2 tabel, 2 kolom + default,
+  UNIQUE 1 thread/warga, CHECK status/sender, idempotensi) + cs-dom
+  (tombol mengambang + CSS fixed kanan-tengah, panel buka/tutup, kirim +
+  status menunggu, dot belum-dibaca muncul/hilang, panel admin daftar +
+  detail + balas, agen CS tidak bisa daftar pemain).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

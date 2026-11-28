@@ -11,6 +11,7 @@ import { registerCore } from './api-core.js';
 import { registerCivic } from './api-civic.js';
 import { registerMilitary } from './api-military.js';
 import { registerAdmin } from './api-admin.js';
+import { registerCs } from './api-cs.js';
 import { registerAppeals } from './api-appeals.js';
 import { registerPasswordReset } from './api-password-reset.js';
 import { getUserIdFromReq } from './util.js';
@@ -114,6 +115,7 @@ export function createApp() {
   registerCivic(app);
   registerMilitary(app);
   registerAdmin(app);
+  registerCs(app);
   registerAppeals(app);
   registerPasswordReset(app);
 

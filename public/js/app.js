@@ -639,6 +639,11 @@ function buildNav() {
   const adminGroup = ME?.citizen?.is_admin ? `
     <div class="nav-group">ADMIN</div>
     <div class="nav-grid"><button class="nav-item" data-route="admin" type="button"><span class="ico">🛡️</span>Panel Admin</button></div>` : '';
+  // Agen CS (bukan admin) hanya melihat menu Customer Service — panel
+  // admin lainnya tetap tertutup untuknya (server: adminOnly).
+  const csGroup = (!ME?.citizen?.is_admin && ME?.citizen?.is_cs_agent) ? `
+    <div class="nav-group">CUSTOMER SERVICE</div>
+    <div class="nav-grid"><button class="nav-item" data-route="admin/cs" type="button"><span class="ico">💬</span>Customer Service</button></div>` : '';
   $('#drawer-nav').innerHTML = NAV.map((g) => `
     <div class="nav-group">${g.group}</div>
     <div class="nav-grid">${g.items.map(([slug, label, ico, href]) => href ? `
@@ -647,7 +652,7 @@ function buildNav() {
       </a>` : `
       <button class="nav-item" data-route="${slug}" type="button">
         <span class="ico">${ico}</span>${label}
-      </button>`).join('')}</div>`).join('') + adminGroup + `
+      </button>`).join('')}</div>`).join('') + adminGroup + csGroup + `
     <div class="nav-group">AKUN</div>
     <div class="nav-grid">
       <button class="nav-item" data-route="settings" type="button"><span class="ico">⚙️</span>Pengaturan</button>
@@ -719,6 +724,9 @@ async function showApp() {
   $('#drawer-overlay').onclick = closeDrawer;
   $('#btn-chat').onclick = () => { location.hash = '#/chat'; };
   $('#energy-chat').onclick = () => { location.hash = '#/chat'; };
+  // Customer Service mengambang (v5.7.4): tombol + panel di #app.
+  wireCsPanel();
+  updateCsBadge();
   $('#btn-notif').onclick = () => { location.hash = '#/notifications'; };
   $('#btn-settings').onclick = () => { location.hash = '#/settings'; };
   // Peti pasokan harian (rombak UI): sama dengan tombol AMBIL PASOKAN
@@ -731,11 +739,13 @@ async function showApp() {
   // Polling hemat (Tahap 5 — lag): saat tab tidak aktif, jangan membebani
   // server dengan polling /api/me tiap 30 detik + chat tiap 5 detik.
   // Saat tab kembali aktif, langsung refresh sekali (listener di bawah).
-  setInterval(() => { if (!document.hidden) refreshMe(); }, 30000);
+  setInterval(() => { if (!document.hidden) { refreshMe(); updateCsBadge(); } }, 30000);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     refreshMe();
+    updateCsBadge();
     if (chatRoom) renderChatRoom(chatRoom);
+    if (csOpen) renderCsThread();
   });
 }
 
@@ -1851,6 +1861,18 @@ ROUTES.admin = async (q) => {
   if (q === 'announcements') return renderAdminAnnouncements();
   if (q === 'flags') return renderAdminFlags();
   if (q === 'share') return renderAdminShare();
+  // Customer Service (v5.7.4): boleh dibuka admin DAN akun agen CS.
+  if (q === 'cs') return renderAdminCs('');
+  if (q && q.startsWith('cs-')) return renderAdminCsDetail(Number(q.slice(3)));
+  if (q && q.startsWith('cs?')) {
+    const params = new URLSearchParams((q.split('?')[1] || ''));
+    return renderAdminCs(params.get('status') || '');
+  }
+  // Agen CS (bukan admin) yang membuka #/admin polos diarahkan ke CS —
+  // daftar pemain/log admin tetap tertutup untuknya (server: adminOnly).
+  const isAdmin = ME?.user?.is_admin || ME?.citizen?.is_admin;
+  const isCs = ME?.user?.is_cs_agent || ME?.citizen?.is_cs_agent;
+  if (!isAdmin && isCs) { location.hash = '#/admin/cs'; return; }
   if (q === 'inbox' || (q && q.startsWith('inbox?'))) {
     const params = new URLSearchParams((q.split('?')[1] || ''));
     return renderAdminInbox(params.get('status') || '');
@@ -1869,6 +1891,7 @@ ROUTES.admin = async (q) => {
     <button class="tab" data-goto="#/admin/appeals">📬 Banding${pendingAppeals ? ` <span class="chip">${pendingAppeals} menunggu</span>` : ''}</button>
     <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
     <button class="tab" data-goto="#/admin/inbox">📥 Laporan &amp; Saran</button>
+    <button class="tab" data-goto="#/admin/cs">💬 Customer Service</button>
     <button class="tab" data-goto="#/admin/announcements">📣 Pengumuman</button>
     <button class="tab" data-goto="#/admin/flags">🚩 Tanda Pasar</button>
     <button class="tab" data-goto="#/admin/share">🔗 Share Link</button>
@@ -2224,6 +2247,7 @@ async function renderAdminInbox(statusFilter) {
     <button class="tab" data-goto="#/admin/appeals">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
     <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
     <button class="tab active">📥 Laporan &amp; Saran</button>
+    <button class="tab" data-goto="#/admin/cs">💬 Customer Service</button>
   </div>
   <div class="panel"><h3>🎧 TIKET MEJA BANTUAN${pendingResets ? ` <span class="chip">${pendingResets} reset menunggu</span>` : ''}</h3>
     <div class="tabs">
@@ -2303,6 +2327,170 @@ window.addEventListener('scroll', () => {
   if (bar) bar.classList.toggle('energy-hidden', y > lastScrollY && y > 120);
   lastScrollY = y;
 }, { passive: true });
+
+// ---------- CUSTOMER SERVICE MENGAMBANG (v5.7.4) ----------
+// Tombol di tepi kanan-tengah layar (di dalam #app → hanya setelah login).
+// Panel chat 1 thread per pemain; balasan dijawab manusia (agen CS /
+// admin) — BUKAN bot. Polling 5 detik saat panel terbuka (pola chat);
+// dot belum-dibaca dicek tiap 30 detik (bareng refreshMe) + setelah kirim.
+let csTimer = null;
+let csOpen = false;
+
+async function renderCsThread() {
+  const list = $('#cs-list');
+  const status = $('#cs-status');
+  if (!list) return;
+  let d;
+  try { d = await api('/api/cs/thread'); }
+  catch (e) { if (status) status.textContent = 'Gagal memuat percakapan: ' + e.message; return; }
+  const msgs = d.messages || [];
+  const thread = d.thread;
+  if (!msgs.length) {
+    list.innerHTML = '<p class="muted small">Belum ada percakapan. Tulis pertanyaan atau laporanmu di bawah — Customer Service akan membalas secepatnya.</p>';
+  } else {
+    list.innerHTML = msgs.map((m) => {
+      const label = m.sender === 'player' ? 'Kamu' : m.sender === 'agent' ? '🎧 Customer Service' : '🛡️ Admin';
+      return `<div class="cs-msg cs-msg-${m.sender}"><b>${label}</b><br>${esc(m.body)}<small>${fmtDate(m.created_at)}</small></div>`;
+    }).join('');
+    list.scrollTop = list.scrollHeight;
+  }
+  if (status) {
+    if (!thread) status.textContent = 'Menunggu balasan customer service…';
+    else if (thread.status === 'closed') status.textContent = 'Thread ini ditutup oleh admin — kirim pesan baru untuk membuka lagi.';
+    else {
+      const last = msgs[msgs.length - 1];
+      status.textContent = !last || last.sender === 'player'
+        ? 'Menunggu balasan customer service…'
+        : 'Customer Service sudah membalas.';
+    }
+  }
+  updateCsBadge();
+}
+
+async function updateCsBadge() {
+  const badge = $('#badge-cs');
+  if (!badge) return;
+  try {
+    const d = await api('/api/cs/unread');
+    const n = d.unread || 0;
+    badge.hidden = n <= 0;
+    badge.textContent = n > 99 ? '+99' : String(n);
+  } catch { /* sesi habis / offline — biarkan dot apa adanya */ }
+}
+
+function openCsPanel() {
+  csOpen = true;
+  const p = $('#cs-panel');
+  if (p) p.hidden = false;
+  renderCsThread();
+  if (csTimer) clearInterval(csTimer);
+  csTimer = setInterval(() => { if (!document.hidden && csOpen) renderCsThread(); }, 5000);
+}
+function closeCsPanel() {
+  csOpen = false;
+  const p = $('#cs-panel');
+  if (p) p.hidden = true;
+  if (csTimer) { clearInterval(csTimer); csTimer = null; }
+}
+async function sendCsMessage() {
+  const input = $('#cs-text');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  try {
+    await post('/api/cs/messages', { body: text });
+    input.value = '';
+    await renderCsThread();
+  } catch (e) { toast(e.message); }
+}
+function wireCsPanel() {
+  const btn = $('#btn-cs');
+  if (btn) btn.onclick = () => (csOpen ? closeCsPanel() : openCsPanel());
+  const close = $('#cs-close');
+  if (close) close.onclick = closeCsPanel;
+  const send = $('#btn-cs-send');
+  if (send) send.onclick = sendCsMessage;
+  const input = $('#cs-text');
+  if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCsMessage(); });
+}
+
+// ---------- PANEL ADMIN: CUSTOMER SERVICE (v5.7.4) ----------
+async function renderAdminCs(statusFilter) {
+  const d = await api('/api/admin/cs' + (statusFilter ? '?status=' + statusFilter : ''));
+  const isAdmin = ME?.user?.is_admin || ME?.citizen?.is_admin;
+  const tabs = isAdmin ? `
+    <button class="tab" data-goto="#/admin">👥 Pemain</button>
+    <button class="tab" data-goto="#/admin/appeals">📬 Banding</button>
+    <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
+    <button class="tab" data-goto="#/admin/inbox">📥 Laporan &amp; Saran</button>
+    <button class="tab active">💬 Customer Service</button>
+    <button class="tab" data-goto="#/admin/announcements">📣 Pengumuman</button>
+    <button class="tab" data-goto="#/admin/flags">🚩 Tanda Pasar</button>
+    <button class="tab" data-goto="#/admin/share">🔗 Share Link</button>` : `
+    <button class="tab active">💬 Customer Service</button>`;
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Percakapan Customer Service — dijawab agen CS / admin (bukan bot).', `
+  <div class="tabs">${tabs}</div>
+  <div class="panel"><h3>💬 CUSTOMER SERVICE</h3>
+    <div class="tabs">
+      ${['', 'open', 'closed'].map((s) => `<button class="tab ${statusFilter === s || (!statusFilter && s === '') ? 'active' : ''}" data-goto="#/admin/cs${s ? '?status=' + s : ''}">${s === '' ? 'SEMUA' : s === 'open' ? 'TERBUKA' : 'DITUTUP'}</button>`).join('')}
+    </div>
+    ${d.threads.length ? d.threads.map((t) => `
+    <div class="panel" data-cs="${t.id}">
+      <div class="panel-head"><h3>💬 ${esc(t.username)} · ${esc(t.publicId)}</h3><span class="chip">${t.status === 'open' ? '🟢 TERBUKA' : '⚪ DITUTUP'}${t.unread > 0 ? ` · ${t.unread} belum dibaca` : ''}</span></div>
+      <div class="kv"><span class="k">Email</span><span class="v">${esc(t.email)}</span></div>
+      <div class="kv"><span class="k">Pesan terakhir</span><span class="v">${t.last_sender === 'player' ? '👤 Pemain' : t.last_sender === 'agent' ? '🎧 CS' : t.last_sender === 'admin' ? '🛡️ Admin' : '—'} · ${t.last_message_at ? fmtDate(t.last_message_at) : '—'}</span></div>
+      <p style="margin-top:8px">${esc(t.last_body || '(belum ada pesan)')}</p>
+      <div class="row" style="margin-top:10px"><button class="btn-gold btn-sm" data-goto="#/admin/cs-${t.id}" type="button">BUKA PERCAKAPAN</button></div>
+    </div>`).join('') : '<p class="muted">Belum ada percakapan Customer Service.</p>'}
+  </div>`);
+}
+
+async function renderAdminCsDetail(id) {
+  const d = await api('/api/admin/cs/' + id);
+  const t = d.thread;
+  const isAdmin = ME?.user?.is_admin || ME?.citizen?.is_admin;
+  const tabs = isAdmin ? `
+    <button class="tab" data-goto="#/admin">👥 Pemain</button>
+    <button class="tab" data-goto="#/admin/appeals">📬 Banding</button>
+    <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
+    <button class="tab" data-goto="#/admin/inbox">📥 Laporan &amp; Saran</button>
+    <button class="tab" data-goto="#/admin/cs">💬 Customer Service</button>
+    <button class="tab" data-goto="#/admin/announcements">📣 Pengumuman</button>
+    <button class="tab" data-goto="#/admin/flags">🚩 Tanda Pasar</button>
+    <button class="tab" data-goto="#/admin/share">🔗 Share Link</button>` : `
+    <button class="tab" data-goto="#/admin/cs">💬 Customer Service</button>`;
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', `Percakapan CS — ${esc(t.username)} (${esc(t.publicId)})`, `
+  <div class="tabs">${tabs}</div>
+  <div class="panel">
+    <div class="panel-head"><h3>💬 ${esc(t.username)} · ${esc(t.publicId)}</h3><span class="chip">${t.status === 'open' ? '🟢 TERBUKA' : '⚪ DITUTUP'}</span></div>
+    <div class="kv"><span class="k">Email</span><span class="v">${esc(t.email)}</span></div>
+    <div class="kv"><span class="k">Dibuat</span><span class="v">${fmtDate(t.created_at)}</span></div>
+    <div class="cs-list" style="min-height:200px;max-height:50vh">
+      ${d.messages.length ? d.messages.map((m) => `<div class="cs-msg cs-msg-${m.sender}"><b>${m.sender === 'player' ? esc(t.username) : m.sender === 'agent' ? '🎧 Customer Service' : '🛡️ Admin'}</b><br>${esc(m.body)}<small>${fmtDate(m.created_at)}</small></div>`).join('') : '<p class="muted">Belum ada pesan.</p>'}
+    </div>
+    <div class="chat-input" style="margin-top:10px"><input id="cs-admin-text" placeholder="Tulis balasan…" maxlength="1000" autocomplete="off">
+    <button class="btn-gold" id="btn-cs-admin-send" type="button">KIRIM BALASAN</button></div>
+    <div class="row" style="margin-top:10px">
+      ${isAdmin ? (t.status === 'open'
+        ? `<button class="btn-ghost btn-sm" id="btn-cs-close" type="button">⚪ Tutup Thread</button>`
+        : `<button class="btn-gold btn-sm" id="btn-cs-reopen" type="button">🟢 Buka Lagi Thread</button>`) : ''}
+      <button class="btn-ghost btn-sm" data-goto="#/admin/cs" type="button">← Kembali ke Daftar</button>
+    </div>
+  </div>`);
+  const send = async () => {
+    const input = $('#cs-admin-text');
+    const text = input.value.trim();
+    if (!text) { toast('Tulis balasan dulu.'); return; }
+    try { await post('/api/admin/cs/' + id + '/reply', { body: text }); toast('Balasan terkirim.'); route(); }
+    catch (e) { toast(e.message); }
+  };
+  $('#btn-cs-admin-send').onclick = send;
+  $('#cs-admin-text').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+  const closeBtn = $('#btn-cs-close');
+  if (closeBtn) closeBtn.onclick = async () => { try { await post('/api/admin/cs/' + id + '/close', {}); toast('Thread ditutup.'); route(); } catch (e) { toast(e.message); } };
+  const reopenBtn = $('#btn-cs-reopen');
+  if (reopenBtn) reopenBtn.onclick = async () => { try { await post('/api/admin/cs/' + id + '/reopen', {}); toast('Thread dibuka lagi.'); route(); } catch (e) { toast(e.message); } };
+}
 
 boot();
 

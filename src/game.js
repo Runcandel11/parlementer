@@ -95,7 +95,7 @@
 // absurd hasil exploit di-rollback (migrasi clamp). Plus perbaikan bug
 // share link: shareStatsFor tidak lagi memakai `? IS NULL` (Postgres
 // 42P18 — hanya gagal di live, lolos di SQLite).
-export const VERSION = '5.7.3';
+export const VERSION = '5.7.4';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
@@ -426,6 +426,13 @@ export const DAILY_MISSIONS = [
 export const CHAT_COOLDOWN_MS = 5000;
 export const CHAT_COUNT_WINDOW_MS = 30000;
 export const CHAT_COUNT_MIN_WORDS = 3;
+
+// --- Customer Service (v5.7.4) ---
+// Jeda antar pesan CS 5 detik (anti-spam, pola chat); panjang pesan maks
+// 1000 karakter (pola balasan tiket). CS TIDAK memakai requireCredit —
+// dukungan harus tetap bisa dihubungi pemain yang skor kreditnya rendah.
+export const CS_COOLDOWN_MS = 5000;
+export const CS_MESSAGE_MAX_LEN = 1000;
 
 // --- Kronik (tutorial) — 5 babak, 20 tugas ---
 export const CHRONICLE = [

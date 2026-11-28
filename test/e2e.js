@@ -4551,6 +4551,91 @@ async function main() {
   r = await LV.post('/api/chronicle/claim', { chapter: 3 });
   check('Klaim Babak III 2× ditolak 400', r.status === 400, `status=${r.status}`);
 
+  console.log('\n[45] v5.7.4 — Customer Service: thread pemain + balas agen CS/admin + riwayat admin');
+  const CS = new Client(); const CSB = new Client(); const CSA = new Client();
+  CS.extraHeaders = { 'X-Forwarded-For': '127.0.0.63' };
+  CSB.extraHeaders = { 'X-Forwarded-For': '127.0.0.64' };
+  CSA.extraHeaders = { 'X-Forwarded-For': '127.0.0.65' };
+  r = await CS.post('/api/auth/register', { email: 'cs-a@test.local', password: 'rahasia123', username: 'cs_a' });
+  check('Daftar pemain CS A', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await CS.get('/api/cs/thread');
+  check('Thread kosong sebelum pesan pertama', r.status === 200 && r.data.thread === null && (r.data.messages || []).length === 0, JSON.stringify(r.data));
+  r = await CS.post('/api/cs/messages', { body: 'Halo, saya tidak bisa buka pasar. Tolong bantu.' });
+  check('Kirim pesan CS pertama 200 (thread terbentuk)', r.status === 200 && r.data.ok && r.data.threadId, `status=${r.status}`);
+  const csThreadId = r.data.threadId;
+  r = await CS.get('/api/cs/thread');
+  check('Thread milik sendiri berisi 1 pesan pemain', r.status === 200 && r.data.messages.length === 1 && r.data.messages[0].sender === 'player', `n=${r.data.messages.length}`);
+  check('Status thread open', r.data.thread?.status === 'open', `status=${r.data.thread?.status}`);
+  r = await CS.post('/api/cs/messages', { body: 'Pesan kedua terlalu cepat.' });
+  check('Pesan kedua dalam 5 detik ditolak 400 (cooldown)', r.status === 400, `status=${r.status}`);
+  r = await CS.post('/api/cs/messages', { body: '   ' });
+  check('Pesan kosong ditolak 400', r.status === 400, `status=${r.status}`);
+  r = await CS.post('/api/cs/messages', { body: 'x'.repeat(1001) });
+  check('Pesan >1000 karakter ditolak 400', r.status === 400, `status=${r.status}`);
+  // Pemain B: thread-nya sendiri kosong — TIDAK bisa membaca thread A.
+  r = await CSB.post('/api/auth/register', { email: 'cs-b@test.local', password: 'rahasia123', username: 'cs_b' });
+  check('Daftar pemain CS B', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await CSB.get('/api/cs/thread');
+  check('Pemain B tidak melihat thread A (thread B kosong)', r.status === 200 && r.data.thread === null, JSON.stringify(r.data));
+  r = await CSB.get('/api/admin/cs');
+  check('Pemain biasa GET /api/admin/cs ditolak 403', r.status === 403, `status=${r.status}`);
+  r = await CSB.post('/api/admin/cs/' + csThreadId + '/reply', { body: 'Saya bukan staf.' });
+  check('Pemain biasa balas CS ditolak 403', r.status === 403, `status=${r.status}`);
+  // Akun agen CS: daftar lalu set flag is_cs_agent via DB (akun dibuat
+  // parent setelah merge; di tes flag di-set langsung).
+  r = await CSA.post('/api/auth/register', { email: 'cs-agent@test.local', password: 'rahasia123', username: 'cs_agent' });
+  check('Daftar akun agen CS', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const csAgentUserId = (await CSA.get('/api/me')).data.user.id;
+  {
+    const dbC = new DatabaseSync(DB_PATH);
+    dbC.prepare('UPDATE users SET is_cs_agent = 1 WHERE id = ?').run(csAgentUserId);
+    dbC.close();
+  }
+  r = await CSA.get('/api/admin/cs');
+  check('Agen CS bisa baca daftar thread admin', r.status === 200 && Array.isArray(r.data.threads) && r.data.threads.length === 1, `n=${r.data.threads?.length}`);
+  check('Daftar admin: thread A unread 1 (pesan pemain belum dibaca staf)', r.data.threads[0]?.unread === 1, `unread=${r.data.threads[0]?.unread}`);
+  r = await CSA.get('/api/admin/players');
+  check('Agen CS TIDAK bisa buka daftar pemain admin (403)', r.status === 403, `status=${r.status}`);
+  r = await CSA.post('/api/admin/gold', { user_id: csAgentUserId, amount: 50 });
+  check('Agen CS TIDAK bisa grant emas (403)', r.status === 403, `status=${r.status}`);
+  r = await CSA.get('/api/admin/cs/' + csThreadId);
+  check('Agen CS buka detail thread', r.status === 200 && r.data.messages.length === 1, `n=${r.data.messages?.length}`);
+  r = await CSA.get('/api/admin/cs');
+  check('Setelah dibuka staf, unread thread jadi 0', r.data.threads[0]?.unread === 0, `unread=${r.data.threads[0]?.unread}`);
+  // Balasan agen CS → pemain melihatnya + dot belum-dibaca + notifikasi.
+  r = await CSA.post('/api/admin/cs/' + csThreadId + '/reply', { body: 'Halo! Coba tutup lalu buka lagi halaman Pasar. Kalau masih error, kirim screenshot-nya di sini.' });
+  check('Agen CS balas 200 (sender agent)', r.status === 200 && r.data.ok && r.data.sender === 'agent', `status=${r.status} sender=${r.data.sender}`);
+  r = await CS.get('/api/cs/unread');
+  check('Pemain: balasan belum dibaca = 1 (dot)', r.status === 200 && r.data.unread === 1, `unread=${r.data.unread}`);
+  r = await CS.get('/api/cs/thread');
+  check('Pemain melihat balasan agen CS', r.data.messages.length === 2 && r.data.messages[1].sender === 'agent', `n=${r.data.messages.length}`);
+  r = await CS.get('/api/cs/unread');
+  check('Setelah dibuka pemain, unread jadi 0', r.data.unread === 0, `unread=${r.data.unread}`);
+  r = await CS.get('/api/notifications');
+  const csNotif = (r.data.notifications || r.data.items || []).find((n) => n.title === 'Balasan Customer Service');
+  check('Pemain dapat notifikasi "Balasan Customer Service"', !!csNotif, `n=${(r.data.notifications || r.data.items || []).length}`);
+  // Admin tutup/buka lagi; agen CS TIDAK bisa tutup.
+  r = await CSA.post('/api/admin/cs/' + csThreadId + '/close', {});
+  check('Agen CS TIDAK bisa menutup thread (403)', r.status === 403, `status=${r.status}`);
+  r = await ADM.post('/api/admin/cs/' + csThreadId + '/close', {});
+  check('Admin menutup thread 200', r.status === 200 && r.data.ok && r.data.status === 'closed', `status=${r.status}`);
+  r = await ADM.get('/api/admin/cs?status=closed');
+  check('Filter closed menampilkan thread A', (r.data.threads || []).some((t) => t.id === csThreadId), `n=${r.data.threads?.length}`);
+  r = await ADM.post('/api/admin/cs/' + csThreadId + '/reopen', {});
+  check('Admin membuka lagi thread 200', r.status === 200 && r.data.ok && r.data.status === 'open', `status=${r.status}`);
+  r = await ADM.post('/api/admin/cs/' + csThreadId + '/reply', { body: 'Ini balasan dari admin.' });
+  check('Admin balas 200 (sender admin)', r.status === 200 && r.data.ok && r.data.sender === 'admin', `status=${r.status} sender=${r.data.sender}`);
+  // Thread closed lalu pemain kirim lagi → otomatis terbuka lagi.
+  await sleep(5100);
+  r = await ADM.post('/api/admin/cs/' + csThreadId + '/close', {});
+  check('Admin menutup lagi untuk uji auto-reopen', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await CS.post('/api/cs/messages', { body: 'Masih belum bisa, tolong bantu lagi.' });
+  check('Pesan pemain ke thread tertutup membuka lagi (reopened)', r.status === 200 && r.data.ok && r.data.reopened === true, `status=${r.status} reopened=${r.data.reopened}`);
+  r = await CS.get('/api/cs/thread');
+  check('Thread kembali open setelah pesan pemain', r.data.thread?.status === 'open', `status=${r.data.thread?.status}`);
+  r = await ADM.get('/api/admin/cs/999999');
+  check('Thread tak dikenal 404', r.status === 404, `status=${r.status}`);
+
   setDayO(1);
 
   dbS6.close();

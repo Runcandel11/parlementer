@@ -78,7 +78,7 @@ export function readToken(req) {
 
 export async function loadCitizen(userId) {
   const c = await one(
-    `SELECT c.*, u.username, u.email, u.premium_until, u.is_admin, u.avatar,
+    `SELECT c.*, u.username, u.email, u.premium_until, u.is_admin, u.is_cs_agent, u.avatar,
        u.referral_code, u.is_banned, u.banned_reason, u.banned_at, u.pw_reset_required
      FROM citizens c JOIN users u ON u.id = c.user_id WHERE c.user_id = ?`,
     [userId],

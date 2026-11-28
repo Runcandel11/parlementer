@@ -30,12 +30,12 @@ export async function adminOnly(req, res, next) {
   next();
 }
 
-async function logAction(t, adminId, targetId, action, detail) {
+export async function logAction(t, adminId, targetId, action, detail) {
   await t.run('INSERT INTO admin_actions (admin_id, target_id, action, detail, created_at) VALUES (?,?,?,?,?) RETURNING id',
     [adminId, targetId, action, detail, Date.now()]);
 }
 
-async function notifyCitizen(t, citizenId, title, content) {
+export async function notifyCitizen(t, citizenId, title, content) {
   await t.run('INSERT INTO notifications (citizen_id, category, title, content, created_at) VALUES (?,?,?,?,?) RETURNING id',
     [citizenId, 'ADMIN', title, content, Date.now()]);
 }

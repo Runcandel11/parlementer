@@ -1022,6 +1022,28 @@ CREATE TABLE IF NOT EXISTS dms (
   is_read INTEGER NOT NULL DEFAULT 0,
   created_at BIGINT NOT NULL
 );
+-- Customer Service (v5.7.4): satu thread per pemain (citizen_id UNIQUE),
+-- dijawab manusia (agen CS Muse Angelica / admin) — BUKAN bot auto-reply.
+-- Penanda baca ada di thread (pola chat_read, tapi dua sisi): player
+-- sudah membaca balasan terakhir? staf CS sudah membaca pesan pemain
+-- terakhir? last_message_at dipakai mengurutkan daftar admin.
+CREATE TABLE IF NOT EXISTS cs_threads (
+  id ${id},
+  citizen_id INTEGER NOT NULL UNIQUE REFERENCES citizens(id),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+  created_at BIGINT NOT NULL,
+  last_message_at BIGINT NOT NULL DEFAULT 0,
+  player_last_read_at BIGINT NOT NULL DEFAULT 0,
+  agent_last_read_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS cs_messages (
+  id ${id},
+  thread_id INTEGER NOT NULL REFERENCES cs_threads(id),
+  sender TEXT NOT NULL CHECK (sender IN ('player', 'agent', 'admin')),
+  sender_id INTEGER,
+  body TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS achievements (
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   akey TEXT NOT NULL,
@@ -1397,6 +1419,7 @@ export async function initDb() {
     await migrateV570Columns(t);
     await migrateV571Columns(t);
     await migrateV576ChronicleLevel5(t);
+    await migrateV578CsColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1455,10 +1478,10 @@ async function runDataFixups() {
 // Di SQLite BIGINT sama saja dengan INTEGER (64-bit), jadi satu skema untuk
 // kedua dialek. Daftar ini juga dipakai migrasi untuk database yang sudah
 // terlanjur dibuat dengan kolom INTEGER.
-const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
+const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'last_cs_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'company_stock', 'share_clicks', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'election_petitions', 'wars', 'war_attacks', 'war_support', 'country_alliances', 'war_motions', 'war_motion_votes', 'name_motions', 'name_motion_votes', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'chat_read', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'password_resets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'company_stock', 'share_clicks', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'election_petitions', 'wars', 'war_attacks', 'war_support', 'country_alliances', 'war_motions', 'war_motion_votes', 'name_motions', 'name_motion_votes', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'chat_read', 'credit_history', 'blocked', 'notifications', 'dms', 'cs_threads', 'cs_messages', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'password_resets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -1475,7 +1498,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 32;
+const SCHEMA_VERSION = 33;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -2297,6 +2320,30 @@ export async function migrateV576ChronicleLevel5(t) {
   else await t.run('INSERT INTO db_meta (key, value) VALUES (?, ?)', [CHRONICLE_LEVEL5_BACKFILL_KEY, JSON.stringify(summary)]);
   console.log(`[migrasi chronicle-level5] warga level>=5 dicek=${summary.citizensChecked} di-backfill=${summary.citizensBackfilled} sudah-selesai=${summary.citizensAlreadyDone} level<5=${summary.citizensBelowLevel}`);
   return summary;
+}
+
+// Customer Service (v5.7.4, skema 32 → 33): dua kolom baru.
+//   users.is_cs_agent — peran agen CS (Muse Angelica): HANYA boleh baca +
+//   balas chat CS (endpoint /api/admin/cs*), TIDAK bisa endpoint admin
+//   lain (grant, tiket, ban, dsb. tetap adminOnly). Akunnya dibuat parent
+//   setelah merge — flag di-set manual:
+//     UPDATE users SET is_cs_agent = 1 WHERE email = '<email agen CS>';
+//   (jangan hardcode password/kredensial di repo).
+//   citizens.last_cs_at — cooldown kirim pesan CS pemain (5 detik, pola
+//   last_chat_at di POST /api/chat/:room).
+// Idempotent (ADD COLUMN IF NOT EXISTS / cek PRAGMA, pola
+// migrateBannerAdKind) — tanpa backfill: default 0 sudah benar.
+async function migrateV578CsColumns(t) {
+  const addCol = async (table, col, ddl) => {
+    if (isPg) {
+      await t.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${ddl}`);
+    } else {
+      const cols = await t.sql(`PRAGMA table_info(${table})`);
+      if (!cols.some((c) => c.name === col)) await t.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    }
+  };
+  await addCol('users', 'is_cs_agent', 'INTEGER NOT NULL DEFAULT 0');
+  await addCol('citizens', 'last_cs_at', 'BIGINT NOT NULL DEFAULT 0');
 }
 
 // Jejak baca chat (v5.4.0): tabel chat_read untuk lencana pesan belum dibaca
