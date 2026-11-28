@@ -528,12 +528,54 @@ function showAuth() {
       showApp();
     } catch (ex) { err.textContent = ex.message; err.hidden = false; }
   };
+  // Lupa Password (v5.5.0): tanpa layanan email — pemain minta reset,
+  // cek status persetujuan admin, lalu masuk sekali pakai.
+  $('#link-forgot').onclick = () => switchAuthTab('forgot');
+  $('#link-back-login').onclick = () => switchAuthTab('login');
+  const forgotEmail = () => String(new FormData($('#form-forgot')).get('email') || '').trim();
+  $('#form-forgot').onsubmit = async (e) => {
+    e.preventDefault();
+    const err = $('#forgot-error'); const info = $('#forgot-info');
+    err.hidden = true; info.hidden = true;
+    try {
+      const d = await post('/api/auth/forgot-password', { email: forgotEmail(), note: String(new FormData($('#form-forgot')).get('note') || '').trim() || undefined });
+      info.textContent = d.message || 'Permintaan dicatat.';
+      info.hidden = false;
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; }
+  };
+  $('#btn-forgot-check').onclick = async () => {
+    const err = $('#forgot-error'); const info = $('#forgot-info'); const btn = $('#btn-reset-login');
+    err.hidden = true; info.hidden = true; btn.hidden = true;
+    const email = forgotEmail();
+    if (!email) { err.textContent = 'Isi email akunmu dulu.'; err.hidden = false; return; }
+    try {
+      const d = await api('/api/auth/forgot-password/status?email=' + encodeURIComponent(email));
+      if (d.approved) {
+        info.textContent = 'Admin sudah menyetujui! Ketuk tombol di bawah untuk masuk dan buat password baru. Tombol ini sekali pakai dan berlaku 3 hari.';
+        info.hidden = false; btn.hidden = false;
+      } else {
+        info.textContent = 'Belum disetujui admin, atau belum ada permintaan untuk email ini. Cek lagi nanti.';
+        info.hidden = false;
+      }
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; }
+  };
+  $('#btn-reset-login').onclick = async () => {
+    const err = $('#forgot-error');
+    err.hidden = true;
+    try {
+      await post('/api/auth/reset-login', { email: forgotEmail() });
+      await showApp();
+      location.hash = '#/reset-password';
+      route();
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; }
+  };
 }
 function switchAuthTab(which) {
   $('#tab-login').classList.toggle('active', which === 'login');
   $('#tab-register').classList.toggle('active', which === 'register');
   $('#form-login').hidden = which !== 'login';
   $('#form-register').hidden = which !== 'register';
+  $('#form-forgot').hidden = which !== 'forgot';
 }
 
 async function logout() {
@@ -884,13 +926,17 @@ function route() {
   clearInterval(chatTimer); chatTimer = null; chatRoom = null; chatSince = 0;
   clearChatRetry(); chatNewCount = 0;
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
-  const [slug, arg] = hash.split('/');
+  let [slug, arg] = hash.split('/');
+  // Lupa Password (v5.5.0): akun yang wajib ganti password dipaksa ke
+  // halaman #/reset-password — bahkan saat banned (ganti password tidak
+  // membuka akses main; ban tetap berlaku sampai dicabut admin/banding).
+  if (ME?.user?.pw_reset_required && slug !== 'reset-password') slug = 'reset-password';
   // Akun banned: tampilkan pesan banned, bukan dashboard/game.
   // Layar banned bersih full-screen: HUD (header saldo/level, tombol chat,
   // lonceng, gear, bottom bar energi) disembunyikan lewat class 'banned'
   // di #app — lihat CSS. Di halaman ini pemain bisa mengajukan banding
   // dan membalas thread bandingnya.
-  if (ME?.user?.is_banned) {
+  if (ME?.user?.is_banned && slug !== 'reset-password') {
     $('#app').classList.add('banned');
     renderBannedPage();
     return;
@@ -1681,6 +1727,37 @@ ROUTES.profile = async (username) => {
 };
 
 // ---------- PENGATURAN ----------
+// ---------- BUAT PASSWORD BARU (Lupa Password, v5.5.0) ----------
+// Halaman ini HANYA untuk akun yang masuk lewat persetujuan reset
+// (pw_reset_required = 1) — route() memaksa akun itu ke sini sampai
+// password baru disimpan. Endpoint menolak bila flag tidak menyala.
+ROUTES['reset-password'] = async () => {
+  $('#page').innerHTML = page('🔑 BUAT PASSWORD BARU', 'Akunmu masuk lewat persetujuan reset password. Atur password barumu di sini — setelah ini kamu langsung bisa main.', `
+  <div class="panel" style="max-width:520px;margin:0 auto">
+    <form id="form-reset-password" class="auth-form">
+      <label>PASSWORD BARU<input type="password" name="password" placeholder="Minimal 6 karakter" required minlength="6" autocomplete="new-password"></label>
+      <label>ULANGI PASSWORD BARU<input type="password" name="password_confirm" placeholder="Ketik ulang password barumu" required minlength="6" autocomplete="new-password"></label>
+      <div id="reset-error" class="auth-error" hidden></div>
+      <button class="btn-gold big" type="submit">SIMPAN PASSWORD BARU</button>
+      <button class="btn-text" id="btn-reset-logout" type="button">Bukan akunmu? Keluar</button>
+    </form>
+  </div>`);
+  $('#form-reset-password').onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const err = $('#reset-error');
+    err.hidden = true;
+    try {
+      await post('/api/auth/reset-password', { password: String(fd.get('password') || ''), password_confirm: String(fd.get('password_confirm') || '') });
+      toast('Password baru disimpan. Selamat datang kembali!');
+      await refreshMe();
+      location.hash = '#/dashboard';
+      route();
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; }
+  };
+  $('#btn-reset-logout').onclick = logout;
+};
+
 ROUTES.settings = async () => {
   const c = ME.citizen;
   const blocked = await api('/api/chat/blocked').catch(() => ({ blocked: [] }));
@@ -2079,18 +2156,26 @@ async function renderAdminInbox(statusFilter) {
   ]);
   const pending = appeals.appeals.filter((a) => a.status === 'menunggu').length;
   const statusChip = (s) => s === 'baru' ? '🆕 BARU' : s === 'dibaca' ? '👁 DIBACA' : '✅ SELESAI';
-  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Saran & laporan bug dari pemain, plus laporan chat.', `
-  <div class="tabs">
-    <button class="tab" data-goto="#/admin">👥 Pemain</button>
-    <button class="tab" data-goto="#/admin/appeals">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
-    <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
-    <button class="tab active">📥 Laporan &amp; Saran</button>
-  </div>
-  <div class="panel"><h3>🎧 TIKET MEJA BANTUAN</h3>
-    <div class="tabs">
-      ${['', 'baru', 'dibaca', 'selesai'].map((s) => `<button class="tab ${statusFilter === s || (!statusFilter && s === '') ? 'active' : ''}" data-goto="#/admin/inbox${s ? '?status=' + s : ''}">${s === '' ? 'SEMUA' : s.toUpperCase()}</button>`).join('')}
-    </div>
-    ${tickets.tickets.length ? tickets.tickets.map((t) => `
+  // Lupa Password (v5.5.0): permintaan reset ikut tampil di kotak masuk
+  // ini (kind 'password_reset') — admin ACC/TOLAK dari sini. Pastikan
+  // identitas peminta sebelum ACC: cocokkan nama warga + keterangan,
+  // atau konfirmasi lewat WhatsApp/Discord bila ragu.
+  const pendingResets = tickets.tickets.filter((t) => t.kind === 'password_reset' && t.resetStatus === 'menunggu').length;
+  const resetChip = (s) => s === 'menunggu' ? '🆕 MENUNGGU' : s === 'disetujui' ? '✅ DISETUJUI' : s === 'ditolak' ? '❌ DITOLAK' : s === 'dipakai' ? '🔑 SUDAH DIPAKAI' : '⏰ KEDALUWARSA';
+  const ticketCard = (t) => {
+    if (t.kind === 'password_reset') return `
+    <div class="panel" data-reset="${t.resetId}">
+      <div class="panel-head"><h3>🔑 ${esc(t.type)} · ${esc(t.topic)}</h3><span class="chip">${resetChip(t.resetStatus)}</span></div>
+      <div class="kv"><span class="k">Dari</span><span class="v">${esc(t.username)} · ${esc(t.publicId)} · ${esc(t.email)}</span></div>
+      <div class="kv"><span class="k">Tanggal</span><span class="v">${fmtDate(t.created_at)}</span></div>
+      <p style="margin-top:8px">${esc(t.details)}</p>
+      <p class="muted small">Permintaan kedaluwarsa ${fmtDate(t.expires_at)} bila belum diputus. Sekali ACC, pemain bisa masuk sekali pakai dalam 3 hari — pastikan dulu ini memang akunnya.</p>
+      ${t.resetStatus === 'menunggu' ? `<div class="row" style="margin-top:10px">
+        <button class="btn-gold btn-sm" data-reset-decide="accept" type="button">✅ ACC — SETUJUI RESET</button>
+        <button class="btn-danger btn-sm" data-reset-decide="reject" type="button">❌ TOLAK</button>
+      </div>` : ''}
+    </div>`;
+    return `
     <div class="panel" data-ticket="${t.id}">
       <div class="panel-head"><h3>${t.type === 'Laporan bug' ? '🐛' : '💡'} ${esc(t.type)} · ${esc(t.topic)}</h3><span class="chip">${statusChip(t.status)}</span></div>
       <div class="kv"><span class="k">Dari</span><span class="v">${esc(t.username)} · ${esc(t.publicId)} · ${esc(t.email)}</span></div>
@@ -2102,7 +2187,20 @@ async function renderAdminInbox(statusFilter) {
       </div>
       <div class="chat-input" style="margin-top:10px"><input class="t-reply" placeholder="Tulis balasan untuk pemain..." maxlength="1000" autocomplete="off">
       <button class="btn-gold" data-tact="balas" type="button">KIRIM BALASAN</button></div>
-    </div>`).join('') : '<p class="muted">Belum ada tiket.</p>'}
+    </div>`;
+  };
+  $('#page').innerHTML = page('🛡️ PANEL ADMIN', 'Saran & laporan bug dari pemain, plus laporan chat.', `
+  <div class="tabs">
+    <button class="tab" data-goto="#/admin">👥 Pemain</button>
+    <button class="tab" data-goto="#/admin/appeals">📬 Banding${pending ? ` <span class="chip">${pending} menunggu</span>` : ''}</button>
+    <button class="tab" data-goto="#/admin/gift-all">🎁 Hadiah Massal</button>
+    <button class="tab active">📥 Laporan &amp; Saran</button>
+  </div>
+  <div class="panel"><h3>🎧 TIKET MEJA BANTUAN${pendingResets ? ` <span class="chip">${pendingResets} reset menunggu</span>` : ''}</h3>
+    <div class="tabs">
+      ${['', 'baru', 'dibaca', 'selesai'].map((s) => `<button class="tab ${statusFilter === s || (!statusFilter && s === '') ? 'active' : ''}" data-goto="#/admin/inbox${s ? '?status=' + s : ''}">${s === '' ? 'SEMUA' : s.toUpperCase()}</button>`).join('')}
+    </div>
+    ${tickets.tickets.length ? tickets.tickets.map(ticketCard).join('') : '<p class="muted">Belum ada tiket.</p>'}
   </div>
   <div class="panel"><h3>🚩 LAPORAN CHAT</h3>
     ${reports.reports.length ? reports.reports.map((r) => `
@@ -2141,6 +2239,18 @@ async function renderAdminInbox(statusFilter) {
         } catch (e) { toast(e.message); }
       };
     });
+  });
+  // Lupa Password (v5.5.0): tombol ACC/TOLAK pada kartu permintaan reset.
+  $$('#page [data-reset-decide]').forEach((btn) => {
+    btn.onclick = async () => {
+      const panel = btn.closest('[data-reset]');
+      const rid = Number(panel.dataset.reset);
+      try {
+        await post('/api/admin/password-resets/' + rid + '/decide', { decision: btn.dataset.resetDecide });
+        toast(btn.dataset.resetDecide === 'accept' ? 'Reset password disetujui — pemain bisa masuk sekali pakai.' : 'Permintaan reset password ditolak.');
+        route();
+      } catch (e) { toast(e.message); }
+    };
   });
   $$('[data-report]').forEach((b) => b.onclick = async () => {
     try {

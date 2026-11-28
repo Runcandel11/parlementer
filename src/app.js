@@ -12,6 +12,7 @@ import { registerCivic } from './api-civic.js';
 import { registerMilitary } from './api-military.js';
 import { registerAdmin } from './api-admin.js';
 import { registerAppeals } from './api-appeals.js';
+import { registerPasswordReset } from './api-password-reset.js';
 import { getUserIdFromReq } from './util.js';
 import { maybeTick, ensureElections } from './tick.js';
 import { maybeAutoWork } from './auto-work.js';
@@ -114,6 +115,7 @@ export function createApp() {
   registerMilitary(app);
   registerAdmin(app);
   registerAppeals(app);
+  registerPasswordReset(app);
 
   // Frontend statis + SPA fallback.
   app.use(express.static(path.join(__dirname, '..', 'public')));

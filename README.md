@@ -189,11 +189,11 @@ Alur e2e: daftar → login → klaim (+5 emas/+50 USD/+40 XP) → latih → lama
 kerja ADMIN → shift (**dibayar 44× Besi Mentah**, setara ~48,40 USD; USD tidak
 berubah) → pasar (jual/beli, pajak 2%) → makan → valas (cetak 1 emas = 10 USD)
 
-Hasil terakhir (28 Nov 2026, v5.4.0 "Kolom Chat ala Parlementum" + lencana belum dibaca + perbaikan kartu MILITER & auto-scroll DM): **e2e 1134/1134 lolos,
-pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 259/259 lolos,
+Hasil terakhir (28 Nov 2026, v5.5.0 "Lupa Password"): **e2e 1171/1171 lolos,
+pg-test 46/46 lolos, modal 155/155 lolos, pg-verify 270/270 lolos,
 pg-concurrency 38/38 lolos, stage7-dom 28/28 lolos, share-dom 28/28 lolos, tutorial-dom 43/43 lolos,
-landing-glass-dom 79/79 lolos, ads-dom 44/44 lolos, conversion-dom 20/20 lolos, chat-dom 70/70 lolos** — dan semua suite DOM lain hijau (22 suite DOM = 924/924,
-xp-rollback 49/49, ssl 6/6; total 2456/2456, 0 gagal). Chat kini kolom sempit di tengah (maks 680px, panel berbingkai) ala Parlementum: tab Global/Indonesia/Wilayah bergaris bawah emas + lencana jumlah pesan belum dibaca (batas +99, dari tabel chat_read), gelembung pesan + avatar 48px + nama emas + jam, ikon laporkan/blokir di samping gelembung, tombol KIRIM emas, modal Laporkan Konten tetap sama. Kartu MILITER dashboard tidak lagi "0/undefined unit" — /api/me kini mengirim cap (50+10×level). DM auto-scroll ke pesan terbaru saat dibuka dan saat pesan baru masuk (tiket LIO #47). Tutorial (v5.2.0): overlay 7 langkah muncul otomatis
+landing-glass-dom 79/79 lolos, ads-dom 44/44 lolos, conversion-dom 20/20 lolos, chat-dom 70/70 lolos, password-reset-dom 23/23 lolos** — dan semua suite DOM lain hijau (23 suite DOM = 947/947,
+xp-rollback 49/49, ssl 6/6; total 2527/2527, 0 gagal). Lupa Password: link di layar login → permintaan masuk kotak masuk admin (ACC/TOLAK) → kalau ACC, pemain mengecek status di halaman login lalu tombol sekali pakai "Masuk & Buat Password Baru" membawanya ke halaman buat password baru; token sekali pakai (hash SHA-256 tersimpan, nilai mentah tak pernah keluar server), kedaluwarsa 7 hari (pending) / 3 hari (setelah ACC), tanpa email — sepenuhnya in-app; pesan generik agar tidak bocor apakah email terdaftar atau tidak. Chat kini kolom sempit di tengah (maks 680px, panel berbingkai) ala Parlementum: tab Global/Indonesia/Wilayah bergaris bawah emas + lencana jumlah pesan belum dibaca (batas +99, dari tabel chat_read), gelembung pesan + avatar 48px + nama emas + jam, ikon laporkan/blokir di samping gelembung, tombol KIRIM emas, modal Laporkan Konten tetap sama. Kartu MILITER dashboard tidak lagi "0/undefined unit" — /api/me kini mengirim cap (50+10×level). DM auto-scroll ke pesan terbaru saat dibuka dan saat pesan baru masuk (tiket LIO #47). Tutorial (v5.2.0): overlay 7 langkah muncul otomatis
 di dashboard saat login pertama pemain baru (tutorial_done = 0, tersimpan di server; warga lama
 di-backfill saat migrasi skema 25), tombol Lewati selalu ada, selesai/lewati menutup permanen,
 replay dari Buku Panduan/Pengaturan; pemain baru yang masuk lewat deep link tidak dibajak —

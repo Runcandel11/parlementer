@@ -3869,6 +3869,120 @@ async function main() {
     dbB.close();
   }
 
+  console.log('\n[38] v5.5.0 — Lupa Password: minta → ACC admin → masuk sekali pakai → password baru');
+  // Pemain baru WR (IP sendiri lewat X-Forwarded-For — registrasi dibatasi
+  // 20/IP/24 jam, pola [23b]/[28]).
+  const WR = new Client();
+  WR.extraHeaders = { 'X-Forwarded-For': '127.0.0.201' };
+  r = await WR.post('/api/auth/register', { email: 'lupa@test.local', password: 'lama12345', username: 'warga_lupa' });
+  check('WR mendaftar (lupa@test.local)', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const wrId = r.data.user?.id;
+  r = await WR.post('/api/auth/login', { email: 'lupa@test.local', password: 'lama12345' });
+  check('WR login dengan password lama berhasil', r.status === 200 && r.data.ok);
+  // Email TIDAK terdaftar: balasan generik, tanpa baris di DB (tidak bocor).
+  const anon = new Client();
+  r = await anon.post('/api/auth/forgot-password', { email: 'tidakada@test.local' });
+  check('Forgot email tak dikenal: 200 + pesan generik', r.status === 200 && typeof r.data.message === 'string' && r.data.message.length > 0, `status=${r.status}`);
+  const genericMsg = r.data.message;
+  // Minta reset (dengan keterangan) → pesan generik yang SAMA persis.
+  r = await WR.post('/api/auth/forgot-password', { email: 'lupa@test.local', note: 'warga_lupa, lahir di Kepulauan Riau' });
+  check('Forgot email terdaftar: pesan generik identik (tidak bocor)', r.status === 200 && r.data.message === genericMsg, `status=${r.status}`);
+  // Minta 2× (masih aktif) → tetap generik, TIDAK duplikat baris.
+  r = await WR.post('/api/auth/forgot-password', { email: 'lupa@test.local' });
+  check('Forgot duplikat saat aktif: tetap generik', r.status === 200 && r.data.message === genericMsg);
+  {
+    const dbW = new DatabaseSync(DB_PATH);
+    const n = dbW.prepare('SELECT COUNT(*) AS n FROM password_resets WHERE user_id = ?').get(wrId);
+    check('Satu baris permintaan aktif (tidak duplikat)', Number(n.n) === 1, `n=${n.n}`);
+    dbW.close();
+  }
+  r = await anon.get('/api/auth/forgot-password/status?email=lupa@test.local');
+  check('Status sebelum ACC: approved=false', r.status === 200 && r.data.approved === false, JSON.stringify(r.data));
+  r = await anon.post('/api/auth/reset-login', { email: 'lupa@test.local' });
+  check('Reset-login sebelum ACC ditolak (400)', r.status === 400, `status=${r.status}`);
+  // Admin melihat permintaan di kotak masuk (digabung ke tiket).
+  r = await ADM.get('/api/admin/tickets');
+  const prRow = (r.data.tickets || []).find((t) => t.kind === 'password_reset' && t.username === 'warga_lupa');
+  check('Permintaan muncul di kotak masuk admin (kind password_reset, status baru)', !!prRow && prRow.status === 'baru' && prRow.resetStatus === 'menunggu', prRow ? `id=${prRow.id} status=${prRow.status}` : 'tidak ketemu');
+  r = await ADM.get('/api/admin/password-resets');
+  check('Admin: daftar permintaan reset berisi 1 pending', r.status === 200 && r.data.requests?.length === 1 && r.data.requests[0].status === 'pending', `n=${r.data.requests?.length}`);
+  const prId = r.data.requests[0].id;
+  r = await B.post(`/api/admin/password-resets/${prId}/decide`, { decision: 'accept' });
+  check('Non-admin: putuskan reset ditolak 403', r.status === 403, `status=${r.status}`);
+  r = await ADM.post(`/api/admin/password-resets/${prId}/decide`, { decision: 'mungkin' });
+  check('Admin: keputusan tidak valid ditolak 400', r.status === 400, `status=${r.status}`);
+  // Admin TOLAK dulu → status tetap false, reset-login tetap 400.
+  r = await ADM.post(`/api/admin/password-resets/${prId}/decide`, { decision: 'reject' });
+  check('Admin TOLAK permintaan', r.status === 200 && r.data.status === 'rejected', `status=${r.status}`);
+  r = await anon.get('/api/auth/forgot-password/status?email=lupa@test.local');
+  check('Status setelah TOLAK: approved=false', r.data.approved === false);
+  r = await anon.post('/api/auth/reset-login', { email: 'lupa@test.local' });
+  check('Reset-login setelah TOLAK ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await ADM.post(`/api/admin/password-resets/${prId}/decide`, { decision: 'accept' });
+  check('Putusan ganda pada permintaan yang sudah diputus ditolak (400)', r.status === 400, `status=${r.status}`);
+  // Minta lagi (permintaan lama sudah diputus → boleh baris baru) → ACC.
+  r = await WR.post('/api/auth/forgot-password', { email: 'lupa@test.local' });
+  check('Minta lagi setelah ditolak: 200 generik', r.status === 200 && r.data.message === genericMsg);
+  r = await ADM.get('/api/admin/password-resets');
+  const prId2 = r.data.requests.find((x) => x.status === 'pending')?.id;
+  check('Permintaan kedua tercatat pending', !!prId2, `id=${prId2}`);
+  r = await ADM.post(`/api/admin/password-resets/${prId2}/decide`, { decision: 'accept' });
+  check('Admin ACC permintaan kedua', r.status === 200 && r.data.status === 'approved', `status=${r.status}`);
+  r = await anon.get('/api/auth/forgot-password/status?email=lupa@test.local');
+  check('Status setelah ACC: approved=true', r.data.approved === true, JSON.stringify(r.data));
+  r = await anon.post('/api/auth/reset-login', { email: 'salah@test.local' });
+  check('Reset-login email lain ditolak (400)', r.status === 400, `status=${r.status}`);
+  // Masuk sekali pakai (klien baru, tanpa sesi lama).
+  const WR2 = new Client();
+  r = await WR2.post('/api/auth/reset-login', { email: 'lupa@test.local' });
+  check('Reset-login setelah ACC: 200 + mustChangePassword', r.status === 200 && r.data.mustChangePassword === true, `status=${r.status}`);
+  r = await WR2.get('/api/auth/me');
+  check('Sesi reset-login: /api/auth/me pw_reset_required=true', r.data.user?.pw_reset_required === true, JSON.stringify(r.data.user));
+  // Token sekali pakai: klik kedua gagal.
+  r = await anon.post('/api/auth/reset-login', { email: 'lupa@test.local' });
+  check('Reset-login kedua (token sudah dipakai) ditolak (400)', r.status === 400, `status=${r.status}`);
+  // Atur password baru: validasi dulu, lalu berhasil.
+  r = await WR2.post('/api/auth/reset-password', { password: 'baru12345', password_confirm: 'beda12345' });
+  check('Reset password konfirmasi beda ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await WR2.post('/api/auth/reset-password', { password: 'abc' });
+  check('Reset password terlalu pendek ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await WR2.post('/api/auth/reset-password', { password: 'baru12345', password_confirm: 'baru12345' });
+  check('Reset password baru berhasil', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await WR2.get('/api/auth/me');
+  check('Setelah reset: pw_reset_required=false', r.data.user?.pw_reset_required === false, JSON.stringify(r.data.user));
+  r = await WR2.post('/api/auth/reset-password', { password: 'lagi12345' });
+  check('Reset password tanpa flag reset ditolak (400)', r.status === 400, `status=${r.status}`);
+  // Login lama gagal, login baru berhasil.
+  const WR3 = new Client();
+  r = await WR3.post('/api/auth/login', { email: 'lupa@test.local', password: 'lama12345' });
+  check('Login password LAMA setelah reset ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await WR3.post('/api/auth/login', { email: 'lupa@test.local', password: 'baru12345' });
+  check('Login password BARU setelah reset berhasil', r.status === 200 && r.data.ok, `status=${r.status}`);
+  // Kedaluwarsa: permintaan ketiga di-ACC lalu expires_at dimundurkan.
+  r = await WR.post('/api/auth/forgot-password', { email: 'lupa@test.local' });
+  check('Permintaan ketiga: 200 generik', r.status === 200 && r.data.message === genericMsg);
+  r = await ADM.get('/api/admin/password-resets');
+  const prId3 = r.data.requests.find((x) => x.status === 'pending')?.id;
+  r = await ADM.post(`/api/admin/password-resets/${prId3}/decide`, { decision: 'accept' });
+  check('Admin ACC permintaan ketiga', r.status === 200 && r.data.status === 'approved');
+  {
+    const dbW = new DatabaseSync(DB_PATH);
+    dbW.prepare("UPDATE password_resets SET expires_at = ? WHERE id = ?").run(Date.now() - 1000, prId3);
+    dbW.close();
+  }
+  r = await anon.get('/api/auth/forgot-password/status?email=lupa@test.local');
+  check('Status setelah kedaluwarsa: approved=false', r.data.approved === false, JSON.stringify(r.data));
+  r = await anon.post('/api/auth/reset-login', { email: 'lupa@test.local' });
+  check('Reset-login setelah kedaluwarsa ditolak (400)', r.status === 400, `status=${r.status}`);
+  // Jejak audit di admin_actions: 2 ACC + 1 TOLAK.
+  {
+    const dbW = new DatabaseSync(DB_PATH);
+    const acc = dbW.prepare("SELECT COUNT(*) AS n FROM admin_actions WHERE action = 'password_reset_accept'").get();
+    const rej = dbW.prepare("SELECT COUNT(*) AS n FROM admin_actions WHERE action = 'password_reset_reject'").get();
+    check('Log admin: 2 accept tercatat', Number(acc.n) === 2, `n=${acc.n}`);
+    check('Log admin: 1 reject tercatat', Number(rej.n) === 1, `n=${rej.n}`);
+    dbW.close();
+  }
 
   setDayO(1);
 

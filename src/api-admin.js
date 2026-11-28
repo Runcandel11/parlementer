@@ -413,6 +413,11 @@ export function registerAdmin(app) {
   // tidak ada yang membacanya. Di sini admin melihat, mengubah status,
   // dan membalas (balasan dikirim sebagai notifikasi ke pemain).
   // GET /api/admin/tickets?status=baru|dibaca|selesai — terbaru dulu.
+  // Lupa Password (v5.5.0): permintaan reset ikut muncul di kotak masuk
+  // ini (kind 'password_reset', id string 'pr-<n>') supaya admin melihat
+  // dan memutusnya dari satu tempat. Pemetaan status: pending yang belum
+  // kedaluwarsa → 'baru'; yang sudah diputus/dipakai/kedaluwarsa →
+  // 'selesai'. Tiket biasa tetap kind 'ticket' + id angka seperti dulu.
   app.get('/api/admin/tickets', authRequired, admin, r(async (req, res) => {
     const status = (req.query.status || '').trim();
     const where = ['baru', 'dibaca', 'selesai'].includes(status) ? 'WHERE st.status = ?' : '';
@@ -424,9 +429,44 @@ export function registerAdmin(app) {
        JOIN users u ON u.id = c.user_id
        ${where} ORDER BY st.created_at DESC, st.id DESC LIMIT 200`,
       params);
-    res.json({
-      tickets: rows.map((t) => ({ ...t, publicId: publicId(t.user_id) })),
+    const tickets = rows.map((t) => ({ ...t, kind: 'ticket', publicId: publicId(t.user_id) }));
+    const now = Date.now();
+    const resetRows = await sql(
+      `SELECT pr.*, u.username, u.email
+       FROM password_resets pr JOIN users u ON u.id = pr.user_id
+       ORDER BY pr.created_at DESC, pr.id DESC LIMIT 200`);
+    const resets = resetRows.map((row) => {
+      const expired = (row.status === 'pending' || row.status === 'approved') && Number(row.expires_at) <= now;
+      const resetStatus = expired ? 'kedaluwarsa'
+        : row.status === 'pending' ? 'menunggu'
+        : row.status === 'approved' ? 'disetujui'
+        : row.status === 'rejected' ? 'ditolak' : 'dipakai';
+      return {
+        id: 'pr-' + row.id,
+        kind: 'password_reset',
+        resetId: row.id,
+        resetStatus,
+        type: 'Lupa Password',
+        topic: 'Reset password — ' + row.username,
+        details: row.note ? `Keterangan pemain: "${row.note}"` : 'Pemain lupa password dan meminta reset lewat layar login.',
+        status: resetStatus === 'menunggu' ? 'baru' : 'selesai',
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        decided_at: row.decided_at,
+        user_id: row.user_id,
+        username: row.username,
+        email: row.email,
+        publicId: publicId(row.user_id),
+      };
     });
+    const filtered = status === 'baru' ? resets.filter((x) => x.status === 'baru')
+      : status === 'dibaca' ? []
+      : status === 'selesai' ? resets.filter((x) => x.status === 'selesai')
+      : resets;
+    const merged = [...tickets, ...filtered]
+      .sort((a, b) => (b.created_at - a.created_at) || (String(b.id).localeCompare(String(a.id))))
+      .slice(0, 200);
+    res.json({ tickets: merged });
   }));
 
   // POST /api/admin/tickets/:id/status { status: 'baru'|'dibaca'|'selesai' }

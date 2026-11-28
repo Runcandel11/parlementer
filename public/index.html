@@ -265,6 +265,19 @@
       <label>KATA SANDI<input type="password" name="password" placeholder="Kata sandimu" required autocomplete="current-password"></label>
       <div id="login-error" class="auth-error" hidden></div>
       <button class="btn-gold big" type="submit">MASUK</button>
+      <button class="btn-text" id="link-forgot" type="button">Lupa Password?</button>
+    </form>
+    <!-- LUPA PASSWORD (v5.5.0): tanpa layanan email — pemain minta reset,
+         admin ACC/TOLAK dari kotak masuk, pemain cek kembali di sini. -->
+    <form id="form-forgot" class="auth-form" hidden>
+      <label>EMAIL AKUNMU<input type="email" name="email" placeholder="Email yang dipakai daftar" required autocomplete="email"></label>
+      <label>KETERANGAN (OPSIONAL)<input type="text" name="note" placeholder="cth: nama wargamu — biar admin yakin ini akunmu" maxlength="200" autocomplete="off"></label>
+      <div id="forgot-error" class="auth-error" hidden></div>
+      <div id="forgot-info" class="auth-note" hidden></div>
+      <button class="btn-gold big" type="submit">KIRIM PERMINTAAN RESET</button>
+      <button class="btn-ghost big" id="btn-forgot-check" type="button">CEK STATUS PERSETUJUAN</button>
+      <button class="btn-gold big" id="btn-reset-login" type="button" hidden>MASUK &amp; BUAT PASSWORD BARU</button>
+      <button class="btn-text" id="link-back-login" type="button">← Kembali Masuk</button>
     </form>
     <form id="form-register" class="auth-form" hidden>
       <label>EMAIL<input type="email" name="email" placeholder="nama@email.com" required autocomplete="email"></label>

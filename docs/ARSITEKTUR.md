@@ -261,6 +261,45 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   [I]–[L] (kolom, lencana, auto-scroll DM via mock prototype scrollHeight/
   scrollTop jsdom, cap militer), e2e (`/api/me` cap), pg-verify [29]
   (tabel chat_read + UPSERT + FK + idempotensi).
+- **Lupa Password v5.5.0 (28 Nov 2026, desain disetujui pemilik):** game
+  BELUM punya layanan email — alur sepenuhnya in-app, TANPA kirim email.
+  Link "Lupa Password?" di layar login → pemain memasukkan email akun
+  (+ catatan opsional) → `POST /api/auth/forgot-password` mencatat
+  permintaan (rate limit 10/IP/jam; pesan generik yang SAMA untuk email
+  terdaftar maupun tidak, supaya tidak bocor; satu permintaan aktif per
+  akun). Permintaan muncul di kotak masuk admin (tiket kind
+  `password_reset`, id `pr-<n>`) + `GET /api/admin/password-resets`;
+  admin ACC/TOLAK lewat `POST /api/admin/password-resets/:id/decide`
+  (hanya pending + belum kedaluwarsa; keputusan dicatat di admin_actions
+  `password_reset_accept`/`password_reset_reject` + notifikasi ke pemain).
+  Kalau ACC, pemain mengecek di halaman login
+  (`GET /api/auth/forgot-password/status?email=` → `{approved}`) dan
+  tombol sekali pakai "Masuk & Buat Password Baru" muncul; tombol itu
+  memanggil `POST /api/auth/reset-login` yang mengonsumsi permintaan
+  secara atomik (conditional UPDATE status → 'used'; pemakaian kedua
+  ditolak 400) lalu memberi sesi + `mustChangePassword: true`, dan pemain
+  mendarat di halaman `#/reset-password` untuk mengatur password baru
+  (`POST /api/auth/reset-password`: min 6 / maks 72 byte, konfirmasi
+  harus cocok; `token_version` dinaikkan + cookie diterbitkan ulang agar
+  sesi lain mati, sesi ini tetap hidup). Keamanan: tabel
+  `password_resets` (id, user_id FK users, token_hash SHA-256 dari 32
+  byte acak — nilai mentah TIDAK PERNAH keluar server, status CHECK
+  pending/approved/rejected/used, created_at, expires_at, decided_at,
+  decided_by, used_at; indeks `idx_password_resets_user`; skema 29,
+  migrasi `migratePasswordResetColumns` menambah kolom
+  `users.pw_reset_required` — diset 1 saat reset-login, dibersihkan saat
+  reset-password; klien memaksa akun ber-flag itu ke `#/reset-password`,
+  bahkan saat banned) — pending kedaluwarsa 7 hari, setelah ACC jendela
+  login sekali pakai 3 hari (expires_at ditulis ulang saat ACC);
+  kedaluwarsa dihitung di query (tanpa sweep). Risiko sisa: admin adalah
+  satu-satunya gerbang identitas — siapa pun yang tahu sebuah email bisa
+  memicu permintaan; admin HARUS memverifikasi peminta adalah pemilik
+  akun (cocokkan nama warga + catatan, atau konfirmasi via WhatsApp/
+  Discord) sebelum mengetuk ACC. Dicek e2e [38] (37 check: alur penuh,
+  tolak, sekali pakai, kedaluwarsa, audit log), pg-verify [30]
+  (migrasi 28→29, konsumsi atomik, FK, CHECK, idempotensi),
+  password-reset-dom 23/23 (UI login: link, form, pesan generik,
+  cek status, tombol sekali pakai, halaman reset, validasi).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

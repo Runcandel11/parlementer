@@ -370,6 +370,9 @@ export function registerCore(app) {
         id: citizen.user_id, publicId: publicId(citizen.user_id), email: citizen.email, username: citizen.username,
         avatar: citizen.avatar || null,
         is_admin: !!citizen.is_admin, is_banned: !!citizen.is_banned, banned_reason: citizen.banned_reason || '',
+        // Lupa Password (v5.5.0): client memaksa akun ini ke halaman
+        // #/reset-password sampai password baru diatur.
+        pw_reset_required: !!citizen.pw_reset_required,
       },
       citizen,
     });
@@ -493,6 +496,9 @@ export function registerCore(app) {
         id: c.user_id, publicId: publicId(c.user_id), email: c.email, username: c.username,
         avatar: c.avatar || null,
         is_admin: !!c.is_admin, is_banned: !!c.is_banned, banned_reason: c.banned_reason || '',
+        // Lupa Password (v5.5.0): client memaksa akun ini ke halaman
+        // #/reset-password sampai password baru diatur.
+        pw_reset_required: !!c.pw_reset_required,
       },
       citizen: { ...c, isPremium, energyCap, trainCosts, trainCooldowns, breadLimit: breadLimitFor(isPremium) },
       // Kredit skor (v3.0.0): skor + tier + batasan yang berlaku — dipakai

@@ -1036,6 +1036,28 @@ CREATE TABLE IF NOT EXISTS support_tickets (
   status TEXT NOT NULL DEFAULT 'baru',
   created_at BIGINT NOT NULL
 );
+-- Permintaan reset password (v5.5.0, Lupa Password): TIDAK ada layanan
+-- email, jadi alur sepenuhnya in-app — pemain minta lewat layar login,
+-- admin ACC/TOLAK dari kotak masuk Laporan & Saran. Satu permintaan AKTIF
+-- (pending/approved) per akun; token dibuat server-side (hash SHA-256 di
+-- sini, nilai mentahnya TIDAK PERNAH keluar dari server) dan dipakai
+-- sekali saat "Masuk & Buat Password Baru" — setelah itu status 'used'.
+-- Kedaluwarsa: permintaan pending 7 hari sejak dibuat; setelah disetujui,
+-- jendela masuk sekali pakai 3 hari sejak disetujui (expires_at ditulis
+-- ulang saat ACC). Baris kedaluwarsa diperlakukan sebagai 'expired' oleh
+-- query (bukan status tersimpan) — lihat api-password-reset.js.
+CREATE TABLE IF NOT EXISTS password_resets (
+  id ${id},
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  token_hash TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'used')),
+  created_at BIGINT NOT NULL,
+  expires_at BIGINT NOT NULL,
+  decided_at BIGINT NOT NULL DEFAULT 0,
+  decided_by INTEGER NOT NULL DEFAULT 0,
+  used_at BIGINT NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS world (
   id INTEGER PRIMARY KEY,
   day INTEGER NOT NULL DEFAULT 1,
@@ -1074,6 +1096,7 @@ CREATE INDEX IF NOT EXISTS idx_laws_status ON laws(status, ends_at);
 -- migrasi, setelah ADD COLUMN (pola yang sama seperti
 -- idx_citizens_last_seen di migrateOnlineColumns).
 CREATE INDEX IF NOT EXISTS idx_appeals_user ON appeals(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_referral_pending_newcomer ON referral_pending(newcomer_id, status);
 CREATE INDEX IF NOT EXISTS idx_referral_pending_referrer ON referral_pending(referrer_id, status, paid_day);
 `;
@@ -1278,6 +1301,7 @@ export async function initDb() {
     await migrateTutorialColumns(t);
     await migrateBannerAdKind(t);
     await migrateFirstShiftColumn(t);
+    await migratePasswordResetColumns(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1339,7 +1363,7 @@ async function runDataFixups() {
 const TS_COLUMNS = ['created_at', 'expires_at', 'ends_at', 'opens_at', 'closes_at', 'joined_at', 'last_chat_at', 'premium_until'];
 
 // Semua nama tabel di skema — dipakai membersihkan tipe komposit yatim.
-const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'company_stock', 'share_clicks', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'chat_read', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
+const TABLE_NAMES = ['users', 'admin_actions', 'appeals', 'appeal_messages', 'citizens', 'regions', 'commodities', 'inventory', 'market_offers', 'market_tx', 'market_buy_orders', 'treasury_tx', 'market_flags', 'announcements', 'announcement_reads', 'fx_offers', 'fx_history', 'jobs', 'companies', 'company_stock', 'share_clicks', 'country', 'party_seats', 'country_joins', 'country_join_votes', 'parties', 'party_members', 'laws', 'law_votes', 'budgets', 'budget_votes', 'impeachments', 'impeachment_votes', 'elections', 'election_candidates', 'election_votes', 'wars', 'war_attacks', 'war_support', 'military_units', 'newspapers', 'articles', 'article_reactions', 'article_views', 'article_comments', 'chat_messages', 'chat_reports', 'chat_read', 'credit_history', 'blocked', 'notifications', 'dms', 'achievements', 'convoys', 'organizations', 'org_members', 'org_pacts', 'support_tickets', 'password_resets', 'world', 'rate_limits', 'referral_pending', 'db_meta', 'mission_progress', 'mission_claims', 'chronicle_done', 'chronicle_claims', 'ad_tokens', 'ad_rewards'];
 
 // Kunci advisory lock Postgres untuk initDb (satu nilai tetap; hanya dipakai di sini).
 const INITDB_LOCK_KEY = 2026112701;
@@ -1356,7 +1380,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 28;
+const SCHEMA_VERSION = 29;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -2042,6 +2066,23 @@ async function migrateFirstShiftColumn(t) {
   } else {
     const cols = await t.sql('PRAGMA table_info(citizens)');
     if (!cols.some((c) => c.name === 'first_shift_done')) await t.exec('ALTER TABLE citizens ADD COLUMN first_shift_done INTEGER NOT NULL DEFAULT 0');
+  }
+}
+
+// Lupa Password (v5.5.0): kolom pw_reset_required di users — 1 = akun ini
+// masuk lewat persetujuan reset dan WAJIB mengatur password baru sebelum
+// bisa main (dipaksa client ke halaman #/reset-password; endpoint
+// POST /api/auth/reset-password menolak bila flag ini 0). Default 0
+// sudah benar untuk semua akun lama. Tabel password_resets dibuat di
+// schema() (CREATE TABLE IF NOT EXISTS — pola yang sama seperti chat_read
+// v5.4.0; migrasi CREATE TABLE terpisah dilarang karena pg-mem crash).
+// Idempotent (ADD COLUMN IF NOT EXISTS / cek PRAGMA). Tanpa backfill.
+async function migratePasswordResetColumns(t) {
+  if (isPg) {
+    await t.exec('ALTER TABLE users ADD COLUMN IF NOT EXISTS pw_reset_required INTEGER NOT NULL DEFAULT 0');
+  } else {
+    const cols = await t.sql('PRAGMA table_info(users)');
+    if (!cols.some((c) => c.name === 'pw_reset_required')) await t.exec('ALTER TABLE users ADD COLUMN pw_reset_required INTEGER NOT NULL DEFAULT 0');
   }
 }
 
