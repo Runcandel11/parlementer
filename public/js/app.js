@@ -1136,6 +1136,16 @@ ROUTES.dashboard = async () => {
   const stepBreadDone = (c.bread_today || 0) > 0;
   const stepPartyDone = !!ME.party;
   const starterAllDone = stepWorkDone && stepBreadDone && stepPartyDone;
+  // v5.7.5 ("Event Dunia Hidup"): progres minggu event dunia — hari ke-x
+  // dari 7 + hitung mundur sampai berganti + pratinjau event berikutnya.
+  // Semua angka dari server (/api/me: endsDay + next); klien hanya hitung
+  // posisi dalam minggu dari ME.world.day. Bila field baru belum ada
+  // (ME lama/cache), panel tetap tampil seperti sebelumnya.
+  const evDay = ME.world?.day || 1;
+  const evEndsDay = ME.worldEvent?.endsDay || 0;
+  const evDayInWeek = ((evDay - 1) % 7) + 1;
+  const evDaysLeft = evEndsDay ? Math.max(0, evEndsDay - evDay) : 0;
+  const evChangeLabel = !evEndsDay ? '' : evDaysLeft === 0 ? `hari terakhir — berganti besok (hari ${evEndsDay})` : evDaysLeft === 1 ? `berganti besok (hari ${evEndsDay})` : `berganti dalam ${evDaysLeft} hari (hari ${evEndsDay})`;
   $('#page').innerHTML = page('DASHBOARD', `Hari ${ME.world.day} · Populasi dunia: ${fmt(ME.population)} warga · <span title="Pemain aktif dalam 5 menit terakhir">🟢 ${fmt(ME.onlineCount ?? 0)} online</span>`, `
   <div class="panel" id="dash-starter">
     <div class="panel-head"><h3>🧭 MULAI DI SINI — 3 LANGKAH PERTAMA</h3><button class="btn-gold btn-sm" type="button" data-goto="#/book">📖 CARA MAIN</button></div>
@@ -1153,9 +1163,12 @@ ROUTES.dashboard = async () => {
   ${ME.votingLaws.length ? `<div class="panel"><h3>🏛 UU SEDANG DIVOTING</h3>
     ${ME.votingLaws.map((l) => `<div class="kv"><span class="k">${esc(l.title)}</span><span class="v">${l.yes} Ya / ${l.abstain} / ${l.no} Tidak</span></div>`).join('')}
     <button class="btn-gold btn-sm" data-goto="#/parliament">Buka Parlemen</button></div>` : ''}
-  ${ME.worldEvent ? `<div class="panel" id="dash-event"><h3>${esc(ME.worldEvent.icon)} EVENT DUNIA: ${esc(ME.worldEvent.name).toUpperCase()}</h3>
+  ${ME.worldEvent ? `<div class="panel" id="dash-event"><h3><span class="event-icon" aria-hidden="true">${esc(ME.worldEvent.icon)}</span> EVENT DUNIA: ${esc(ME.worldEvent.name).toUpperCase()}</h3>
     <p class="muted small">${esc(ME.worldEvent.desc)}</p>
-    <div class="kv"><span class="k">Efek minggu ini</span><span class="v gold-text">${esc(ME.worldEvent.effect)}</span></div></div>` : ''}
+    <div class="kv"><span class="k">Efek minggu ini</span><span class="v gold-text">${esc(ME.worldEvent.effect)}</span></div>
+    ${evEndsDay ? `<div class="bar gold event-progress" role="progressbar" aria-valuenow="${evDayInWeek}" aria-valuemin="0" aria-valuemax="7" aria-label="Minggu event: hari ke ${evDayInWeek} dari 7"><i style="width:${Math.round(evDayInWeek / 7 * 100)}%"></i></div>
+    <div class="kv"><span class="k">Minggu ini</span><span class="v">Hari ke ${evDayInWeek} dari 7 · ${evChangeLabel}</span></div>` : ''}
+    ${ME.worldEvent.next ? `<div class="kv"><span class="k">Berikutnya</span><span class="v">${esc(ME.worldEvent.next.icon)} ${esc(ME.worldEvent.next.name)} — ${esc(ME.worldEvent.next.effect)}</span></div>` : ''}</div>` : ''}
   ${ME.military ? `<div class="panel" id="dash-military">
     <div class="panel-head"><h3>⚔️ MILITER</h3><button class="btn-text gold" type="button" data-goto="#/military">KELOLA ›</button></div>
     <div class="kv"><span class="k">Kekuatan</span><span class="v">${ME.military.power} · Kerusakan perang ×${ME.military.mult}</span></div>

@@ -209,6 +209,13 @@ a.btn-gold { display: inline-block; text-decoration: none; }
 .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), #14b8a6); }
 .bar.gold > i { background: linear-gradient(90deg, var(--gold-bright), var(--gold)); }
 .bar.red > i { background: linear-gradient(90deg, #e5484d, #b91c1c); }
+/* Event dunia hidup (v5.7.5): ikon event berdenyut halus + bilah progres
+   minggu (memakai .bar.gold yang sudah ada). Dihormati
+   prefers-reduced-motion, mengikuti pola animasi lain di file ini. */
+#dash-event .event-icon { display: inline-block; animation: eventPulse 2.4s ease-in-out infinite; }
+#dash-event .event-progress { height: 8px; margin: 10px 0 2px; }
+@keyframes eventPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
+@media (prefers-reduced-motion: reduce) { #dash-event .event-icon { animation: none; } }
 .kv { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid #16213a; }
 .kv:last-child { border-bottom: none; }
 .kv .k { color: var(--muted); font-family: 'Oswald', sans-serif; letter-spacing: .06em; text-transform: uppercase; font-size: 13px; }

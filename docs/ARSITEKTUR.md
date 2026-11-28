@@ -499,6 +499,34 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   begitu jam buka parlemen (28 Nov 2026 20:00 WIB) lewat dan sempat
   menggagalkan e2e 20:09 WIB (1298/1301); sesudah dibuka, cek yang sama
   memastikan usul UU/anggaran TIDAK ditolak 403.
+- **Event Dunia Hidup v5.7.5 (28 Nov 2026, Lane 12 — Natalia Ivanova,
+  poles berkelanjutan — antrean lane kosong):** panel EVENT DUNIA di
+  dashboard selama ini statis (nama + efek saja) — pemain tidak tahu event
+  berakhir kapan dan apa event berikutnya. Sekarang: helper baru
+  `worldEventNext(day)` di `src/game.js` (rotasi deterministik yang sama
+  seperti `worldEventFor`); `/api/me` + `/api/world` mengirim `endsDay`
+  (dari `worldEventEndsDay` yang sudah ada tapi belum pernah dikirim ke
+  klien) + `next` (event minggu berikutnya) di dalam objek event; panel
+  `#dash-event` (`public/js/app.js`) menampilkan bilah progres minggu
+  (memakai `.bar.gold` yang sudah ada, `Hari ke X dari 7`, lebar
+  X/7×100%), hitung mundur (`berganti dalam N hari (hari H)` / `berganti
+  besok` / `hari terakhir — berganti besok` di hari ke-7), dan pratinjau
+  event berikutnya (ikon + nama + efek); ikon event berdenyut halus
+  (`eventPulse` 2,4 dtk, `public/css/style.css`, dihormati
+  `prefers-reduced-motion`). Bila field baru belum ada (ME lama/cache),
+  panel tetap tampil seperti sebelumnya (fallback defensif). TIDAK ubah
+  efek/aturan event, TIDAK ubah harga/payout, tanpa migrasi skema (tetap
+  32). Referensi pola (poles dari internet, bukan karangan): countdown +
+  progress bar event mingguan ala Arc Raiders weekly trials — timer hitung
+  mundur sampai refresh + progress bar
+  (https://www.facebook.com/ZLaner/posts/pfbid0ci7oxp2jV8vR92gCK2UXmwgmXGGDtWZWSMDMx6jC2MB3XzxsirzrPMGWc1VTZvLyl)
+  dan prinsip Timer UNaIVERSE — server hanya mempublikasikan momen
+  berakhir, klien yang menghitung mundur
+  (https://docs.unaiverse.io/gui-kit/components/timer/). Dicek e2e (3 cek
+  baru: endsDay 7 + next Festival di hari 1, /api/world ikut membawa
+  endsDay + next, endsDay 49 + next Festival di hari 43) + stage6-dom
+  (4 cek baru: progres minggu, hitung mundur, pratinjau event berikut,
+  bilah .event-progress).
 - **Kronik yatim `level5` + `market` v5.7.3 (28 Nov 2026, laporan Vincent
   di Discord #bugs):** Vincent level 11 stuck Babak III 3/4 — "Capai
   Level 5" tidak pernah selesai. Akar: dua kunci Kronik TIDAK PUNYA situs

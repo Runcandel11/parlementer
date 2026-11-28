@@ -2881,8 +2881,10 @@ async function main() {
   setDayO(1);
   r = await M1.get('/api/me');
   check('Event hari 1: Panen Raya (upah ADMIN +20%)', r.data.worldEvent?.key === 'panen' && r.data.worldEvent?.name === 'Panen Raya', JSON.stringify(r.data.worldEvent));
+  check('Event hari 1: endsDay 7 + event berikutnya Festival Rakyat', r.data.worldEvent?.endsDay === 7 && r.data.worldEvent?.next?.key === 'festival' && r.data.worldEvent?.next?.name === 'Festival Rakyat', JSON.stringify(r.data.worldEvent));
   r = await M1.get('/api/world');
   check('/api/world ikut membawa event minggu ini', r.data.event?.key === 'panen', JSON.stringify(r.data.event));
+  check('/api/world: event ikut membawa endsDay + next', r.data.event?.endsDay === 7 && r.data.event?.next?.key === 'festival', JSON.stringify(r.data.event));
   // Panen: upah ADMIN +20% — bandingkan effectiveQty vs pay_qty dasar.
   const jobsRespO = (await M1.get('/api/jobs')).data;
   const jobsM1 = jobsRespO.jobs;
@@ -2959,6 +2961,7 @@ async function main() {
   setDayO(43);
   r = await M1.get('/api/me');
   check('Event hari 43: kembali Panen Raya (rotasi 6 minggu)', r.data.worldEvent?.key === 'panen', JSON.stringify(r.data.worldEvent));
+  check('Event hari 43: endsDay 49 + berikutnya tetap Festival Rakyat', r.data.worldEvent?.endsDay === 49 && r.data.worldEvent?.next?.key === 'festival', JSON.stringify(r.data.worldEvent));
 
   // --- (g) Pajak penjual di wilayah taklukan mengalir ke panglima perang.
   setDayO(1); // panen — tarif normal 2%, bukan minggu booming

@@ -95,7 +95,7 @@
 // absurd hasil exploit di-rollback (migrasi clamp). Plus perbaikan bug
 // share link: shareStatsFor tidak lagi memakai `? IS NULL` (Postgres
 // 42P18 — hanya gagal di live, lolos di SQLite).
-export const VERSION = '5.7.4';
+export const VERSION = '5.7.5';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
@@ -725,6 +725,13 @@ export function worldEventFor(day) {
 export function worldEventEndsDay(day) {
   const d = Math.max(1, Number(day) || 1);
   return (Math.floor((d - 1) / 7) + 1) * 7;
+}
+// Event minggu BERIKUTNYA (v5.7.5 — "Event Dunia Hidup"): supaya dashboard
+// bisa menampilkan pratinjau event yang akan datang, tanpa menebak rotasi
+// di klien. Rotasi deterministik yang sama seperti worldEventFor.
+export function worldEventNext(day) {
+  const d = Math.max(1, Number(day) || 1);
+  return WORLD_EVENTS[(Math.floor((d - 1) / 7) + 1) % WORLD_EVENTS.length];
 }
 
 // --- Batas harga wajar (Tahap 4) ---

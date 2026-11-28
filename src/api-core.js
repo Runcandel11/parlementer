@@ -22,7 +22,7 @@ import {
   breadLimitFor, AUTO_WORK_DURATION_MS,
   SHIFT_MAX_PER_CALL,
   PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
-  MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, unitCapFor, tradeReputation, worldEventFor,
+  MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, unitCapFor, tradeReputation, worldEventFor, worldEventEndsDay, worldEventNext,
   DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
   ONLINE_WINDOW_MS, onlineStatus,
   ADINPLAY_PROPERTY_ID, AD_REWARD_GOLD, AD_TOKEN_TTL_MS, AD_MIN_INTERVAL_MS,
@@ -460,8 +460,12 @@ export function registerCore(app) {
     const budgetTrain = budgetActive(country) === 'train';
     // Event dunia minggu ini (Tahap 6): Wabah Melanda menaikkan biaya
     // latihan +2 emas — ditampilkan di sini supaya sama dengan yang
-    // dibebankan POST /api/train.
-    const worldEvent = worldEventFor(world?.day || 1);
+    // dibebankan POST /api/train. v5.7.5 ("Event Dunia Hidup"): sertakan
+    // hari berakhirnya event + event minggu berikutnya, supaya dashboard
+    // bisa menampilkan bilah progres minggu + hitung mundur + pratinjau
+    // (server yang mempublikasikan momen berakhir, klien tinggal hitung).
+    const worldDay = world?.day || 1;
+    const worldEvent = { ...worldEventFor(worldDay), endsDay: worldEventEndsDay(worldDay), next: worldEventNext(worldDay) };
     const trainCosts = {};
     for (const [key, col] of [['strength', 'attr_str'], ['strategy', 'attr_edu'], ['charisma', 'attr_eco']]) {
       const base = trainCost(c[col]);
@@ -2730,8 +2734,9 @@ export function registerCore(app) {
     const lastTx = await one(`SELECT t.qty, t.created_at, co.name AS commodity FROM market_tx t JOIN commodities co ON co.id = t.commodity_id ORDER BY t.created_at DESC LIMIT 1`);
     const lastTrade = lastTx ? { qty: lastTx.qty, commodity: lastTx.commodity, at: lastTx.created_at } : null;
     // Event dunia minggu ini (Tahap 6) — publik, supaya landing + dashboard
-    // bisa menampilkan event yang sedang berlaku tanpa login.
-    worldCache = { version: VERSION, day, population: Number(population.n), regions: Number(regions.n), countries: Number(countries.n), onlineCount: await countOnline(), event: worldEventFor(day), regionsOwned: Number(regionsOwned.n), activeFronts: Number(activeFronts.n), warsTotal: Number(warsTotal.n), tx24h: Number(tx24h.n), front, feed: feed.slice(0, 6), lastTrade };
+    // bisa menampilkan event yang sedang berlaku tanpa login. v5.7.5:
+    // sertakan juga hari berakhirnya + event berikutnya (sama seperti /api/me).
+    worldCache = { version: VERSION, day, population: Number(population.n), regions: Number(regions.n), countries: Number(countries.n), onlineCount: await countOnline(), event: { ...worldEventFor(day), endsDay: worldEventEndsDay(day), next: worldEventNext(day) }, regionsOwned: Number(regionsOwned.n), activeFronts: Number(activeFronts.n), warsTotal: Number(warsTotal.n), tx24h: Number(tx24h.n), front, feed: feed.slice(0, 6), lastTrade };
     worldCacheAt = now;
     res.json(worldCache);
   }));

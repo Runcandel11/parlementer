@@ -97,7 +97,7 @@ async function main() {
     check('server menyala dan /api/world merespons', up);
     if (!up) { process.exitCode = 1; return; }
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 5.7.4', world.version === '5.7.4', `version=${world.version}`);
+    check('API /api/world: versi 5.7.5', world.version === '5.7.5', `version=${world.version}`);
 
     const jarA = makeJar();
     const jarB = makeJar();
@@ -129,6 +129,10 @@ async function main() {
     const dashEvent = document.querySelector('#dash-event');
     check('Dashboard: panel event dunia ada', !!dashEvent, dashEvent?.textContent?.slice(0, 80) || '');
     check(`Dashboard: panel event menyebut "${eventName}"`, !!eventName && (dashEvent?.textContent || '').toLowerCase().includes(eventName.toLowerCase()), dashEvent?.textContent?.slice(0, 80) || '');
+    check('Dashboard: panel event menampilkan progres minggu (Hari ke 1 dari 7)', /Hari ke 1 dari 7/.test(dashEvent?.textContent || ''), dashEvent?.textContent?.slice(0, 200) || '');
+    check('Dashboard: panel event menampilkan hitung mundur ganti event', /berganti dalam 6 hari \(hari 7\)/.test(dashEvent?.textContent || ''), dashEvent?.textContent?.slice(0, 200) || '');
+    check('Dashboard: panel event menampilkan event berikutnya (Festival Rakyat)', (dashEvent?.textContent || '').includes('Berikutnya') && (dashEvent?.textContent || '').includes('Festival Rakyat'), dashEvent?.textContent?.slice(0, 200) || '');
+    check('Dashboard: panel event punya bilah progres (.event-progress)', !!dashEvent?.querySelector('.event-progress'), '');
     const dashMil = document.querySelector('#dash-military');
     check('Dashboard: panel militer ada', !!dashMil, dashMil?.textContent?.slice(0, 80) || '');
     check('Dashboard: panel militer menyebut kekuatan/pasukan', /Kekuatan|Pasukan/.test(dashMil?.textContent || ''));
