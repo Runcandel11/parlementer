@@ -48,6 +48,10 @@ Ditulis di Tahap 7 (v4.1.0, 28 Nov 2026). Perilaku game yang lengkap ada di
   ikut pulih). Batas = `energyCapFor(level, premium, convoy)`:
   `100 + 5×(level−1) + 20 Premium + 10 RS Lapangan`.
 - **Klaim harian:** `DAILY_CLAIM` = +5 emas, +50 USD, +40 XP.
+- **Emas naik level (v5.7.3):** setiap naik level, +5 × level BARU emas
+  (`LEVEL_UP_GOLD_PER_LEVEL` = 5 di `game.js`, `levelUpGoldFor(level)`),
+  diganjar atomik di `addXp` — satu-satunya jalur naik level live.
+  Tidak berlaku surut.
 - **Referral:** pengundang +200 emas + 2 hari premium; pendaftar +100 emas
   + 1 hari premium; cair saat pendaftar mencapai Level 3; maks 5/hari.
 - **Kredit skor:** mulai 100; laporan chat TERBUKTI benar oleh admin → −10;
@@ -56,12 +60,18 @@ Ditulis di Tahap 7 (v4.1.0, 28 Nov 2026). Perilaku game yang lengkap ada di
 - **Militer:** 3 unit (Infanteri / Drone Perang / Kendaraan Berat); batas
   pasukan 50 + 10×level; pengali kerusakan perang 1 + min(power,100)/200
   (maks ×1,5); perawatan harian di tick.
-- **Partai (v5.6.0 + v5.7.2):** halaman detail `#/parties/<id>` menampilkan isi +
+- **Partai (v5.6.0 + v5.7.2 + v5.7.3):** halaman detail `#/parties/<id>` menampilkan isi +
   daftar member dengan jabatan (publik — nama warga sudah tampil di chat /
-  peringkat / daftar partai). Role: ketua (`leader`) | sekretaris
+  peringkat / daftar partai). Nama member bisa diklik → profil publik
+  (`data-goto="#/profile/<username>"`); anggota parlemen bertanda 🏛️
+  (`is_mp` dari `party_seats` di negara wilayah asal member).
+  Role: ketua (`leader`) | sekretaris
   (`secretary`) | anggota (`member`) | lamaran (`pending`). Hanya ketua
   yang bisa mengangkat/mencopot sekretaris; sekretaris membantu
-  menyetujui/menolak lamaran sama seperti ketua. **v5.7.2 — ketua bisa
+  menyetujui/menolak lamaran sama seperti ketua. **v5.7.3 — ketua bisa
+  mengganti nama + singkatan partai (`POST /api/parties/:id/rename`,
+  biaya 50 emas per perubahan, validasi sama seperti pendirian termasuk
+  keunikan, atomik, anggota lain diberi notifikasi).** **v5.7.2 — ketua bisa
   mengeluarkan anggota (`POST /api/parties/:id/kick`, tombol "Keluarkan" di
   daftar member) dan membubarkan partai (`POST /api/parties/:id/dissolve`,
   tombol merah "Bubarkan Partai")** — keduanya server-enforced, ketua
@@ -468,7 +478,72 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
-- **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
+- **Ticket batch v5.7.3 (28 Nov 2026, saran ronde 17:46 WIB yang diterima):**
+  6 saran + 1 investigasi bug. **(1) Profil member partai bisa diklik:**
+  nama member di halaman detail partai (`#/parties/<id>`, termasuk ketua
+  di baris atas + pelamar pending) memakai `data-goto="#/profile/<username>"`
+  (route profil publik yang sudah ada — dipakai leaderboard/chat); berlaku
+  juga saat melihat partai orang lain. **`is_mp` per member** di
+  `GET /api/parties/:id`: anggota bertanda 🏛️ "Anggota Parlemen" bila
+  partainya punya kursi di parlemen NEGARANYA (rumus yang sama seperti
+  `isMpCitizen()` — `party_seats` di negara wilayah asal member); panel
+  menjelaskan bila partai memegang kursi di parlemen negaramu.
+  **(2) Timer perjalanan di dashboard:** `/api/me` `travel` kini membawa
+  `fromRegionName` (wilayah saat ini — `region_id` baru berubah saat tiba)
+  + `totalMs` (dihitung ulang dari rumus yang sama seperti saat travel
+  dimulai: `travelMinutesFor` + 5 mnt bila event dunia hari ini Badai)
+  + `progress` (1 − remaining/total). Dashboard menampilkan kartu
+  "Dalam perjalanan: A → B" + hitung mundur + bar progres; satu ticker
+  global 1 detik memperbarui SEMUA `[data-travel-countdown]` /
+  `[data-travel-progress]` (dashboard, banner peta, halaman wilayah —
+  bukan timer terpisah; saat tiba, `refreshMe()` + `route()` sekali).
+  **(3) Ganti nama + singkatan partai:** `POST /api/parties/:id/rename`,
+  ketua saja (403 bila bukan ketua); biaya 50 emas per perubahan
+  (`PARTY_RENAME_COST_GOLD`, satu panggilan = satu perubahan, nama
+  dan/atau singkatan sekaligus); validasi SAMA seperti pendirian partai
+  (nama 3–40 karakter, singkatan 2–6 huruf kapital/angka, unik di antara
+  semua partai kecuali sendiri); atomik (kunci baris warga + potong emas
+  bersyarat + update partai dalam satu tx; saldo kurang → 400, nama tidak
+  berubah); anggota lain diberi notifikasi. UI: tombol "✏️ Ubah Nama
+  Partai · 50 emas" (ketua saja) + form inline + konfirmasi menampilkan
+  biaya. **(4) Emas tiap naik level:** `LEVEL_UP_GOLD_PER_LEVEL` = 5 —
+  setiap naik level, pemain mendapat emas = 5 × level BARU (Lv2 = 10,
+  Lv3 = 15, ...), grant atomik di `addXp` (satu UPDATE level+xp+emas)
+  + notifikasi "Naik Level! ... +N emas". Hanya level-up SETELAH batch
+  ini live — TIDAK berlaku surut (level yang sudah dicapai tidak
+  dibayar; migrasi koreksi XP di `db.js` bukan naik level, tidak diganjar).
+  **`addXp` adalah satu-satunya jalur naik level live** (klaim, misi,
+  shift) — semua ikut aturan ini. **(5) Top 10 paling online + lama
+  tidak aktif:** `GET /api/stats` mengembalikan `topOnline` (10 warga
+  terakhir terlihat paling baru — TIDAK ADA penghitung sesi/jumlah login
+  di DB, jadi "paling online" didefinisikan sebagai `last_seen_at`
+  terbaru; `online` = dalam `ONLINE_WINDOW_MS` 5 menit via `onlineStatus`)
+  + `inactive` (10 warga paling lama tidak aktif, `last_seen_at` = 0
+  atau ≤ 7 hari lalu — `INACTIVE_AFTER_MS` = 7 hari); akun banned
+  dikecualikan di keduanya. UI: dua panel baru di Statistik.
+  **(6) Nominal kas negara:** `GET /api/country` mengembalikan
+  `treasurySummary` — pemasukan/pengeluaran emas + Rupiah, total sumbangan
+  emas + Rupiah, jumlah transaksi — dijumlah dari tabel `treasury_tx`
+  YANG SAMA dengan daftar ARUS KAS (seluruh riwayat, bukan 20 terakhir);
+  saldo tetap dari `country.treasury` / `treasury_usd`. UI: panel
+  "📊 RINGKASAN ARUS KAS" di halaman Negara (sumbangan bahan tercatat
+  setara nilai acuannya — tiket #10 digabung ke #9). **(7) Investigasi
+  bug "partai belum bisa diklik" (tiket #55, LIO):** daftar partai +
+  detail partai sudah bisa diklik sejak v5.6.0/v5.7.1 (tombol LIHAT DETAIL
+  + delegasi global `data-goto`, dicek party-dom); yang MASIH belum bisa
+  diklik adalah **nama partai di leaderboard Statistik** (`partyRows` —
+  teks polos tanpa `data-goto`) — diperbaiki batch ini (nama partai di
+  Statistik kini `data-goto="#/parties/<id>"`, termasuk daftar LIHAT SEMUA
+  yang memakai `partyRows` yang sama). Dicek e2e [44] (rename: hak akses
+  403, tanpa perubahan/invalid/duplikat 400, saldo kurang 400 + nama
+  tetap, 404, notifikasi anggota, potong tepat 50; level-up: Lv1→2 +10,
+  Lv2→3 +15, lompat Lv1→3 +10+15, tanpa naik level tanpa bonus;
+  travel: rute + total + progres konsisten; stats: urutan topOnline,
+  posisi 1 = baru aktif, inactive ≥ 7 hari; kas: ringkasan = jumlah
+  langsung `treasury_tx`; is_mp true/false) + ticket-batch-dom (klik
+  member → profil, tanda MP, rename via UI, dashboard travel + ticker,
+  panel statistik, klik partai di leaderboard, ringkasan kas).
+  Tanpa migrasi skema (tetap 31).
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;
   `share_clicks` (UNIQUE owner+IP+hari) — jejak klik link share, satu

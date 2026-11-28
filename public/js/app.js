@@ -732,6 +732,29 @@ async function showApp() {
   // server dengan polling /api/me tiap 30 detik + chat tiap 5 detik.
   // Saat tab kembali aktif, langsung refresh sekali (listener di bawah).
   setInterval(() => { if (!document.hidden) refreshMe(); }, 30000);
+  // Hitung mundur perjalanan (v5.7.3): perbarui SEMUA elemen
+  // [data-travel-countdown] + [data-travel-progress] tiap detik dari
+  // arrivesAt — dashboard, banner peta, dan halaman wilayah memakai
+  // atribut yang sama (bukan timer terpisah). Bila sudah tiba, muat
+  // ulang data + render ulang sekali (settleTravel di server sudah
+  // memindahkan warga; ME.travel jadi null setelah refresh).
+  setInterval(() => {
+    if (document.hidden) return;
+    const now = Date.now();
+    let arrived = false;
+    document.querySelectorAll('[data-travel-countdown]').forEach((el) => {
+      const left = Number(el.dataset.arrivesAt) - now;
+      if (left <= 0) { el.textContent = 'tiba!'; arrived = true; }
+      else el.textContent = fmtCountdown(left);
+    });
+    document.querySelectorAll('[data-travel-progress]').forEach((el) => {
+      const total = Number(el.dataset.totalMs) || 0;
+      const left = Number(el.dataset.arrivesAt) - now;
+      if (total > 0) el.style.width = Math.min(100, Math.max(0, (1 - left / total) * 100)) + '%';
+    });
+    if (arrived && !window.__travelArrived) { window.__travelArrived = true; refreshMe(); route(); }
+    if (!arrived) window.__travelArrived = false;
+  }, 1000);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     refreshMe();
@@ -1381,7 +1404,9 @@ ROUTES.dashboard = async () => {
       ${r.country_name ? '' : '<span class="region-q" aria-hidden="true">?</span>'}
       <p class="lbl-gold" style="margin:0">DITEMPATKAN DI</p>
       <h4 style="font-size:22px">${esc(r.name)}</h4>
-      ${ME.travel ? `<p class="teal-text small">✈️ Dalam perjalanan ke ${esc(ME.travel.toRegionName)} — tiba ${fmtCountdown(ME.travel.remainingMs)} lagi.</p>` : ''}
+      ${ME.travel ? `<div class="travel-card"><p class="teal-text small" style="margin:0">✈️ Dalam perjalanan: <b>${esc(ME.travel.fromRegionName || '')} → ${esc(ME.travel.toRegionName)}</b></p>
+      <p class="small" style="margin:4px 0">Tiba dalam <b><span data-travel-countdown data-arrives-at="${ME.travel.arrivesAt}">${fmtCountdown(ME.travel.remainingMs)}</span></b></p>
+      <div class="bar" role="img" aria-label="Progres perjalanan ${Math.round((ME.travel.progress || 0) * 100)} persen"><i data-travel-progress data-arrives-at="${ME.travel.arrivesAt}" data-total-ms="${ME.travel.totalMs || 0}" style="width:${Math.round((ME.travel.progress || 0) * 100)}%"></i></div></div>` : ''}
       <p class="muted">${r.country_name ? '🏳️ ' + esc(r.country_name) : '🕊️ Belum Bernegara'}</p>
       <div class="kv"><span class="k">Skor Kota</span><span class="v"><span class="region-score">${r.city_score}<small>/10</small></span></span></div>
       <div class="kv"><span class="k">Peringkat</span><span class="v">${r.rank}/17 wilayah</span></div>
@@ -2972,7 +2997,7 @@ ROUTES.map = async () => {
   post('/api/chronicle/visit', { key: 'map' }).catch(() => {});
   // Banner transit (27 Nov 2026): selama bepergian, tombol travel di
   // semua kartu nonaktif — warga tiba saat waktunya habis.
-  const transitBanner = ME.travel ? `<div class="panel"><p class="teal-text" style="margin:0">✈️ Dalam perjalanan ke <b>${esc(ME.travel.toRegionName)}</b> — tiba dalam ${fmtCountdown(ME.travel.remainingMs)} lagi.</p></div>` : '';
+  const transitBanner = ME.travel ? `<div class="panel"><p class="teal-text" style="margin:0">✈️ Dalam perjalanan ke <b>${esc(ME.travel.toRegionName)}</b> — tiba dalam <span data-travel-countdown data-arrives-at="${ME.travel.arrivesAt}">${fmtCountdown(ME.travel.remainingMs)}</span> lagi.</p></div>` : '';
   const byId = new Map(data.regions.map((r) => [r.id, r]));
   const freeCount = data.regions.filter((r) => !r.country_name).length;
   const pts = (poly) => poly.map(([lo, la]) => `${mapX(lo).toFixed(1)},${mapY(la).toFixed(1)}`).join(' ');
@@ -3169,9 +3194,9 @@ ROUTES.regions = async (id) => {
           ? '<p class="teal-text small">🏠 Ini wilayah kewarganegaraanmu.</p>'
           : `<button class="btn-gold" id="btn-move">PINDAH KEWARGANEGARAAN KE SINI</button><p class="muted small">Kewarganegaraanmu pindah ke ${esc(r.name)} — negara, pajak, dan hak memilihmu mengikuti wilayah ini. Bisa pindah lagi setelah 7 hari. Gratis.</p>`}`
         : ME.travel && ME.travel.toRegionId === r.id
-          ? `<p class="teal-text">✈️ Dalam perjalanan ke sini — tiba dalam ${fmtCountdown(ME.travel.remainingMs)} lagi.</p>`
+          ? `<p class="teal-text">✈️ Dalam perjalanan ke sini — tiba dalam <span data-travel-countdown data-arrives-at="${ME.travel.arrivesAt}">${fmtCountdown(ME.travel.remainingMs)}</span> lagi.</p>`
           : ME.travel
-            ? `<p class="muted">✈️ Kamu sedang dalam perjalanan ke ${esc(ME.travel.toRegionName)} — tiba dalam ${fmtCountdown(ME.travel.remainingMs)} lagi.</p>`
+            ? `<p class="muted">✈️ Kamu sedang dalam perjalanan ke ${esc(ME.travel.toRegionName)} — tiba dalam <span data-travel-countdown data-arrives-at="${ME.travel.arrivesAt}">${fmtCountdown(ME.travel.remainingMs)}</span> lagi.</p>`
             : `<button class="btn-gold" id="btn-travel">BEPERGIAN KE SINI (~${d.travelMinutes} mnt · ${d.travelTickets || 1} 🎫)</button><p class="muted small">Bepergian hanya kunjungan — kewarganegaraanmu tetap di wilayah asal.</p>`}
     </div>
     <div class="panel"><h3>🔥 PEMBERONTAKAN</h3>
@@ -3278,6 +3303,14 @@ ROUTES.country = async () => {
     <div class="kv"><span class="k">Pajak produksi</span><span class="v">${c.tax_production}%</span></div>
     <div class="kv"><span class="k">Pajak impor / ekspor</span><span class="v">${c.tax_import}% / ${c.tax_export}%</span></div>
     <p class="muted small">Pajak dikelola parlemen. Gaji menteri 113 emas/hari (dicetak permainan). Pajak pasar ${c.tax_income}% masuk ke kas ini.</p>
+    ${d.treasurySummary ? `<h3 style="margin-top:12px">📊 RINGKASAN ARUS KAS</h3>
+    <p class="muted small">Dijumlah dari buku kas yang sama dengan ARUS KAS di bawah (seluruh riwayat tercatat, bukan 20 terakhir saja).</p>
+    <div class="kv"><span class="k">Pemasukan emas</span><span class="v gold-text">+${fmt(d.treasurySummary.gold_in, 2)} emas</span></div>
+    <div class="kv"><span class="k">Pengeluaran emas</span><span class="v">${fmt(d.treasurySummary.gold_out, 2)} emas</span></div>
+    <div class="kv"><span class="k">Pemasukan Rupiah</span><span class="v gold-text">+${fmtRp(d.treasurySummary.usd_in)}</span></div>
+    <div class="kv"><span class="k">Pengeluaran Rupiah</span><span class="v">−${fmtRp(Math.abs(d.treasurySummary.usd_out))}</span></div>
+    <div class="kv"><span class="k">Sumbangan masuk</span><span class="v gold-text">${fmt(d.treasurySummary.donated_gold, 2)} emas + ${fmtRp(d.treasurySummary.donated_usd)}</span></div>
+    <p class="muted small">${fmt(d.treasurySummary.tx_count)} transaksi tercatat di buku kas.</p>` : ''}
     ${d.treasuryTx?.length ? `<h3 style="margin-top:12px">📒 ARUS KAS (20 TERAKHIR)</h3>
       ${d.treasuryTx.map((t) => `<div class="kv"><span class="k">${esc(t.note || t.kind)}<br><small class="muted">${ago(t.created_at)}</small></span>
       <span class="v">${t.amount >= 0 ? '+' : ''}${t.currency === 'gold' ? fmt(t.amount, 2) + ' emas' : fmtRp(t.amount)}</span></div>`).join('')}`
@@ -3443,9 +3476,15 @@ ROUTES.stats = async () => {
       <span class="leader-val">${fmt(x.citizens)} <small>warga</small></span></div>`).join('') : emptyRows;
   const partyRows = (rows) => rows.length ? rows.map((x, i) => `
     <div class="leader-row"><span class="leader-rank">${i + 1}</span>
-      <div class="leader-main"><div class="leader-name">${esc(x.name)} <span class="party-tag">[${esc(x.tag)}]</span></div><div class="leader-sub">${fmt(x.members)} anggota</div>
+      <div class="leader-main"><div class="leader-name" data-goto="#/parties/${x.id}" style="cursor:pointer" title="Lihat detail partai ${esc(x.name)}">${esc(x.name)} <span class="party-tag">[${esc(x.tag)}]</span></div><div class="leader-sub">${fmt(x.members)} anggota</div>
       <div class="bar leader-bar"><i style="width:${Math.round((Number(x.members) / (Number(rows[0]?.members) || 1)) * 100)}%"></i></div></div>
       <span class="leader-val">${fmt(x.members)} <small>anggota</small></span></div>`).join('') : emptyRows;
+  // (v5.7.3) Baris warga untuk "Paling Aktif" + "Lama Tidak Aktif":
+  // nama bisa diklik → profil publik (pola yang sama seperti levelRows).
+  const onlineRows = (rows) => rows.length ? rows.map((x, i) => `
+    <div class="leader-row"><span class="leader-rank">${i + 1}</span>
+      <div class="leader-main"><div class="leader-name" data-goto="#/profile/${encodeURIComponent(x.username)}" style="cursor:pointer" title="Lihat profil ${esc(x.username)}">${esc(x.username)}</div><div class="leader-sub">${esc(x.region_name)}${x.country_name ? ' · ' + esc(x.country_name) : ' · Belum Bernegara'}${x.online ? ' · <span class="online-badge">● Online</span>' : (x.last_seen_at ? ' · Terakhir online ' + ago(x.last_seen_at) : ' · Belum pernah terlihat online')}</div></div>
+      <span class="leader-val">LV ${x.level}</span></div>`).join('') : emptyRows;
   $('#page').innerHTML = page('STATISTIK', 'Angka nyata dari dunia — tanpa data palsu.', `
   <div class="panel"><h3>📜 CATATAN DUNIA — SEPANJANG MASA</h3>
     <div class="stat-grid">
@@ -3475,6 +3514,14 @@ ROUTES.stats = async () => {
   <div class="panel"><h3>🚩 PEMIMPIN TIAP DAFTAR — PARTAI TERBESAR</h3>
     <div id="leaders-parties">${partyRows(stats.topParties)}</div>
     <button class="btn-text gold" type="button" data-full="parties">LIHAT SEMUA ›</button>
+  </div>
+  <div class="panel"><h3>🟢 PALING AKTIF — 10 TERATAS</h3>
+    <p class="muted small">Diurutkan dari yang terakhir terlihat paling baru (dari data last_seen yang sudah ada — bukan penghitung sesi). "Online" = aktif dalam 5 menit terakhir.</p>
+    <div id="leaders-online">${onlineRows(stats.topOnline || [])}</div>
+  </div>
+  <div class="panel"><h3>😴 LAMA TIDAK AKTIF (≥ 7 HARI)</h3>
+    <p class="muted small">Warga yang sudah ≥ 7 hari tidak terlihat (atau belum pernah tercatat). Diurutkan dari yang paling lama tidak aktif.</p>
+    <div id="leaders-inactive">${onlineRows(stats.inactive || [])}</div>
   </div>
   <div class="panel"><h3>💱 VALAS</h3>
     <div class="kv"><span class="k">Kurs cetak</span><span class="v">1 emas = ${fmtRp(10)}</span></div>
@@ -3601,7 +3648,7 @@ async function partyDetail(id) {
   $('#page').innerHTML = page('PARTAI — ' + p.name.toUpperCase(), 'Isi partai, daftar member, dan jabatan di dalamnya.', `
   <div class="panel"><h3>🚩 ${esc(p.name)} [${esc(p.tag)}]</h3>
     <div class="kv"><span class="k">Ideologi</span><span class="v">${esc(p.ideology)}</span></div>
-    <div class="kv"><span class="k">Ketua</span><span class="v">${esc(p.leader_name)}</span></div>
+    <div class="kv"><span class="k">Ketua</span><span class="v"><span data-goto="#/profile/${encodeURIComponent(p.leader_name)}" style="cursor:pointer" title="Lihat profil ${esc(p.leader_name)}">${esc(p.leader_name)}</span></span></div>
     <div class="kv"><span class="k">Jenis</span><span class="v">${p.type === 'open' ? 'Terbuka — gabung langsung' : p.type === 'application' ? 'Lewat Lamaran' : 'Tertutup'}</span></div>
     <div class="kv"><span class="k">Anggota</span><span class="v">${p.members} warga · ${p.seats} kursi di parlemen negaramu</span></div>
     ${d.myRole ? `<p class="muted small">Jabatanmu: ${PARTY_ROLE_LABEL[d.myRole] || d.myRole}</p>` : ''}
@@ -3611,19 +3658,22 @@ async function partyDetail(id) {
     <p class="muted small">Bagikan partaimu ke Obrolan Global — kartunya menampilkan nama partai + tombol gabung langsung.</p>
     ${(d.myRole === 'member' || d.myRole === 'secretary') ? `<button class="btn-ghost btn-sm" data-leave="${p.id}">Keluar dari Partai</button>` : ''}
     ${d.myRole === 'leader' ? `<div style="margin-top:10px;border-top:1px solid #444;padding-top:10px">
+      <button class="btn-gold btn-sm" id="btn-rename-party">✏️ Ubah Nama Partai · 50 emas</button>
+      <div id="rename-form"></div>
       <button class="btn-danger btn-sm" id="btn-dissolve-party">🗑️ Bubarkan Partai</button>
       <p class="muted small">Hanya ketua. Semua anggota jadi tidak berpartai, lamaran pending dihapus, dan kursi parlemen partai ini hilang. Tidak bisa dibatalkan.</p>
     </div>` : ''}
   </div>
   <div class="panel"><h3>👥 DAFTAR MEMBER (${d.members.length})</h3>
-    ${d.members.length ? d.members.map((m) => `<div class="kv"><span class="k">${esc(m.username)}</span><span class="v">${PARTY_ROLE_LABEL[m.role] || m.role}
+    ${p.seats > 0 ? `<p class="muted small">🏛️ Partai ini memegang ${p.seats} kursi di parlemen negaramu — anggota bertanda 🏛️ duduk di parlemen.</p>` : ''}
+    ${d.members.length ? d.members.map((m) => `<div class="kv"><span class="k"><span data-goto="#/profile/${encodeURIComponent(m.username)}" style="cursor:pointer" title="Lihat profil ${esc(m.username)}">${esc(m.username)}</span>${m.is_mp ? ' 🏛️' : ''}</span><span class="v">${PARTY_ROLE_LABEL[m.role] || m.role}${m.is_mp ? ' · Anggota Parlemen' : ''}
       ${d.myRole === 'leader' && m.role === 'member' ? `<button class="btn-gold btn-sm" data-appoint="${m.citizen_id}">Angkat jadi Sekretaris</button>` : ''}
       ${d.myRole === 'leader' && m.role === 'secretary' ? `<button class="btn-ghost btn-sm" data-remove-sec="${m.citizen_id}">Copot Sekretaris</button>` : ''}
       ${d.myRole === 'leader' && m.role !== 'leader' ? `<button class="btn-danger btn-sm" data-kick="${m.citizen_id}" data-kick-name="${esc(m.username)}">Keluarkan</button>` : ''}
     </span></div>`).join('') : '<p class="muted">Belum ada member.</p>'}
   </div>
   ${canManage ? `<div class="panel"><h3>📥 LAMARAN MASUK</h3>
-    ${d.pending.length ? d.pending.map((x) => `<div class="kv"><span class="k">${esc(x.username)}</span><span class="v"><button class="btn-gold btn-sm" data-approve="${x.citizen_id}">Setujui</button> <button class="btn-ghost btn-sm" data-reject="${x.citizen_id}">Tolak</button></span></div>`).join('') : '<p class="muted">Tidak ada lamaran menunggu.</p>'}
+    ${d.pending.length ? d.pending.map((x) => `<div class="kv"><span class="k"><span data-goto="#/profile/${encodeURIComponent(x.username)}" style="cursor:pointer" title="Lihat profil ${esc(x.username)}">${esc(x.username)}</span></span><span class="v"><button class="btn-gold btn-sm" data-approve="${x.citizen_id}">Setujui</button> <button class="btn-ghost btn-sm" data-reject="${x.citizen_id}">Tolak</button></span></div>`).join('') : '<p class="muted">Tidak ada lamaran menunggu.</p>'}
   </div>` : ''}
   <button class="btn-ghost" data-goto="#/parties">← Kembali ke Daftar Partai</button>`);
   $$('[data-join]').forEach((b) => b.onclick = async () => {
@@ -3673,6 +3723,29 @@ async function partyDetail(id) {
     if (!confirm(`Bubarkan partai ${p.name}? Semua anggota jadi tidak berpartai, lamaran pending dihapus, dan kursi parlemen partai ini hilang. Tindakan ini TIDAK bisa dibatalkan.`)) return;
     try { await post(`/api/parties/${id}/dissolve`, {}); toast('Partai dibubarkan.'); await refreshMe(); location.hash = '#/parties'; }
     catch (e) { toast(e.message); }
+  });
+  // v5.7.3 — Ganti nama + singkatan partai (ketua saja, 50 emas per
+  // perubahan). Form inline + konfirmasi menampilkan biaya; server yang
+  // menegakkan aturan (validasi + keunikan + saldo).
+  $('#btn-rename-party')?.addEventListener('click', () => {
+    const f = $('#rename-form');
+    if (!f) return;
+    if (f.innerHTML) { f.innerHTML = ''; return; }
+    f.innerHTML = `
+      <div class="card selected" style="margin-top:10px"><h4>UBAH NAMA PARTAI — 50 EMAS</h4>
+      <p class="muted small">Nama dan/atau singkatan baru. Aturan sama seperti saat mendirikan partai: nama 3–40 karakter, singkatan 2–6 huruf kapital/angka, dan belum dipakai partai lain. Biaya 50 emas dipotong sekali per perubahan.</p>
+      <label>NAMA BARU<input id="rn-name" value="${esc(p.name)}" maxlength="40"></label>
+      <label>SINGKATAN BARU (2–6 huruf kapital)<input id="rn-tag" value="${esc(p.tag)}" maxlength="6"></label>
+      <button class="btn-gold" id="rn-submit">SIMPAN · 50 EMAS</button></div>`;
+    $('#rn-submit').onclick = async () => {
+      const newName = $('#rn-name').value.trim();
+      const newTag = $('#rn-tag').value.trim().toUpperCase();
+      if (!confirm(`Ubah nama partai menjadi "${newName}" [${newTag}]? Biaya 50 emas.`)) return;
+      try {
+        const r = await post(`/api/parties/${p.id}/rename`, { name: newName, tag: newTag });
+        toast(`Nama partai diubah menjadi ${r.name} [${r.tag}]. −50 emas.`); await refreshMe(); route();
+      } catch (e) { toast(e.message); }
+    };
   });
 }
 

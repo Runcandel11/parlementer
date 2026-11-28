@@ -170,8 +170,10 @@ async function main() {
   const besi = r.data.items.find((i) => i.name === 'Besi Mentah');
   check(`Inventaris: ${job.effectiveQty}× Besi Mentah T1 dari shift`, besi && besi.qty === job.effectiveQty && besi.tier === 1, `besi=${besi?.qty}`);
   // Shift kedua A (energi diisi ulang lewat DB): firstShift=false — event
-  // 'mulai_bermain' tidak fire lagi. (Besi + XP ekstra dari shift ini
-  // tidak dipakai cek lain; A tetap Level 1.)
+  // 'mulai_bermain' tidak fire lagi. Shift ini memberi +20 XP: A mencapai
+  // 100 XP → naik ke Level 2 (+10 emas v5.7.3) — emas A jadi 64 sebelum
+  // [6b] mengembalikannya (goldA6b dibaca dinamis, jadi [8] ikut berubah:
+  // 63, bukan 53).
   {
     const db5c = new DatabaseSync(DB_PATH);
     db5c.prepare('UPDATE citizens SET energy = ?, energy_updated_at = ? WHERE id = ?').run(100, Date.now(), meA5.data.citizen.id);
@@ -303,7 +305,7 @@ async function main() {
   r = await A.post('/api/fx/mint', { gold: 1 });
   check('Cetak 1 emas → +10 USD', r.status === 200 && r.data.usd === 10);
   r = await A.get('/api/me');
-  check('Emas 53, USD 515', r.data.citizen.gold === 53 && eq(r.data.citizen.usd, 515), `emas=${r.data.citizen.gold} usd=${r.data.citizen.usd}`);
+  check('Emas 63, USD 515', r.data.citizen.gold === 63 && eq(r.data.citizen.usd, 515), `emas=${r.data.citizen.gold} usd=${r.data.citizen.usd}`);
 
   console.log('\n[9] Peta & perjalanan (kunjungan + waktu tempuh, 27 Nov 2026)');
   r = await A.get('/api/regions');
@@ -573,7 +575,7 @@ async function main() {
   check('Pendaftar naik ke Level 3 (klaim + 13 latih)', r.status === 200, r.data.error || '');
   r = await N.get('/api/me');
   const nowMs = Date.now();
-  check('Pendaftar Level 3: 119 emas (19 + 100 bonus referral)', r.data.citizen.gold === 119, `emas=${r.data.citizen.gold}`);
+  check('Pendaftar Level 3: 144 emas (44 + 100 bonus referral)', r.data.citizen.gold === 144, `emas=${r.data.citizen.gold}`);
   check('Pendaftar Level 3: premium aktif 1 hari', r.data.citizen.isPremium && r.data.citizen.premium_until > nowMs && r.data.citizen.premium_until <= nowMs + 86400000 + 60000, `until=${r.data.citizen.premium_until}`);
   r = await R.get('/api/me');
   check('Referrer: 250 emas (50 + 200 bonus)', r.data.citizen.gold === 250, `emas=${r.data.citizen.gold}`);
@@ -622,7 +624,8 @@ async function main() {
   // --- Batas referral: maks 5 bonus terbayar/hari/pemilik kode ---
   // R sudah menerima 2 bonus (N, X). Tiga pendaftar lagi naik Level 3 →
   // bonus ke-3, 4, 5 cair. Pendaftar ke-6 naik Level 3 → bonus DITUNDA
-  // (skipped): R tetap 1000 emas cair, pendaftar itu tetap 19 emas.
+  // (skipped): R tetap 1000 emas cair, pendaftar itu tetap 44 emas
+  // (19 dari klaim+latih + 10 + 15 emas naik level v5.7.3).
   const caps = [];
   for (let i = 1; i <= 4; i++) {
     const P = new Client();
@@ -636,9 +639,9 @@ async function main() {
   check('Referrer: 6 pemakai kode, 1000 emas referral cair (5 bonus maks/hari)', r.data.referral.uses === 6 && r.data.referral.goldEarned === 1000, `uses=${r.data.referral.uses} earned=${r.data.referral.goldEarned}`);
   check('Referrer: 1050 emas (50 + 1000 bonus)', r.data.citizen.gold === 1050, `emas=${r.data.citizen.gold}`);
   r = await caps[3].get('/api/me');
-  check('Pendaftar cap ke-6 (bonus tertunda): 19 emas, tanpa premium', r.data.citizen.gold === 19 && !r.data.citizen.isPremium, `emas=${r.data.citizen.gold}`);
+  check('Pendaftar cap ke-6 (bonus tertunda): 44 emas, tanpa premium', r.data.citizen.gold === 44 && !r.data.citizen.isPremium, `emas=${r.data.citizen.gold}`);
   r = await caps[2].get('/api/me');
-  check('Pendaftar cap ke-5 (bonus cair): 119 emas + premium', r.data.citizen.gold === 119 && r.data.citizen.isPremium, `emas=${r.data.citizen.gold}`);
+  check('Pendaftar cap ke-5 (bonus cair): 144 emas + premium', r.data.citizen.gold === 144 && r.data.citizen.isPremium, `emas=${r.data.citizen.gold}`);
 
   r = await B.get('/api/admin/players');
   check('Non-admin: GET /api/admin/players ditolak 403', r.status === 403);
@@ -4464,6 +4467,200 @@ async function main() {
     `notif=${(r.data.notifications || []).length}`);
   r = await KX.post(`/api/parties/${kickPartyId}/dissolve`, {});
   check('Dissolve partai yang sudah dibubarkan ditolak (404)', r.status === 404, `status=${r.status}`);
+
+  console.log('\n[44] v5.7.3 — Ticket batch: rename partai, emas naik level, timer travel, top online, kas negara');
+  const db44 = new DatabaseSync(DB_PATH);
+  // --- (a) Rename partai: hak akses + validasi + potong atomik 50 emas ---
+  const R1 = new Client(); const R2 = new Client(); const R3 = new Client();
+  [R1, R2, R3].forEach((c, i) => { c.extraHeaders = { 'X-Forwarded-For': '127.0.0.' + (61 + i) }; });
+  const rUsers = [
+    [R1, 'r1@test.local', 'r1_pemimpin'], [R2, 'r2@test.local', 'r2_anggota'], [R3, 'r3@test.local', 'r3_pemimpin2'],
+  ];
+  const rIds = {};
+  for (const [c, email, username] of rUsers) {
+    r = await c.post('/api/auth/register', { email, password: 'rahasia123', username });
+    check(`Daftar ${username}`, r.status === 200 && r.data.ok, `status=${r.status}`);
+    rIds[username] = (await c.get('/api/me')).data.citizen.id;
+  }
+  // R1 mendirikan negara dulu (dipakai tes kas negara (e) + kursi is_mp (f)).
+  // Bila tidak ada wilayah merdeka tersisa di akhir suite, bebaskan satu
+  // via DB (setup tes — [44] adalah seksi terakhir sebelum cleanup).
+  let free44 = db44.prepare('SELECT id FROM regions WHERE country_id IS NULL ORDER BY id LIMIT 1').get();
+  if (!free44) {
+    const anyR = db44.prepare('SELECT id FROM regions ORDER BY id LIMIT 1').get();
+    db44.prepare('UPDATE regions SET country_id = NULL WHERE id = ?').run(anyR.id);
+    free44 = anyR;
+  }
+  db44.prepare('UPDATE citizens SET level = 10, gold = 1000, region_id = ?, home_region_id = ? WHERE id = ?').run(free44.id, free44.id, rIds.r1_pemimpin);
+  r = await R1.post('/api/countries', { name: 'Negara 44', ideology: 'Konservatisme', system: 'presidensial' });
+  check('R1 mendirikan Negara 44', r.status === 200 && !!r.data.countryId, `status=${r.status} ${r.data.error || ''}`);
+  const country44 = r.data.countryId;
+  r = await R1.post('/api/parties', { name: 'Partai Rename', tag: 'RNM', ideology: 'Progresif', type: 'open' });
+  check('R1 dirikan Partai Rename (open)', r.status === 200 && r.data.ok && r.data.partyId, `status=${r.status}`);
+  const party44 = r.data.partyId;
+  r = await R2.post(`/api/parties/${party44}/join`, {});
+  check('R2 gabung langsung (partai open)', r.status === 200 && r.data.role === 'member', `status=${r.status} role=${r.data.role}`);
+  // Kursi partai di Negara 44 (buatan, 5 kursi) — untuk is_mp (f).
+  db44.prepare('INSERT INTO party_seats (party_id, country_id, seats) VALUES (?,?,5)').run(party44, country44);
+  const in44 = db44.prepare('SELECT id FROM regions WHERE country_id = ? ORDER BY id LIMIT 1').get(country44);
+  db44.prepare('UPDATE citizens SET home_region_id = ?, region_id = ? WHERE id = ?').run(in44.id, in44.id, rIds.r2_anggota);
+  const goldR1Before = (await R1.get('/api/me')).data.citizen.gold;
+  check('Emas R1 sebelum rename = 850 (1000 - 100 negara - 50 partai)', goldR1Before === 850, `emas=${goldR1Before}`);
+  r = await R1.post(`/api/parties/${party44}/rename`, { name: 'Partai Baru', tag: 'BRU' });
+  check('Ketua rename partai (200, nama+tag baru, biaya 50)', r.status === 200 && r.data.name === 'Partai Baru' && r.data.tag === 'BRU' && r.data.cost === 50, `status=${r.status} ${JSON.stringify(r.data)}`);
+  check('Rename memotong tepat 50 emas', (await R1.get('/api/me')).data.citizen.gold === goldR1Before - 50, `emas=${(await R1.get('/api/me')).data.citizen.gold}`);
+  r = await R1.get(`/api/parties/${party44}`);
+  check('Detail partai menampilkan nama+singkatan baru', r.status === 200 && r.data.party.name === 'Partai Baru' && r.data.party.tag === 'BRU', `nama=${r.data.party?.name} tag=${r.data.party?.tag}`);
+  r = await R2.get('/api/notifications');
+  check('Anggota dapat notifikasi nama partai diubah', (r.data.notifications || []).some((n) => n.title === 'Nama partai diubah' && (n.content || '').includes('Partai Baru')), `notif=${(r.data.notifications || []).length}`);
+  r = await R1.post(`/api/parties/${party44}/rename`, { name: 'Partai Baru', tag: 'BRU' });
+  check('Rename tanpa perubahan ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await R1.post(`/api/parties/${party44}/rename`, { name: 'AB', tag: 'BRU' });
+  check('Rename nama < 3 karakter ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await R1.post(`/api/parties/${party44}/rename`, { name: 'Partai Baru', tag: 'X' });
+  check('Rename singkatan 1 huruf ditolak (400)', r.status === 400, `status=${r.status}`);
+  db44.prepare('UPDATE citizens SET level = 10, gold = 200 WHERE id = ?').run(rIds.r3_pemimpin2);
+  r = await R3.post('/api/parties', { name: 'Partai Lawan', tag: 'LWN', ideology: 'Konservatif', type: 'open' });
+  check('R3 dirikan Partai Lawan', r.status === 200 && r.data.ok && r.data.partyId, `status=${r.status}`);
+  r = await R1.post(`/api/parties/${party44}/rename`, { name: 'Partai Lawan', tag: 'BRU' });
+  check('Rename ke nama partai lain ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await R1.post(`/api/parties/${party44}/rename`, { name: 'Partai Baru', tag: 'LWN' });
+  check('Rename ke singkatan partai lain ditolak (400)', r.status === 400, `status=${r.status}`);
+  r = await R2.post(`/api/parties/${party44}/rename`, { name: 'Partai Coba', tag: 'CBA' });
+  check('Anggota biasa TIDAK bisa rename (403)', r.status === 403, `status=${r.status}`);
+  db44.prepare('UPDATE citizens SET gold = 30 WHERE id = ?').run(rIds.r1_pemimpin);
+  r = await R1.post(`/api/parties/${party44}/rename`, { name: 'Partai Miskin', tag: 'MSK' });
+  check('Rename saldo < 50 emas ditolak (400)', r.status === 400, `status=${r.status} ${r.data.error || ''}`);
+  check('Rename gagal: emas tetap 30 + nama tidak berubah',
+    (await R1.get('/api/me')).data.citizen.gold === 30
+    && (await R1.get(`/api/parties/${party44}`)).data.party.name === 'Partai Baru',
+    `emas=${(await R1.get('/api/me')).data.citizen.gold}`);
+  r = await R1.post('/api/parties/999999/rename', { name: 'Partai Hantu', tag: 'HNT' });
+  check('Rename partai tidak ada ditolak (404)', r.status === 404, `status=${r.status}`);
+  db44.prepare('UPDATE citizens SET gold = 800 WHERE id = ?').run(rIds.r1_pemimpin);
+  // --- (b) Emas tiap naik level: 5 x level BARU (tidak berlaku surut) ---
+  const LV = [];
+  for (let i = 0; i < 4; i++) {
+    const c = new Client(); c.extraHeaders = { 'X-Forwarded-For': '127.0.0.7' + i };
+    r = await c.post('/api/auth/register', { email: `level${i}@test.local`, password: 'rahasia123', username: `naik_level_${i}` });
+    check(`Daftar naik_level_${i}`, r.status === 200 && r.data.ok, `status=${r.status}`);
+    LV.push(c);
+  }
+  const lvIds = [];
+  for (const c of LV) lvIds.push((await c.get('/api/me')).data.citizen.id);
+  db44.prepare('UPDATE citizens SET level = 1, xp = 99, gold = 50 WHERE id = ?').run(lvIds[0]);
+  r = await LV[0].post('/api/claim');
+  check('Klaim LV0 berhasil', r.status === 200 && r.data.ok, `status=${r.status}`);
+  // Hadiah klaim bisa +7 emas bila anggaran 'claim' sedang aktif (bukan
+  // selalu +5) — baca dari respons klaim, bukan hardcode, supaya cek ini
+  // tidak rapuh terhadap anggaran yang diaktifkan seksi sebelumnya.
+  const cg0 = r.data.reward?.gold ?? 5;
+  const meLV0 = (await LV[0].get('/api/me')).data.citizen;
+  check('Naik Lv1->Lv2: emas 50 + klaim + 10 level', meLV0.level === 2 && meLV0.xp === 39 && meLV0.gold === 50 + cg0 + 10, `level=${meLV0.level} xp=${meLV0.xp} emas=${meLV0.gold} klaim=${cg0}`);
+  r = await LV[0].get('/api/notifications');
+  check('Notifikasi naik level menyebut +10 emas', (r.data.notifications || []).some((n) => n.title === 'Naik Level!' && (n.content || '').includes('+10 emas')), `notif=${(r.data.notifications || []).length}`);
+  db44.prepare('UPDATE citizens SET level = 2, xp = 199, gold = 50 WHERE id = ?').run(lvIds[1]);
+  r = await LV[1].post('/api/claim');
+  check('Klaim LV1 berhasil', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const cg1 = r.data.reward?.gold ?? 5;
+  const meLV1 = (await LV[1].get('/api/me')).data.citizen;
+  check('Naik Lv2->Lv3: emas 50 + klaim + 15 level', meLV1.level === 3 && meLV1.xp === 39 && meLV1.gold === 50 + cg1 + 15, `level=${meLV1.level} xp=${meLV1.xp} emas=${meLV1.gold} klaim=${cg1}`);
+  db44.prepare('UPDATE citizens SET level = 1, xp = 299, gold = 50 WHERE id = ?').run(lvIds[2]);
+  r = await LV[2].post('/api/claim');
+  check('Klaim LV2 berhasil', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const cg2 = r.data.reward?.gold ?? 5;
+  const meLV2 = (await LV[2].get('/api/me')).data.citizen;
+  check('Lompat Lv1->Lv3: emas 50 + klaim + 10 + 15 level', meLV2.level === 3 && meLV2.xp === 39 && meLV2.gold === 50 + cg2 + 25, `level=${meLV2.level} xp=${meLV2.xp} emas=${meLV2.gold} klaim=${cg2}`);
+  r = await LV[2].get('/api/notifications');
+  check('Lompat 2 level: ada notifikasi +10 dan +15 emas', (r.data.notifications || []).some((n) => n.title === 'Naik Level!' && (n.content || '').includes('+10 emas')) && (r.data.notifications || []).some((n) => n.title === 'Naik Level!' && (n.content || '').includes('+15 emas')), `notif=${(r.data.notifications || []).length}`);
+  db44.prepare('UPDATE citizens SET level = 3, xp = 0, gold = 50 WHERE id = ?').run(lvIds[3]);
+  r = await LV[3].post('/api/claim');
+  check('Klaim LV3 berhasil', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const cg3 = r.data.reward?.gold ?? 5;
+  const meLV3 = (await LV[3].get('/api/me')).data.citizen;
+  check('Tanpa naik level: emas 50 + klaim saja (tanpa bonus; level lama tidak dibayar surut)', meLV3.level === 3 && meLV3.xp === 40 && meLV3.gold === 50 + cg3, `level=${meLV3.level} xp=${meLV3.xp} emas=${meLV3.gold} klaim=${cg3}`);
+  // --- (c) Timer perjalanan: rute dari->ke + total + progres di /api/me ---
+  const TV = new Client(); TV.extraHeaders = { 'X-Forwarded-For': '127.0.0.80' };
+  r = await TV.post('/api/auth/register', { email: 'travel44@test.local', password: 'rahasia123', username: 'travel_timer' });
+  check('Daftar travel_timer', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const meTV0 = (await TV.get('/api/me')).data;
+  const regionsTV = (await TV.get('/api/regions')).data.regions;
+  const destTV = regionsTV.find((x) => x.id !== meTV0.citizen.region_id);
+  r = await TV.post('/api/regions/travel', { region_id: destTV.id });
+  check('Travel dimulai (200, inTransit)', r.status === 200 && r.data.inTransit === true, `status=${r.status} ${JSON.stringify(r.data)}`);
+  const meTV = (await TV.get('/api/me')).data;
+  check('/api/me travel: rute dari -> ke benar', !!meTV.travel && meTV.travel.fromRegionName === meTV0.region.name && meTV.travel.toRegionName === destTV.name, JSON.stringify(meTV.travel));
+  check('/api/me travel: totalMs + remainingMs + progres konsisten',
+    !!meTV.travel && meTV.travel.totalMs > 0 && meTV.travel.remainingMs > 0 && meTV.travel.remainingMs <= meTV.travel.totalMs
+    && meTV.travel.progress > 0 && meTV.travel.progress < 1
+    && Math.abs(meTV.travel.progress - (1 - meTV.travel.remainingMs / meTV.travel.totalMs)) < 0.05,
+    JSON.stringify(meTV.travel));
+  // --- (d) Top 10 paling online + lama tidak aktif (dari last_seen_at) ---
+  const I1 = new Client(); const I2 = new Client();
+  I1.extraHeaders = { 'X-Forwarded-For': '127.0.0.81' };
+  I2.extraHeaders = { 'X-Forwarded-For': '127.0.0.82' };
+  r = await I1.post('/api/auth/register', { email: 'inaktif44@test.local', password: 'rahasia123', username: 'lama_tidak_aktif' });
+  check('Daftar lama_tidak_aktif', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const i1Id = (await I1.get('/api/me')).data.citizen.id;
+  r = await I2.post('/api/auth/register', { email: 'aktif44@test.local', password: 'rahasia123', username: 'baru_saja_aktif' });
+  check('Daftar baru_saja_aktif', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const i2Id = (await I2.get('/api/me')).data.citizen.id;
+  const i1Seen = Date.now() - 8 * 24 * 3600 * 1000;
+  db44.prepare('UPDATE citizens SET last_seen_at = ? WHERE id = ?').run(i1Seen, i1Id);
+  // I2 dipanggil /api/me PALING AKHIR supaya jadi yang paling baru terlihat.
+  await I2.get('/api/me');
+  r = await I2.get('/api/stats');
+  const now44b = Date.now();
+  const topOnline = r.data.topOnline || [];
+  const inactive = r.data.inactive || [];
+  check('Top online: array terurut last_seen_at menurun, maks 10',
+    topOnline.length <= 10 && topOnline.length > 0 && topOnline.every((x, i) => i === 0 || topOnline[i - 1].last_seen_at >= x.last_seen_at),
+    `n=${topOnline.length} top=${topOnline[0]?.username}`);
+  check('Top online: warga yang baru saja aktif ada di posisi 1', topOnline[0]?.username === 'baru_saja_aktif', `top=${topOnline[0]?.username}`);
+  check('Top online: tiap baris membawa status online + label', topOnline.every((x) => typeof x.online === 'boolean' && typeof x.last_seen_label === 'string'), `contoh=${JSON.stringify(topOnline[0])}`);
+  check('Tidak aktif: warga 8 hari lalu masuk daftar (atau daftar penuh dengan warga yang lebih lama lagi tidak aktif)',
+    inactive.some((x) => x.username === 'lama_tidak_aktif')
+    || (inactive.length === 10 && inactive.every((x) => x.last_seen_at <= i1Seen)),
+    `n=${inactive.length} ada=${inactive.some((x) => x.username === 'lama_tidak_aktif')}`);
+  check('Tidak aktif: semua baris memang >= 7 hari / belum pernah terlihat',
+    inactive.length <= 10 && inactive.every((x) => x.last_seen_at === 0 || x.last_seen_at <= now44b - 7 * 24 * 3600 * 1000),
+    `n=${inactive.length}`);
+  // --- (e) Nominal kas negara: ringkasan dari buku kas yang sama ---
+  const ctryBefore = (await R1.get('/api/country')).data;
+  const sum0 = ctryBefore.treasurySummary;
+  check('Ringkasan kas negara ada (emas+Rp, pemasukan/pengeluaran, sumbangan)', !!sum0 && typeof sum0.gold_in === 'number' && typeof sum0.usd_in === 'number' && typeof sum0.donated_gold === 'number' && typeof sum0.tx_count === 'number', JSON.stringify(sum0));
+  r = await R1.post('/api/country/donate', { type: 'gold', amount: 10 });
+  check('Donasi 10 emas ke Negara 44 (200)', r.status === 200 && r.data.treasury === ctryBefore.country.treasury + 10, `status=${r.status} ${JSON.stringify(r.data)}`);
+  const makananRef = db44.prepare("SELECT ref_usd FROM commodities WHERE name = 'Makanan'").get().ref_usd;
+  r = await R1.post('/api/country/donate', { type: 'item', commodity: 'Makanan', qty: 1 });
+  check('Donasi 1x Makanan: nominal setara nilai acuan', r.status === 200 && Math.abs(r.data.amount - makananRef) < 0.01, `status=${r.status} amount=${r.data.amount} ref=${makananRef}`);
+  const ctryAfter = (await R1.get('/api/country')).data;
+  const sum1 = ctryAfter.treasurySummary;
+  check('Ringkasan: sumbangan emas naik tepat 10', Math.abs(sum1.donated_gold - sum0.donated_gold - 10) < 0.01, `sebelum=${sum0.donated_gold} sesudah=${sum1.donated_gold}`);
+  check('Ringkasan: sumbangan Rupiah naik sebesar nilai Makanan', Math.abs(sum1.donated_usd - sum0.donated_usd - makananRef) < 0.01, `sebelum=${sum0.donated_usd} sesudah=${sum1.donated_usd}`);
+  check('Ringkasan: pemasukan emas naik tepat 10', Math.abs(sum1.gold_in - sum0.gold_in - 10) < 0.01, `sebelum=${sum0.gold_in} sesudah=${sum1.gold_in}`);
+  const dbSum = db44.prepare(`SELECT COALESCE(SUM(CASE WHEN currency='gold' AND amount>0 THEN amount ELSE 0 END),0) AS gi, COALESCE(SUM(CASE WHEN currency='gold' AND amount<0 THEN amount ELSE 0 END),0) AS go, COALESCE(SUM(CASE WHEN currency='usd' AND amount>0 THEN amount ELSE 0 END),0) AS ui, COALESCE(SUM(CASE WHEN currency='usd' AND amount<0 THEN amount ELSE 0 END),0) AS uo, COALESCE(SUM(CASE WHEN kind='sumbangan' AND currency='gold' THEN amount ELSE 0 END),0) AS dg, COALESCE(SUM(CASE WHEN kind='sumbangan' AND currency='usd' THEN amount ELSE 0 END),0) AS du FROM treasury_tx WHERE country_id = ?`).get(country44);
+  check('Ringkasan API = jumlah langsung dari treasury_tx (sumber sama)',
+    eq(sum1.gold_in, dbSum.gi) && eq(sum1.gold_out, dbSum.go) && eq(sum1.usd_in, dbSum.ui) && eq(sum1.usd_out, dbSum.uo) && eq(sum1.donated_gold, dbSum.dg) && eq(sum1.donated_usd, dbSum.du),
+    JSON.stringify({ api: sum1, db: dbSum }));
+  // --- (f) Detail partai: anggota bertanda MP (is_mp dari party_seats) ---
+  r = await R1.get(`/api/parties/${party44}`);
+  const mR1 = (r.data.members || []).find((m) => m.username === 'r1_pemimpin');
+  const mR2 = (r.data.members || []).find((m) => m.username === 'r2_anggota');
+  check('Detail partai: ketua + anggota tampil', !!mR1 && !!mR2, `members=${(r.data.members || []).length}`);
+  check('Detail partai: kursi partai di negaraku = 5', r.data.party.seats === 5, `seats=${r.data.party.seats}`);
+  check('Detail partai: anggota di negara ini bertanda MP (is_mp true)', mR1?.is_mp === true && mR2?.is_mp === true, JSON.stringify({ ketua: mR1?.is_mp, anggota: mR2?.is_mp }));
+  let free44b = db44.prepare('SELECT id FROM regions WHERE country_id IS NULL AND id != ? ORDER BY id LIMIT 1').get(free44.id);
+  if (!free44b) {
+    const anyR2 = db44.prepare('SELECT id FROM regions WHERE country_id IS NOT NULL AND country_id != ? ORDER BY id LIMIT 1').get(country44);
+    db44.prepare('UPDATE regions SET country_id = NULL WHERE id = ?').run(anyR2.id);
+    free44b = anyR2;
+  }
+  db44.prepare('UPDATE citizens SET home_region_id = ?, region_id = ? WHERE id = ?').run(free44b.id, free44b.id, rIds.r2_anggota);
+  r = await R1.get(`/api/parties/${party44}`);
+  const mR2b = (r.data.members || []).find((m) => m.username === 'r2_anggota');
+  check('Detail partai: anggota yang pindah ke wilayah merdeka bukan MP (is_mp false)', mR2b?.is_mp === false, `is_mp=${mR2b?.is_mp}`);
+  db44.close();
 
   setDayO(1);
 

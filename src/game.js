@@ -95,7 +95,7 @@
 // absurd hasil exploit di-rollback (migrasi clamp). Plus perbaikan bug
 // share link: shareStatsFor tidak lagi memakai `? IS NULL` (Postgres
 // 42P18 — hanya gagal di live, lolos di SQLite).
-export const VERSION = '5.7.2';
+export const VERSION = '5.7.3';
 
 // --- Iklan berhadiah AdinPlay (v4.4.0) ---
 // Property ID AdinPlay (AIP ID) — SATU tempat. Kosong = iklan belum
@@ -252,6 +252,24 @@ export const FX_OFFER_TTL_MS = 72 * DAY_MS;
 // level*5 giliran penuh). Migrasi v14 mengalikan XP tersimpan pemain lama
 // ×20 agar progres mereka tidak hilang.
 export function xpForLevel(level) { return level * 100; }
+
+// Emas tiap naik level (v5.7.3, saran tiket ronde 17:46 WIB): setiap naik
+// level, pemain mendapat emas = 5 × level BARU (Lv2 = 10, Lv3 = 15,
+// Lv4 = 20, ...). Hanya untuk level-up SETELAH batch ini live — TIDAK
+// berlaku surut (grant terjadi di addXp saat level naik, bukan dari level
+// yang sudah dicapai). Satu sumber: addXp di api-core.js.
+export const LEVEL_UP_GOLD_PER_LEVEL = 5;
+export function levelUpGoldFor(newLevel) { return LEVEL_UP_GOLD_PER_LEVEL * newLevel; }
+
+// Biaya ganti nama + singkatan partai (v5.7.3): 50 emas per perubahan
+// (satu panggilan rename = satu perubahan, nama dan/atau singkatan).
+export const PARTY_RENAME_COST_GOLD = 50;
+
+// Ambang "lama tidak aktif" (v5.7.3, saran tiket ronde 17:46 WIB):
+// warga yang last_seen_at-nya sudah ≥ 7 hari (atau 0 = belum pernah
+// tercatat) masuk daftar tidak aktif di Statistik. Satu sumber dengan
+// ONLINE_WINDOW_MS (5 menit) — definisi ini dicatat di docs/ARSITEKTUR.md.
+export const INACTIVE_AFTER_MS = 7 * DAY_MS;
 
 export function xpGainForShift() { return 20; }
 

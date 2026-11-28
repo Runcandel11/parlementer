@@ -1,7 +1,7 @@
 // API kewargaan Parlementer: negara, partai, parlemen, pemilu, perang, pers, chat, DM.
 import { sql, one, run, tx, forUpdate, convoyBuildings, getParliamentOpensAt, getWorldDay, missionValue, setMissionValue, markChronicleDone } from './db.js';
 import { authRequired, citizenRequired, loadCitizen, todayStr, parseImageDataUrl, requireCredit, fmtRp } from './util.js';
-import { warDamage, warDamageWithBonus, unitDamageMult, worldEventFor, MILITARY_UNITS, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, PARLIAMENT_MAJORITY, WAR_MOTION_VOTE_DAYS, NAME_MOTION_VOTE_DAYS, PARLIAMENT_PETITION_PER_REGION, COUNTRY_NAME_PLACEHOLDER, COUNTRY_NAME_MIN, COUNTRY_NAME_MAX, MOTION_COST_GOLD, WAR_ATTACK_ENERGY_MIN, WAR_ATTACK_ENERGY_MAX, WAR_HOME_BONUS_MULT, WAR_DURATION_MS, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR, IMPORT_TAX, DAY_MS, ELECTION_VOTE_MS, ELECTION_VOTE_MIN_AGE_MS, CHAT_COOLDOWN_MS, CHAT_COUNT_WINDOW_MS, CHAT_COUNT_MIN_WORDS } from './game.js';
+import { warDamage, warDamageWithBonus, unitDamageMult, worldEventFor, MILITARY_UNITS, CHRONICLE, LAW_KINDS, BUDGET_KINDS, BUDGET_VOTE_DAYS, MOBILIZE_COST_GOLD, MOBILIZE_DURATION_MS, MOBILIZE_DAMAGE_MULT, HOLIDAY_COST_GOLD, HOLIDAY_ENERGY, HOLIDAY_COOLDOWN_MS, PACT_KINDS, DEFENSE_PACT_DAMAGE_MULT, BUDGET_WAR_DAMAGE_MULT, PARLIAMENT_OPENS_AT_DEFAULT, PARLIAMENT_MAJORITY, WAR_MOTION_VOTE_DAYS, NAME_MOTION_VOTE_DAYS, PARLIAMENT_PETITION_PER_REGION, COUNTRY_NAME_PLACEHOLDER, COUNTRY_NAME_MIN, COUNTRY_NAME_MAX, MOTION_COST_GOLD, WAR_ATTACK_ENERGY_MIN, WAR_ATTACK_ENERGY_MAX, WAR_HOME_BONUS_MULT, WAR_DURATION_MS, parliamentCountdownText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, ideologyDef, systemDef, COUNTRY_FORM_MIN_LEVEL, COUNTRY_FORM_COST_GOLD, COUNTRY_JOIN_MIN_LEVEL, COUNTRY_JOIN_VOTE_DAYS, COUNTRY_JOIN_MIN_YES, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_DELAY_DAYS, CREDIT_MIN_FOR, IMPORT_TAX, DAY_MS, ELECTION_VOTE_MS, ELECTION_VOTE_MIN_AGE_MS, CHAT_COOLDOWN_MS, CHAT_COUNT_WINDOW_MS, CHAT_COUNT_MIN_WORDS, PARTY_RENAME_COST_GOLD } from './game.js';
 
 // Ruang chat publik yang selalu ada. Ruang wilayah (region_<id>) bersifat
 // dinamis — divalidasi terpisah di validateRoom (hanya wilayah sendiri).
@@ -262,6 +262,22 @@ export function registerCivic(app) {
     const treasuryTx = country
       ? await sql('SELECT * FROM treasury_tx WHERE country_id = ? ORDER BY created_at DESC LIMIT 20', [country.id])
       : [];
+    // Ringkasan arus kas (v5.7.3): pemasukan/pengeluaran per mata uang +
+    // total sumbangan — dijumlah dari tabel treasury_tx YANG SAMA dengan
+    // daftar ARUS KAS (20 terakhir) di bawah, BUKAN dihitung ulang dengan
+    // rumus lain. Saldo tetap dari country.treasury / treasury_usd (satu
+    // sumber dengan tampilan saldo). Baris 'pembubaran' tanpa country_id
+    // tidak masuk (bukan kas negara yang masih ada).
+    const treasurySummary = country ? await one(
+      `SELECT
+        COALESCE(SUM(CASE WHEN currency = 'gold' AND amount > 0 THEN amount ELSE 0 END), 0) AS gold_in,
+        COALESCE(SUM(CASE WHEN currency = 'gold' AND amount < 0 THEN amount ELSE 0 END), 0) AS gold_out,
+        COALESCE(SUM(CASE WHEN currency = 'usd' AND amount > 0 THEN amount ELSE 0 END), 0) AS usd_in,
+        COALESCE(SUM(CASE WHEN currency = 'usd' AND amount < 0 THEN amount ELSE 0 END), 0) AS usd_out,
+        COALESCE(SUM(CASE WHEN kind = 'sumbangan' AND currency = 'gold' THEN amount ELSE 0 END), 0) AS donated_gold,
+        COALESCE(SUM(CASE WHEN kind = 'sumbangan' AND currency = 'usd' THEN amount ELSE 0 END), 0) AS donated_usd,
+        COUNT(*) AS tx_count
+       FROM treasury_tx WHERE country_id = ?`, [country.id]) : null;
     // Usulan unifikasi yang terbuka untuk wilayah pemanggil (bila merdeka).
     const openJoins = myRegion?.country_id ? [] : await sql(
       `SELECT j.*, COALESCE(c.name, 'Belum Dinamai') AS country_name FROM country_joins j JOIN country c ON c.id = j.country_id
@@ -294,7 +310,7 @@ export function registerCivic(app) {
       countries: countries.map((c) => ({ ...countrySummary(c), region_count: Number(c.region_count), citizen_count: Number(c.citizen_count), president_name: c.president_name || 'Kosong', president_title: systemDef(c.system).presidentTitle })),
       president: president?.username || 'Kosong',
       presidentTitle: country ? systemDef(country.system).presidentTitle : 'Presiden',
-      ministers, memberRegions, wars, treasuryTx, openJoins,
+      ministers, memberRegions, wars, treasuryTx, treasurySummary, openJoins,
       alliances: alliances.map((a) => ({ id: a.id, otherId: a.other_id, otherName: a.other_name || COUNTRY_NAME_PLACEHOLDER, status: a.status, outgoing: a.proposer_id === req.citizen.id })),
       myDonateItems: myDonateItems.map((i) => ({ name: i.name, qty: Number(i.qty) })),
       myJoinVotes: Object.fromEntries(myJoinVotes.map((v) => [v.join_id, v.vote])),
@@ -787,12 +803,18 @@ export function registerCivic(app) {
     if (!p) return res.status(404).json({ error: 'Partai tidak ditemukan.' });
     const myCountry = await getMyCountry({ one }, req.citizen);
     const seatsRow = await one('SELECT seats FROM party_seats WHERE party_id = ? AND country_id = ?', [p.id, myCountry?.id || -1]);
-    const members = await sql(
-      `SELECT pm.citizen_id, pm.role, pm.joined_at, u.username FROM party_members pm
+    // is_mp (v5.7.3): anggota adalah anggota parlemen bila partainya
+    // punya kursi di parlemen NEGARANYA (kewarganegaraan = wilayah asal)
+    // — rumus yang sama seperti isMpCitizen(), per member.
+    const members = (await sql(
+      `SELECT pm.citizen_id, pm.role, pm.joined_at, u.username,
+        EXISTS (SELECT 1 FROM party_seats ps JOIN regions r2 ON r2.country_id = ps.country_id
+                WHERE ps.party_id = pm.party_id AND r2.id = c.home_region_id AND ps.seats > 0) AS is_mp
+       FROM party_members pm
        JOIN citizens c ON c.id = pm.citizen_id JOIN users u ON u.id = c.user_id
        WHERE pm.party_id = ? AND pm.role IN ('leader','secretary','member')
        ORDER BY CASE pm.role WHEN 'leader' THEN 0 WHEN 'secretary' THEN 1 ELSE 2 END, u.username`,
-      [p.id]);
+      [p.id])).map((m) => ({ ...m, is_mp: !!Number(m.is_mp) }));
     const myRole = await partyRoleOf(p.id, req.citizen.id);
     const pending = (myRole === 'leader' || myRole === 'secretary') ? await sql(
       `SELECT pm.citizen_id, pm.joined_at, u.username FROM party_members pm
@@ -966,6 +988,41 @@ export function registerCivic(app) {
       await notify(id, 'PARTAI', 'Partaimu dibubarkan', `Ketua membubarkan partai ${p.name}. Kamu kini tidak berpartai; kursi parlemen partai ini ikut hilang.`);
     }
     res.json({ ok: true });
+  }));
+
+  // Ganti nama + singkatan partai (v5.7.3, saran tiket ronde 17:46 WIB) —
+  // HANYA ketua (server-enforced). Biaya 50 emas per perubahan (satu
+  // panggilan = satu perubahan, nama dan/atau singkatan sekaligus).
+  // Validasi SAMA seperti pendirian partai (nama 3–40 karakter;
+  // singkatan 2–6 huruf kapital/angka; nama/singkatan unik di antara
+  // SEMUA partai kecuali partai sendiri). Atomik: kunci baris warga +
+  // potong emas bersyarat + update partai dalam satu tx; saldo kurang →
+  // gagal, nama tidak berubah. Anggota diberi notifikasi (nama partai
+  // mereka berubah).
+  app.post('/api/parties/:id/rename', authRequired, citizenRequired, r(async (req, res) => {
+    const p = await one('SELECT * FROM parties WHERE id = ?', [req.params.id]);
+    if (!p) return res.status(404).json({ error: 'Partai tidak ditemukan.' });
+    if (p.leader_id !== req.citizen.id) return res.status(403).json({ error: 'Hanya ketua partai yang bisa mengganti nama partai.' });
+    const { name, tag } = req.body || {};
+    const newName = typeof name === 'string' ? name.trim() : p.name;
+    const newTag = typeof tag === 'string' ? tag.trim().toUpperCase() : p.tag;
+    if (newName === p.name && newTag === p.tag) return res.status(400).json({ error: 'Tidak ada perubahan nama atau singkatan.' });
+    if (!newName || newName.length < 3 || newName.length > 40) return res.status(400).json({ error: 'Nama partai 3–40 karakter.' });
+    if (!newTag || !/^[A-Z0-9]{2,6}$/.test(newTag)) return res.status(400).json({ error: 'Singkatan partai 2–6 huruf kapital/angka.' });
+    const taken = await one('SELECT id FROM parties WHERE (name = ? OR tag = ?) AND id <> ?', [newName, newTag, p.id]);
+    if (taken) return res.status(400).json({ error: 'Nama atau singkatan partai sudah dipakai.' });
+    await tx(async (t) => {
+      await t.one(forUpdate('SELECT * FROM citizens WHERE id = ?'), [req.citizen.id]);
+      const upd = await t.run('UPDATE citizens SET gold = gold - ? WHERE id = ? AND gold >= ?', [PARTY_RENAME_COST_GOLD, req.citizen.id, PARTY_RENAME_COST_GOLD]);
+      if (!upd.changes) throw Object.assign(new Error('Ganti nama partai butuh 50 emas.'), { status: 400 });
+      await t.run('UPDATE parties SET name = ?, tag = ? WHERE id = ?', [newName, newTag, p.id]);
+    });
+    const members = await sql('SELECT citizen_id FROM party_members WHERE party_id = ?', [p.id]);
+    for (const m of members) {
+      if (m.citizen_id === req.citizen.id) continue;
+      await notify(m.citizen_id, 'PARTAI', 'Nama partai diubah', `Ketua mengganti nama partai ${p.name} menjadi ${newName} [${newTag}].`);
+    }
+    res.json({ ok: true, name: newName, tag: newTag, cost: PARTY_RENAME_COST_GOLD });
   }));
 
   // ---------- PARLEMEN ----------

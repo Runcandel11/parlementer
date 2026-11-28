@@ -14,7 +14,7 @@ import { dbRateLimit } from './rate-limit.js';
 import { getMyCountry, getIncomeTaxRate, getImportTaxRate, getAdminPayMult, getTravelTickets, hasTradePact, budgetActive, countrySummary, countryDisplayName, militaryPowerOf, militaryUnitsOf } from './api-civic.js';
 import {
   VERSION, WA_TOPUP_URL, MINT_RATE, MIN_OFFER_QTY, TRADE_PACT_TAX_MULT, ideologyDef,
-  xpForLevel, isDoubleXpHour, xpGainForShiftEnergy, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
+  xpForLevel, levelUpGoldFor, isDoubleXpHour, xpGainForShiftEnergy, shiftSalary, fatigueMult, trainCost, trainCostDiscounted, trainCooldownMs, formatCooldownMs, foodEnergy,
   energyCapFor, DAILY_MISSIONS, DAILY_CLAIM, CHRONICLE, travelMinutesFor, MOVE_COOLDOWN_MS, REGION_COORDS,
   ACHIEVEMENTS, achievementProgress, COMPANY_TYPES, RESOURCE_PRODUCTS,
   DAILY_PRODUCTION, PRODUCTION_INPUT, productionInputText, companyProduct, shiftBonusText, SHOP_PACKAGES, SHOP_PREMIUM, PREMIUM_PERKS, CONVOY_BUILDINGS, convoySlotsFor,
@@ -24,7 +24,7 @@ import {
   PRICE_BAND, WASH_TRADE, creditInfo, CREDIT_MIN_FOR,
   MILITARY_UNITS, militaryPowerFor, unitDamageMult, unitUpkeepFor, unitCountFor, unitCapFor, tradeReputation, worldEventFor,
   DAY_MS, FX_OFFER_TTL_MS, REBEL_COST, REBEL_COST_CAPITAL, REBEL_CAPITAL_NAME, WAR_DURATION_MS,
-  ONLINE_WINDOW_MS, onlineStatus,
+  ONLINE_WINDOW_MS, onlineStatus, INACTIVE_AFTER_MS,
   ADINPLAY_PROPERTY_ID, AD_REWARD_GOLD, AD_TOKEN_TTL_MS, AD_MIN_INTERVAL_MS,
   ADSENSE_BANNER_SLOT, BANNER_REWARD_GOLD, BANNER_DAILY_CAP, BANNER_VIEW_MS,
   SHARE_GOLD_PER_CLICK, SHARE_MAX_GOLD_PER_DAY, SHARE_MAX_CLICKS_PER_DAY, SHARE_CODE_CHARS,
@@ -45,9 +45,17 @@ export function registerCore(app) {
     xp += amount;
     const leveled = [];
     while (xp >= xpForLevel(level)) { xp -= xpForLevel(level); level += 1; leveled.push(level); }
-    await run('UPDATE citizens SET level = ?, xp = ? WHERE id = ?', [level, xp, citizen.id]);
+    // Emas naik level (v5.7.3): 5 × level BARU per level yang dilewati
+    // (Lv2 = 10, Lv3 = 15, ...). Grant atomik dalam UPDATE yang sama
+    // dengan naik level — satu statement, tidak bisa setengah jalan.
+    // Hanya level-up SETELAH batch ini live yang diganjar; level yang
+    // sudah dicapai sebelumnya tidak mendapat apa-apa (tidak ada grant
+    // dari migrasi/skema — db.js hanya mengoreksi XP lama, bukan naik level).
+    const goldBonus = leveled.reduce((s, lv) => s + levelUpGoldFor(lv), 0);
+    if (goldBonus > 0) await run('UPDATE citizens SET level = ?, xp = ?, gold = gold + ? WHERE id = ?', [level, xp, goldBonus, citizen.id]);
+    else await run('UPDATE citizens SET level = ?, xp = ? WHERE id = ?', [level, xp, citizen.id]);
     for (const lv of leveled) {
-      await notify(citizen.id, 'SISTEM', 'Naik Level!', `Selamat! Kamu mencapai Level ${lv}.`);
+      await notify(citizen.id, 'SISTEM', 'Naik Level!', `Selamat! Kamu mencapai Level ${lv}. +${levelUpGoldFor(lv)} emas.`);
       if (lv === 5 && citizen.user_id) {
         const u = await one('SELECT referred_by FROM users WHERE id = ?', [citizen.user_id]);
         if (u?.referred_by) {
@@ -420,8 +428,24 @@ export function registerCore(app) {
     // arrivesAt/remainingMs dipakai hitung mundur di UI. Bila jam tiba
     // sudah lewat, settleTravel di loadCitizen sudah menyelesaikan
     // kedatangan — penjaga > Date.now() di sini hanya pengaman.
+    // v5.7.3 — dashboard butuh rute + progres: fromRegionName = wilayah
+    // saat ini (region_id BELUM berubah selama travel — baru pindah saat
+    // tiba) dan totalMs = durasi penuh perjalanan, dihitung ulang dari
+    // rumus yang sama seperti saat travel dimulai (travelMinutesFor +
+    // +5 mnt bila event dunia hari ini Badai Besar — POST /api/regions/
+    // travel memakai rumus yang sama). Progres = 1 − remaining/total.
+    // Catatan: bila hari dunia berganti di tengah perjalanan (sangat
+    // jarang — travel hanya hitungan menit), totalMs bisa bergeser 5 mnt
+    // dan progres sedikit meleset; tampilan saja, bukan aturan main.
+    const worldRow = await one('SELECT * FROM world WHERE id = 1');
     const travel = c.travel_to_region_id && c.travel_arrives_at > Date.now()
-      ? { toRegionId: c.travel_to_region_id, toRegionName: (await one('SELECT name FROM regions WHERE id = ?', [c.travel_to_region_id]))?.name || '', arrivesAt: c.travel_arrives_at, remainingMs: Math.max(0, c.travel_arrives_at - Date.now()) }
+      ? await (async () => {
+        const toRegionName = (await one('SELECT name FROM regions WHERE id = ?', [c.travel_to_region_id]))?.name || '';
+        const stormExtra = worldEventFor(worldRow?.day || 1).key === 'badai' ? 5 : 0;
+        const totalMs = Math.max(1, (travelMinutesFor(region?.name, toRegionName) + stormExtra) * 60000);
+        const remainingMs = Math.max(0, c.travel_arrives_at - Date.now());
+        return { toRegionId: c.travel_to_region_id, toRegionName, fromRegionName: region?.name || '', arrivesAt: c.travel_arrives_at, remainingMs, totalMs, progress: Math.min(1, Math.max(0, 1 - remainingMs / totalMs)) };
+      })()
       : null;
     const parliamentOpensAt = await getParliamentOpensAt();
     const party = c.party_id ? await one('SELECT id, name, tag FROM parties WHERE id = ?', [c.party_id]) : null;
@@ -431,7 +455,7 @@ export function registerCore(app) {
     // notifikasi) — kalau tidak, pengumuman baru tidak menyalakan lencana.
     const unreadAnn = await one('SELECT COUNT(*) AS n FROM announcements a WHERE NOT EXISTS (SELECT 1 FROM announcement_reads r WHERE r.announcement_id = a.id AND r.citizen_id = ?)', [c.id]);
     const unreadDm = await one('SELECT COUNT(*) AS n FROM dms WHERE to_id = ? AND is_read = 0', [c.id]);
-    const world = await one('SELECT * FROM world WHERE id = 1');
+    const world = worldRow;
     const population = await one('SELECT COUNT(*) AS n FROM citizens');
     const activeWars = await sql("SELECT w.*, r.name AS region_name FROM wars w JOIN regions r ON r.id = w.region_id WHERE w.status = 'active' ORDER BY w.created_at DESC");
     // UU yang sedang divoting HANYA dari negaraku (redesain dunia).
@@ -2770,6 +2794,24 @@ export function registerCore(app) {
     const topParties = await sql(`SELECT p.id, p.name, p.tag, COUNT(pm.citizen_id) AS members
       FROM parties p LEFT JOIN party_members pm ON pm.party_id = p.id
       GROUP BY p.id, p.name, p.tag ORDER BY members DESC, p.name ASC LIMIT 3`);
+    // (v5.7.3) 10 warga paling aktif + warga lama tidak aktif — HANYA
+    // dari citizens.last_seen_at (tidak ada penghitung sesi/jumlah
+    // login di DB, jadi "paling aktif" didefinisikan sebagai terakhir
+    // terlihat PALING BARU; online = dalam ONLINE_WINDOW_MS, satu
+    // definisi via onlineStatus). Tidak aktif = last_seen_at sudah ≥ 7
+    // hari (INACTIVE_AFTER_MS) atau 0 (belum pernah tercatat). Akun
+    // banned dikecualikan (pola yang sama seperti countOnline).
+    // Definisi ini dicatat di docs/ARSITEKTUR.md.
+    const topOnline = (await sql(`SELECT u.username, c.level, c.last_seen_at, r.name AS region_name, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(co.name, 'Belum Dinamai') END AS country_name
+      FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.home_region_id
+      LEFT JOIN country co ON co.id = r.country_id WHERE u.is_banned = 0 AND c.last_seen_at > 0
+      ORDER BY c.last_seen_at DESC LIMIT 10`))
+      .map((x) => ({ ...x, ...onlineStatus(x.last_seen_at) }));
+    const inactive = (await sql(`SELECT u.username, c.level, c.last_seen_at, r.name AS region_name, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(co.name, 'Belum Dinamai') END AS country_name
+      FROM citizens c JOIN users u ON u.id = c.user_id JOIN regions r ON r.id = c.home_region_id
+      LEFT JOIN country co ON co.id = r.country_id WHERE u.is_banned = 0 AND (c.last_seen_at = 0 OR c.last_seen_at <= ?)
+      ORDER BY c.last_seen_at ASC LIMIT 10`, [Date.now() - INACTIVE_AFTER_MS]))
+      .map((x) => ({ ...x, ...onlineStatus(x.last_seen_at) }));
     // Kartu wilayahku (dashboard): skor kota, peringkat, infrastruktur,
     // kapasitas, bonus sumber daya, dukungan pemberontakan aktif.
     const myRegion = await one(`SELECT r.*, CASE WHEN r.country_id IS NULL THEN NULL ELSE COALESCE(c.name, 'Belum Dinamai') END AS country_name,
@@ -2811,7 +2853,7 @@ export function registerCore(app) {
         population: Number(population.n), regions: Number(regionsN.n),
         countries: Number(countriesN.n), freeRegions: Number(freeRegions.n),
       },
-      topLevel, topRegions, topParties, fullList,
+      topLevel, topRegions, topParties, topOnline, inactive, fullList,
       myRegion: { ...myRegion, rank: Number(rankRow.n) + 1, warActive: Number(warActive.n) > 0, mySupport: Number(mySupport.n) > 0, countryCitizens: Number(myCountryCitizens.n) },
     });
   }));
