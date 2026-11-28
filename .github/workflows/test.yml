@@ -1,0 +1,131 @@
+# Parlementer — CI tes otomatis di GitHub Actions.
+#
+# AUDIT (28 Nov 2026): deploy LIVE tetap auto-pull VPS tiap 3 menit dari
+# master (git pull --ff-only -> npm install bila package.json berubah ->
+# systemctl restart). Workflow ini HANYA memberi sinyal hijau/merah —
+# TIDAK menghalangi deploy, TIDAK deploy apa pun, TIDAK menyentuh secret.
+#
+# Tiap job jalan di runner GitHub sendiri (VM terpisah), jadi tidak ada
+# tabrakan port/DB antar job — itulah kenapa job dipisah, bukan satu
+# `npm run test:all`:
+#   - e2e memakai port 3456 + SQLite /tmp/parlementer-e2e.db (self-contained).
+#   - pg-verify + pg-concurrency butuh Postgres 16 asli (service container);
+#     pg-test + xp-rollback memakai pg-mem (tanpa Postgres sungguhan).
+#   - Suite DOM berbagi port (3471 dipakai 3 suite, 3472 dipakai 2 suite),
+#     jadi di dalam satu runner harus BERURUTAN; matrix 3 shard membagi
+#     25 suite ke 3 runner terpisah supaya cepat tanpa tabrakan.
+#   - ssl-warning hanya menguji logika konfigurasi SSL (URL dummy).
+#
+# Trigger: push ke semua branch + pull_request. Tanpa secrets.
+name: Tes Parlementer
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# Push baru membatalkan run lama di branch yang sama (hemat menit runner).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: e2e (SQLite, port 3456)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependensi
+        run: npm ci
+      - name: Tes end-to-end
+        run: npm test
+
+  pg:
+    name: Postgres (pg-test + pg-verify + pg-concurrency)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: parlementer_test
+          POSTGRES_PASSWORD: parlementer_test
+          POSTGRES_DB: parlementer_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://parlementer_test:parlementer_test@127.0.0.1:5432/parlementer_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependensi
+        run: npm ci
+      - name: pg-test (pg-mem)
+        run: npm run test:pg
+      - name: pg-verify (migrasi Postgres sungguhan)
+        run: npm run test:pg-verify
+      - name: pg-concurrency
+        run: npm run test:conc
+
+  dom:
+    name: DOM shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependensi
+        run: npm ci
+      - name: Jalankan suite DOM shard ${{ matrix.shard }} (berurutan)
+        shell: bash
+        run: |
+          files=(test/*-dom.js)
+          echo "Total suite DOM: ${#files[@]} (shard ${{ matrix.shard }} dari 3)"
+          i=0
+          for f in "${files[@]}"; do
+            if (( i % 3 == ${{ matrix.shard }} )); then
+              echo "=== $f ==="
+              node "$f" || exit 1
+            fi
+            i=$((i + 1))
+          done
+          echo "Shard ${{ matrix.shard }} selesai, semua hijau."
+
+  misc:
+    name: misc (xp-rollback + ssl)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependensi
+        run: npm ci
+      - name: xp-rollback (pg-mem)
+        run: npm run test:xp-rollback
+      - name: ssl-warning
+        run: npm run test:ssl
