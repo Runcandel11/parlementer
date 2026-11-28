@@ -932,7 +932,7 @@ ROUTES.dashboard = async () => {
   ${ME.military ? `<div class="panel" id="dash-military">
     <div class="panel-head"><h3>⚔️ MILITER</h3><button class="btn-text gold" type="button" data-goto="#/military">KELOLA ›</button></div>
     <div class="kv"><span class="k">Kekuatan</span><span class="v">${ME.military.power} · Kerusakan perang ×${ME.military.mult}</span></div>
-    <div class="kv"><span class="k">Pasukan</span><span class="v">${ME.military.count}/${ME.military.cap} unit · Perawatan ${ME.military.upkeep} USD/hari</span></div></div>` : ''}
+    <div class="kv"><span class="k">Pasukan</span><span class="v">${ME.military.count}/${ME.military.cap} unit · Perawatan ${fmtRp(ME.military.upkeep)}/hari</span></div></div>` : ''}
   <div class="panel">
     <div class="profile-hero ${heroCountry ? '' : 'free'}">
       ${heroCountry ? '' : '<span class="hero-q" aria-hidden="true">?</span>'}
@@ -3394,17 +3394,17 @@ ROUTES.military = async () => {
   <div class="stat-grid">
     <div class="stat-cell"><div class="stat-label">⚔️ Kekuatan</div><div class="stat-num">${fmt(d.power)}</div><div class="stat-sub">kerusakan perang ×${d.mult}</div></div>
     <div class="stat-cell"><div class="stat-label">🪖 Pasukan</div><div class="stat-num">${fmt(d.count)}<span style="font-size:18px;color:var(--muted)">/${fmt(d.cap)}</span></div><div class="stat-sub">batas naik 10 per level</div></div>
-    <div class="stat-cell"><div class="stat-label">💰 Perawatan</div><div class="stat-num">${fmt(d.upkeep)}</div><div class="stat-sub">USD per hari</div></div>
+    <div class="stat-cell"><div class="stat-label">💰 Perawatan</div><div class="stat-num">${fmtRp(d.upkeep)}</div><div class="stat-sub">Rupiah per hari</div></div>
     <div class="stat-cell"><div class="stat-label">🏆 Kekuatan Teratas</div><div class="stat-num" style="font-size:20px">${d.top?.[0] ? esc(d.top[0].username) : '—'}</div><div class="stat-sub">${d.top?.[0] ? fmt(d.top[0].power) + ' kekuatan' : 'belum ada pasukan'}</div></div>
   </div>
   <div class="panel"><h3>🪖 REKRUT PASUKAN</h3>
-    <p class="muted small">Bayar komoditas dari inventaris + USD. Perawatan harian dipotong tiap pergantian hari — bila saldo kurang, unit termahal desersi dulu.</p>
+    <p class="muted small">Bayar komoditas dari inventaris + Rupiah. Perawatan harian dipotong tiap pergantian hari — bila saldo kurang, unit termahal desersi dulu.</p>
     ${defs.map((u) => `
     <div class="card"><h4>${esc(u.name)}</h4>
       <p class="muted small">${esc(u.desc)}</p>
       <div class="kv"><span class="k">Kekuatan per unit</span><span class="v">${u.power}</span></div>
-      <div class="kv"><span class="k">Biaya rekrut</span><span class="v">${u.commodityQty}× ${esc(u.commodity)} + ${fmt(u.usd)} USD</span></div>
-      <div class="kv"><span class="k">Perawatan</span><span class="v">${u.upkeep} USD/hari</span></div>
+      <div class="kv"><span class="k">Biaya rekrut</span><span class="v">${u.commodityQty}× ${esc(u.commodity)} + ${fmtRp(u.usd)}</span></div>
+      <div class="kv"><span class="k">Perawatan</span><span class="v">${fmtRp(u.upkeep)}/hari</span></div>
       <div class="kv"><span class="k">Milikmu</span><span class="v">${fmt(owned[u.type] || 0)} unit</span></div>
       <div class="row"><input type="number" id="recruit-qty-${u.type}" value="1" min="1" max="50" style="max-width:90px" aria-label="Jumlah ${esc(u.name)}">
       <button class="btn-gold btn-sm" data-recruit="${u.type}">REKRUT</button>

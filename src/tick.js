@@ -2,6 +2,7 @@
 // Dipanggil otomatis saat ada request (cek tanggal) + interval 10 menit.
 // Aman di Render free (tanpa cron eksternal): tick jalan saat ada yang membuka game.
 import { sql, one, run, getParliamentOpensAt } from './db.js';
+import { fmtRp } from './util.js';
 import { DAILY_PRODUCTION, PRODUCTION_INPUT, MILITARY_UNITS, worldEventFor, worldEventEndsDay, RETENTION, productionWithBonus, BUDGET_KINDS, BUDGET_DURATION_MS, lawEffectText, COUNTRY_IDEOLOGIES, GOVERNMENT_SYSTEMS, systemDef, COUNTRY_JOIN_MIN_YES, DAY_MS, ELECTION_VOTE_MS, PRESIDENT_ELECTION_DELAY_DAYS, PARLIAMENT_ELECTION_CYCLE_DAYS } from './game.js';
 
 function todayStr(d = new Date()) { return d.toISOString().slice(0, 10); }
@@ -405,7 +406,7 @@ export async function runDailyTick() {
       due -= (MILITARY_UNITS[u.unit_type]?.upkeep || 0) * u.qty;
     }
     if (due > 0) await run('UPDATE citizens SET usd = usd - ? WHERE id = ? AND usd >= ?', [due, citizenId, due]);
-    await notify(citizenId, 'PERANG', 'Pasukanmu desersi', `Kamu tidak mampu membayar perawatan ${upkeep} USD/hari (saldo ${Math.round(balance)} USD) — desersi: ${deserted.join(', ')}.`);
+    await notify(citizenId, 'PERANG', 'Pasukanmu desersi', `Kamu tidak mampu membayar perawatan ${fmtRp(upkeep)}/hari (saldo ${fmtRp(balance)}) — desersi: ${deserted.join(', ')}.`);
   }
 
   // 10) Event dunia mingguan (Tahap 6): bila minggu berganti, umumkan

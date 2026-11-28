@@ -62,7 +62,10 @@
 // dipakai juga countOnline() di api-core.js (dulu literal tersendiri).
 // Update kecil v4.3.1 = bottom navigation di HP (saran ricky.s888 via
 // Threads, 28 Nov 2026): menu utama di bawah layar ala Rival Regions.
-export const VERSION = '4.3.1';
+// Update kecil v4.3.2 = hilangkan USD di Perang & Militer, tampil Rupiah
+// (tiket LIO, 28 Nov 2026): dashboard + halaman militer + notifikasi
+// desersi + pesan error rekrut.
+export const VERSION = '4.3.2';
 
 // --- Satuan waktu dasar (Tahap 7) ---
 // Satu sumber kebenaran untuk "sehari" dalam milidetik — semua konstanta

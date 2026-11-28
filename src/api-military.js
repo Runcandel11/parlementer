@@ -3,7 +3,7 @@
 // bila saldo kurang, unit termahal desersi), dan memperkuat serangan perang
 // lewat pengali kerusakan (game.js unitDamageMult, maks ×1,5).
 import { sql, one, tx, forUpdate } from './db.js';
-import { authRequired, citizenRequired } from './util.js';
+import { authRequired, citizenRequired, fmtRp } from './util.js';
 import { militaryPowerOf, militaryUnitsOf } from './api-civic.js';
 import {
   MILITARY_UNITS, unitCapFor, militaryPowerFor, unitDamageMult,
@@ -65,7 +65,7 @@ export function registerMilitary(app) {
       const took = await t.run('UPDATE inventory SET qty = qty - ? WHERE id = ? AND qty >= ?', [needCom, stock.id, needCom]);
       if (!took.changes) throw Object.assign(new Error(`Butuh ${needCom}× ${def.commodity} di inventaris.`), { status: 400 });
       const paid = await t.run('UPDATE citizens SET usd = usd - ? WHERE id = ? AND usd >= ?', [costUsd, locked.id, costUsd]);
-      if (!paid.changes) throw Object.assign(new Error(`Butuh ${costUsd} USD untuk merekrut ${q}× ${def.name}.`), { status: 400 });
+      if (!paid.changes) throw Object.assign(new Error(`Butuh ${fmtRp(costUsd)} untuk merekrut ${q}× ${def.name}.`), { status: 400 });
       await t.run(
         'INSERT INTO military_units (citizen_id, unit_type, qty, created_at) VALUES (?,?,?,?) ON CONFLICT (citizen_id, unit_type) DO UPDATE SET qty = military_units.qty + excluded.qty',
         [locked.id, type, q, Date.now()]);

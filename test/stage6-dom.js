@@ -97,7 +97,7 @@ async function main() {
     check('server menyala dan /api/world merespons', up);
     if (!up) { process.exitCode = 1; return; }
     const world = await (await fetch(BASE + '/api/world')).json();
-    check('API /api/world: versi 4.3.1', world.version === '4.3.1', `version=${world.version}`);
+    check('API /api/world: versi 4.3.2', world.version === '4.3.2', `version=${world.version}`);
 
     const jarA = makeJar();
     const jarB = makeJar();
@@ -138,7 +138,7 @@ async function main() {
     let pageText = document.querySelector('#page')?.textContent || '';
     check('Militer: judul + REKRUT PASUKAN tampil', pageText.includes('MILITER') && pageText.includes('REKRUT PASUKAN'));
     check('Militer: 3 jenis unit tampil', pageText.includes('Infanteri') && pageText.includes('Drone Perang') && pageText.includes('Kendaraan Berat'), pageText.slice(0, 200));
-    check('Militer: perawatan harian dijelaskan', pageText.includes('Perawatan') && pageText.includes('USD per hari'));
+    check('Militer: perawatan harian dijelaskan', pageText.includes('Perawatan') && pageText.includes('Rupiah per hari'));
     const qtyInput = document.querySelector('#recruit-qty-infantry');
     const recruitBtn = document.querySelector('[data-recruit="infantry"]');
     check('Militer: input jumlah + tombol REKRUT Infanteri ada', !!qtyInput && !!recruitBtn);
