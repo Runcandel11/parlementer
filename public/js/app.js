@@ -920,6 +920,32 @@ function showFatiguePopover() {
 
 // ---------- ROUTER ----------
 const ROUTES = {};
+// Background kontekstual per halaman (v5.7.4): gambar latar full-bleed
+// + banner hero di tiap halaman, sesuai konteks bagiannya. Gambar lokal
+// di public/img/backgrounds/ (sumber + lisensi: SOURCES.md di folder itu).
+// Route yang tidak terdaftar memakai 'city' (panorama kota, identitas game).
+const PAGE_BG = {
+  dashboard: 'city', chronicle: 'book', inventory: 'profile',
+  convoy: 'convoy', achievements: 'profile', notifications: 'city',
+  activity: 'city', profile: 'profile', settings: 'profile',
+  admin: 'city', market: 'market', global: 'market', fx: 'market',
+  jobs: 'factory', companies: 'factory', map: 'map', regions: 'map',
+  country: 'city', stats: 'city', contracts: 'convoy',
+  parties: 'parliament', parliament: 'parliament', elections: 'parliament',
+  war: 'war', 'war-world': 'war', military: 'war',
+  press: 'press', 'press/new': 'press', 'press/league': 'press',
+  newspaper: 'press', chat: 'night', messages: 'night', orgs: 'convoy',
+  shop: 'shop', ads: 'shop', share: 'city', help: 'book', contact: 'book',
+  book: 'book', 'reset-password': 'city',
+};
+// Gambar latar halaman yang sedang tampil (dipakai page() untuk hero).
+let CURRENT_BG = null;
+function applyPageBg(slug) {
+  const name = PAGE_BG[slug] || PAGE_BG[slug.split('/')[0]] || 'city';
+  CURRENT_BG = '/img/backgrounds/' + name + '.jpg';
+  const el = $('#page-bg');
+  if (el) el.style.backgroundImage = `url('${CURRENT_BG}')`;
+}
 // ID publik pemain: PL- + nomor urut 6 digit (mis. PL-000001).
 const pubId = (id) => 'PL-' + String(id).padStart(6, '0');
 function route() {
@@ -946,6 +972,8 @@ function route() {
   // Bottom navigation HP: tab aktif mengikuti route yang sama.
   $$('#bottom-nav .bottom-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.route === slug));
   const fn = ROUTES[slug] || ROUTES.dashboard;
+  // v5.7.4: ganti latar kontekstual tiap pindah halaman.
+  applyPageBg(slug);
   // Skeleton loading (Tahap 3, §7): ganti "Memuat…" polos dengan shimmer
   // supaya perpindahan halaman terasa instan, bukan kosong.
   $('#page').innerHTML = `<div role="status" aria-label="Memuat halaman">
@@ -1045,8 +1073,8 @@ function showAppealForm() {
 }
 
 const page = (title, sub, body) => `
-  <h2 tabindex="-1">${title}</h2>
-  ${sub ? `<p class="page-sub">${sub}</p>` : ''}
+  ${CURRENT_BG ? `<div class="page-hero" style="background-image:url('${CURRENT_BG}')"><div class="page-hero-shade"></div><div class="page-hero-text"><h2 tabindex="-1">${title}</h2>${sub ? `<p class="page-sub">${sub}</p>` : ''}</div></div>` : `<h2 tabindex="-1">${title}</h2>
+  ${sub ? `<p class="page-sub">${sub}</p>` : ''}`}
   ${body}`;
 
 const emptyState = (ico, title, sub) => `

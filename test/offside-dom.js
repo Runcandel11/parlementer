@@ -4,8 +4,9 @@
 //       meluber/terpotong di tepi kanan);
 //   (2) Notifikasi: span "Dibaca" punya white-space:nowrap + flex-shrink:0
 //       (tidak terlipat jadi "Dib/aca");
-//   (3) Banner countdown parlemen: tanggal dipisah ke baris kedua (<br>)
-//       + "2 Des 2026" tetap tampil;
+//   (3) Banner countdown parlemen: sebelum dibuka, tanggal dipisah ke
+//       baris kedua (<br>) + "28 Nov 2026" tetap tampil; sesudah dibuka
+//       (28 Nov 2026 20:00 WIB) countdown disembunyikan (sadar-waktu);
 //   (4) Dashboard warga Premium: "Sisa roti hari ini …/25" (bukan /10);
 //   (5) Halaman Pekerjaan: tombol #btn-autowork ada untuk warga Premium
 //       yang sudah bekerja; warga non-Premium hanya melihat catatan
@@ -110,11 +111,19 @@ async function main() {
     check('Tandai pengumuman dibaca (API)', rd.status === 200, `status=${rd.status}`);
 
     // --- (3) Banner countdown: tanggal di baris kedua.
+    // Sadar-waktu (parlemen dibuka 28 Nov 2026 20:00 WIB, epoch 1795870800000):
+    // sebelum dibuka countdown tampil (tanggal di baris kedua + "28 Nov 2026");
+    // sesudah dibuka countdown disembunyikan (pcd.hidden) — itu perilaku benar.
     dom = await bootDom(BASE + '/#/dashboard', jarP);
     const pcd = dom.window.document.querySelector('#parliament-countdown');
     check('Banner countdown parlemen ada', !!pcd);
-    check('Countdown: tanggal dipisah ke baris kedua (<br>)', (pcd?.innerHTML || '').includes('<br>'), (pcd?.innerHTML || '').slice(0, 160));
-    check('Countdown: tetap menyebut "28 Nov 2026"', (pcd?.textContent || '').includes('28 Nov 2026'), (pcd?.textContent || '').slice(0, 120));
+    const parlOpen = Date.now() >= 1795870800000;
+    if (parlOpen) {
+      check('Countdown: tersembunyi setelah parlemen dibuka', pcd?.hidden === true, `hidden=${pcd?.hidden}`);
+    } else {
+      check('Countdown: tanggal dipisah ke baris kedua (<br>)', (pcd?.innerHTML || '').includes('<br>'), (pcd?.innerHTML || '').slice(0, 160));
+      check('Countdown: tetap menyebut "28 Nov 2026"', (pcd?.textContent || '').includes('28 Nov 2026'), (pcd?.textContent || '').slice(0, 120));
+    }
 
     // --- (4) Dashboard Premium: jatah roti /25.
     const foodHead = [...dom.window.document.querySelectorAll('#page .stat-head')].find((el) => el.textContent.includes('Sisa roti hari ini'));

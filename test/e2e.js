@@ -199,17 +199,18 @@ async function main() {
   check('A belum bernegara (country null)', r.data.country === null, JSON.stringify(r.data.country));
   check('Halaman Negara menampilkan aturan pembentukan (Level 10 + 100 emas)', r.data.formationRules?.minLevel === 10 && r.data.formationRules?.costGold === 100, JSON.stringify(r.data.formationRules));
   check('Halaman Negara menampilkan 4 ideologi + 4 sistem pemerintahan', (r.data.ideologies || []).length === 4 && (r.data.systems || []).length === 4, `ideologi=${(r.data.ideologies || []).length} sistem=${(r.data.systems || []).length}`);
-  // v5.7.4: 28 Nov 2026 20:00 WIB sudah lewat di waktu nyata — skenario
+  // v5.7.5: 28 Nov 2026 20:00 WIB sudah lewat di waktu nyata — skenario
   // "parlemen terkunci" dibuat deterministik dengan menggeser
   // parliament_opens_at ke 1 jam ke depan, lalu dikembalikan (pola [28e]).
   const dbLock = new DatabaseSync(DB_PATH);
   const lockedOpensAt = Date.now() + 3600000;
   dbLock.prepare("UPDATE db_meta SET value = ? WHERE key = 'parliament_opens_at'").run(String(lockedOpensAt));
+  const parlOpen = false; // skenario terkunci deterministik
   r = await A.get('/api/parliament');
   check('Parlemen terkunci (dibuka 1 jam lagi)', r.data.parliamentOpen === false && r.data.parliamentOpensAt === lockedOpensAt, `open=${r.data.parliamentOpen} opensAt=${r.data.parliamentOpensAt}`);
   check('Tanpa negara: pajak 0%, upah ×1, perjalanan 1 tiket', r.data.effects?.taxIncome === 0 && r.data.effects?.adminPayMult === 1 && r.data.effects?.travelTickets === 1, JSON.stringify(r.data.effects));
   r = await A.post('/api/parliament/law', { title: 'UU Tes Terkunci', content: 'Isi undang-undang tes.', kind: 'general' });
-  check('Usul UU sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
+  check(parlOpen ? 'Usul UU setelah parlemen dibuka TIDAK ditolak 403 (masuk validasi)' : 'Usul UU sebelum parlemen dibuka ditolak 403', parlOpen ? r.status !== 403 : r.status === 403, `status=${r.status}`);
   r = await A.post('/api/country/budget', { kind: 'claim', amount: 100 });
   check('Usul anggaran sebelum parlemen dibuka ditolak 403', r.status === 403, `status=${r.status}`);
   dbLock.prepare("UPDATE db_meta SET value = ? WHERE key = 'parliament_opens_at'").run('1795870800000');
