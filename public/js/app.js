@@ -1136,16 +1136,28 @@ ROUTES.dashboard = async () => {
   const stepBreadDone = (c.bread_today || 0) > 0;
   const stepPartyDone = !!ME.party;
   const starterAllDone = stepWorkDone && stepBreadDone && stepPartyDone;
+  // v5.7.5 (Freya, Lane 9 — poles onboarding): bilah progres checklist.
+  // Pola checklist + bilah progres di atasnya adalah pola onboarding
+  // terkuat (goal-gradient: pemain mempercepat langkah saat garis finis
+  // terlihat; sumber: fullstory.com/blog/user-onboarding-checklist/ dan
+  // kompassify.com/blog/onboarding-progress-bar-guide). Hitungan dari
+  // DATA NYATA yang sama seperti centang langkahnya.
+  const starterDoneCount = (stepWorkDone ? 1 : 0) + (stepBreadDone ? 1 : 0) + (stepPartyDone ? 1 : 0);
+  const starterPct = Math.round((starterDoneCount / 3) * 100);
   $('#page').innerHTML = page('DASHBOARD', `Hari ${ME.world.day} · Populasi dunia: ${fmt(ME.population)} warga · <span title="Pemain aktif dalam 5 menit terakhir">🟢 ${fmt(ME.onlineCount ?? 0)} online</span>`, `
   <div class="panel" id="dash-starter">
     <div class="panel-head"><h3>🧭 MULAI DI SINI — 3 LANGKAH PERTAMA</h3><button class="btn-gold btn-sm" type="button" data-goto="#/book">📖 CARA MAIN</button></div>
     ${starterAllDone
       ? '<p class="teal-text" style="margin:6px 0">✅ 3 langkah awal selesai — selamat bermain! Naikkan level, kumpulkan emas, dan rebut kursi parlemen.</p>'
       : `<p class="muted small" style="margin:6px 0">Baru main? Ikuti 3 langkah ini — tidak perlu scroll ke bawah.</p>
+    <p class="muted small" style="margin:6px 0 4px"><span id="starter-progress-label">${starterDoneCount} dari 3 langkah selesai</span></p>
+    <div class="bar gold starter-progress" role="progressbar" aria-valuemin="0" aria-valuemax="3" aria-valuenow="${starterDoneCount}" aria-label="Progres langkah awal"><i id="starter-progress-fill" style="width:${starterPct}%"></i></div>
     <div class="kv"><span class="k">${stepWorkDone ? '✅' : '⬜'} <b>1. Kerja</b> — lamar pekerjaan ADMIN di menu Pekerjaan, lalu tekan KERJAKAN SATU GILIRAN</span><span class="v"><button class="btn-ghost btn-sm" type="button" data-goto="#/jobs">Buka Pekerjaan ›</button></span></div>
     <div class="kv"><span class="k"><span id="step-bread-ico">${stepBreadDone ? '✅' : '⬜'}</span> <b>2. Beli roti &amp; makan</b> — beli Makanan di Pasar Global, makan biar energi penuh</span><span class="v"><button class="btn-ghost btn-sm" type="button" data-goto="#/market">Buka Pasar ›</button></span></div>
     <div class="kv"><span class="k">${stepPartyDone ? '✅' : '⬜'} <b>3. Gabung partai</b> — atau pindah wilayah lewat Peta</span><span class="v"><button class="btn-ghost btn-sm" type="button" data-goto="#/parties">Buka Partai ›</button></span></div>`}
-    <p class="muted small" style="margin:8px 0 0">🏛️ Parlemen dibuka <b>malam ini 28 Nov jam 20.00 WIB</b> — sambil menunggu, naikkan level, kerja, dan gabung partai.</p>
+    ${ME.parliamentOpen
+      ? '<p class="muted small" style="margin:8px 0 0">🏛️ Parlemen sudah dibuka — buka halaman Parlemen untuk ikut memilih UU.</p>'
+      : `<p class="muted small" style="margin:8px 0 0">🏛️ Parlemen dibuka ${fmtCountdown(Number(ME.parliamentOpensAt) - Date.now())} lagi — sambil menunggu, naikkan level, kerja, dan gabung partai.</p>`}
   </div>
   ${ME.activeWars.length ? `<div class="panel"><h3>⚔️ SEDANG TERJADI</h3>
     ${ME.activeWars.map((w) => `<div class="kv"><span class="k">${esc(w.name)}</span><span class="v">${fmt(w.score_a)} vs ${fmt(w.score_d)}</span></div>`).join('')}
@@ -1366,9 +1378,17 @@ ROUTES.dashboard = async () => {
     const foodQty = (t) => foods.find((f) => f.tier === t)?.qty || 0;
     // v5.7.1 (Clueless): langkah 2 checklist "Mulai di Sini" ikut
     // tercoret bila inventaris sudah berisi Makanan (roti).
-    if (foods.some((f) => (f.qty || 0) > 0)) {
+    // v5.7.5: bilah progres ikut bergerak live (label + lebar isi + aria).
+    if (foods.some((f) => (f.qty || 0) > 0) && !stepBreadDone) {
       const ico = $('#step-bread-ico');
       if (ico) ico.textContent = '✅';
+      const newCount = starterDoneCount + 1;
+      const lbl = $('#starter-progress-label');
+      if (lbl) lbl.textContent = `${newCount} dari 3 langkah selesai`;
+      const fill = $('#starter-progress-fill');
+      if (fill) fill.style.width = `${Math.round((newCount / 3) * 100)}%`;
+      const bar = document.querySelector('.starter-progress');
+      if (bar) bar.setAttribute('aria-valuenow', String(newCount));
     }
     el.innerHTML = [1, 2, 3, 4, 5].map((t) => {
       const q = foodQty(t);

@@ -499,6 +499,29 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   begitu jam buka parlemen (28 Nov 2026 20:00 WIB) lewat dan sempat
   menggagalkan e2e 20:09 WIB (1298/1301); sesudah dibuka, cek yang sama
   memastikan usul UU/anggaran TIDAK ditolak 403.
+- **Checklist onboarding hidup v5.7.5 (28 Nov 2026, Freya Andersen —
+  Lane 9, poles berkelanjutan):** panel "MULAI DI SINI" di dashboard
+  kini punya bilah progres emas (`.bar.gold.starter-progress`, isi
+  `#starter-progress-fill`, `role="progressbar"` + `aria-valuenow`) +
+  label "X dari 3 langkah selesai" di atas 3 langkah — hitungan dari
+  DATA NYATA yang sama seperti centang langkahnya (sudah kerja / sudah
+  punya roti / sudah berpartai). Pola checklist + bilah progres di
+  atasnya adalah pola onboarding terkuat menurut riset UX (goal-gradient
+  effect; sumber: fullstory.com/blog/user-onboarding-checklist/ dan
+  kompassify.com/blog/onboarding-progress-bar-guide). Bilah ikut
+  bergerak live saat inventaris termuat dan roti ditemukan
+  (`fillInventory` memperbarui label + lebar isi + aria; panel tetap
+  mengecil jadi ucapan selamat saat 3/3 — peralihan itu terjadi saat
+  route berikutnya, sama seperti pola centang roti v5.7.1). Animasi
+  lebar 0,5 dtk, diam bila `prefers-reduced-motion`. Sekalian diperbaiki
+  di panel yang sama: baris parlemen hardcode "malam ini 28 Nov jam
+  20.00 WIB" sudah kedaluwarsa sejak parlemen dibuka — kini dinamis
+  dari `ME.parliamentOpen` / `ME.parliamentOpensAt` ("Parlemen sudah
+  dibuka — ..." bila sudah dibuka, countdown bila belum). Tanpa migrasi
+  skema (tetap 31). Dicek `test/chat-dom.js` [M] (+4 cek: label progres,
+  bilah 0%, aria progressbar, baris dinamis tanpa tanggal kedaluwarsa);
+  cek lama yang menegaskan tanggal hardcode itu ikut diubah karena
+  batch ini mengubah barisnya.
 - **Kronik yatim `level5` + `market` v5.7.3 (28 Nov 2026, laporan Vincent
   di Discord #bugs):** Vincent level 11 stuck Babak III 3/4 — "Capai
   Level 5" tidak pernah selesai. Akar: dua kunci Kronik TIDAK PUNYA situs

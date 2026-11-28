@@ -385,13 +385,27 @@ async function main() {
     check('dashboard: kartu MILITER tidak menampilkan undefined', !/undefined/.test(milCard), milCard.slice(0, 120));
 
     // [M] v5.7.1 — Clueless: checklist "Mulai di Sini" di ATAS dashboard +
-    // tombol CARA MAIN + baris parlemen 28 Nov 20.00 WIB. Warga tes Level 1
-    // tanpa pekerjaan/partai/roti: ketiga langkah masih belum selesai.
+    // tombol CARA MAIN. Warga tes Level 1 tanpa pekerjaan/partai — TAPI
+    // langkah roti SUDAH selesai: paket awal pendaftaran memberi 3 Makanan
+    // T1 (src/api-core.js), jadi fillInventory async mencoret langkah 2
+    // dan (v5.7.5) menggerakkan progres ke 1 dari 3. Komentar lama yang
+    // bilang warga tes "tanpa roti" keliru — roti itu dari paket awal.
+    // [M2] v5.7.5 (Freya, Lane 9): checklist punya bilah progres emas +
+    // label "X dari 3 langkah selesai"; baris parlemen DINAMIS — teks
+    // hardcode "malam ini 28 Nov jam 20.00 WIB" sudah kedaluwarsa sejak
+    // parlemen dibuka 28 Nov 20:00 WIB, kini tampil "sudah dibuka" (atau
+    // countdown bila belum dibuka). Cek lama yang menegaskan tanggal
+    // hardcode itu ikut diubah karena batch ini mengubah barisnya.
     const starter = document.querySelector('#dash-starter')?.textContent || '';
     check('dashboard: kartu MULAI DI SINI tampil di atas', starter.includes('MULAI DI SINI') && starter.includes('3 LANGKAH PERTAMA'), starter.slice(0, 120));
     check('dashboard: tombol CARA MAIN ada', !!document.querySelector('#dash-starter [data-goto="#/book"]'), starter.slice(0, 120));
     check('dashboard: checklist menampilkan 3 langkah (kerja/roti/partai)', starter.includes('1. Kerja') && starter.includes('2. Beli roti') && starter.includes('3. Gabung partai'), starter.slice(0, 300));
-    check('dashboard: baris parlemen 28 Nov jam 20.00 WIB (bukan 2 Des)', starter.includes('28 Nov jam 20.00 WIB') && !starter.includes('2 Des'), starter.slice(0, 200));
+    check('dashboard: langkah roti tercoret dari paket awal (3 Makanan T1)', starter.includes('✅ 2. Beli roti'), starter.slice(0, 300));
+    check('dashboard: checklist punya label progres "1 dari 3 langkah selesai"', starter.includes('1 dari 3 langkah selesai'), starter.slice(0, 200));
+    check('dashboard: checklist punya bilah progres emas 33%', document.querySelector('#starter-progress-fill')?.style.width === '33%' && !!document.querySelector('.starter-progress.bar.gold'), document.querySelector('#starter-progress-fill')?.outerHTML || 'tidak ada');
+    check('dashboard: bilah progres punya role progressbar + aria 1/3', document.querySelector('.starter-progress')?.getAttribute('role') === 'progressbar' && document.querySelector('.starter-progress')?.getAttribute('aria-valuenow') === '1', document.querySelector('.starter-progress')?.outerHTML || 'tidak ada');
+    check('dashboard: baris parlemen dinamis — tanpa tanggal kedaluwarsa "malam ini 28 Nov" / "2 Des"', !starter.includes('malam ini 28 Nov') && !starter.includes('2 Des'), starter.slice(0, 200));
+    check('dashboard: baris parlemen dinamis — "sudah dibuka" (parlemen buka 28 Nov 20.00 WIB) atau countdown bila belum', starter.includes('Parlemen sudah dibuka') || starter.includes('Parlemen dibuka'), starter.slice(0, 200));
 
     // [N] v5.7.1 — Clueless: FAQ di atas Obrolan Global + kartu ajakan
     // partai + penjelasan partai ≠ pindah wilayah (halaman Partai & Peta).
