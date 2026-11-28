@@ -748,6 +748,35 @@ async function refreshMe() {
   } catch { /* sesi habis */ }
 }
 
+// Animasi saldo emas (v5.7.3 — poles Lane 2; referensi: kartu saldo
+// beranimasi saat uang bertambah — Yuktrium "Animated Balance Card",
+// instagram.com/reel/DbaRu7Ws7js — dan teknik count-up CSS @property —
+// Ania Kubow, instagram.com/reel/DbqmKOyMn4a). Saat emas berubah,
+// pill emas berdenyut + chip selisih (+N / -N) melayang naik lalu
+// menghilang (±0,95 detik). Chip memakai fmt(..., 2) supaya selisih
+// pecahan (mis. beli minuman energi 0,10 emas) tampil "-0,1", bukan
+// "+0". Hormati prefers-reduced-motion: tanpa animasi sama sekali
+// (teks akhir tetap ditulis renderHUD). Chip lama dihapus dulu supaya
+// perubahan cepat tidak menumpuk; aria-hidden karena teks #hud-gold
+// sudah memuat nilai akhirnya.
+let lastGold = null;
+function showGoldDelta(delta) {
+  if (!delta) return;
+  if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const pill = document.querySelector('.hud-pill-gold');
+  if (!pill) return;
+  pill.querySelectorAll('.gold-delta').forEach((el) => el.remove());
+  const chip = document.createElement('span');
+  chip.className = 'gold-delta ' + (delta > 0 ? 'plus' : 'minus');
+  chip.textContent = (delta > 0 ? '+' : '-') + fmt(Math.abs(delta), 2);
+  chip.setAttribute('aria-hidden', 'true');
+  pill.appendChild(chip);
+  pill.classList.remove('gold-bump');
+  void pill.offsetWidth; // paksa reflow supaya animasi bisa dipicu ulang
+  pill.classList.add('gold-bump');
+  setTimeout(() => { chip.remove(); pill.classList.remove('gold-bump'); }, 950);
+}
+
 function renderHUD() {
   if (!ME) return;
   // Versi game di footer drawer (dari /api/me → konstanta VERSION).
@@ -756,7 +785,13 @@ function renderHUD() {
   $('#hud-name').textContent = c.username + (c.isPremium ? ' ◆' : '');
   $('#hud-region').textContent = (ME.region?.name || '') + ' · ' + (ME.region?.country_name || ME.country?.name || 'Belum Bernegara');
   $('#hud-usd').textContent = fmtRp(c.usd);
+  // Animasi saldo emas (v5.7.3 — poles Lane 2): teks #hud-gold SELALU
+  // nilai akhir secara sinkron (tes DOM + pembaca layar tetap benar);
+  // animasinya hanya lapisan visual — chip selisih + denyut pill —
+  // lewat showGoldDelta, dan hanya bila emas benar-benar berubah.
   $('#hud-gold').textContent = fmt(c.gold);
+  if (lastGold !== null && c.gold !== lastGold) showGoldDelta(c.gold - lastGold);
+  lastGold = c.gold;
   // Perisai HUD (UI batch 2): angka BESAR di dalam perisai = LEVEL warga;
   // lencana kecil di bawahnya = progres XP. Avatar bulat di kiri (kolom
   // .hud-side): foto profil bila ada, huruf awal bila tidak.

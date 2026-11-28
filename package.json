@@ -50,7 +50,8 @@
     "test:password-reset": "node test/password-reset-dom.js",
     "test:party": "node test/party-dom.js",
     "test:load": "node scripts/loadtest.mjs",
-    "test:recovery": "node scripts/recovery-test.mjs"
+    "test:recovery": "node scripts/recovery-test.mjs",
+    "test:gold-delta": "node test/gold-delta-dom.js"
   },
   "type": "module",
   "version": "1.0.0"

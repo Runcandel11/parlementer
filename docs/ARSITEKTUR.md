@@ -468,6 +468,37 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **Animasi saldo emas v5.7.3 (28 Nov 2026, poles Lane 2 — perintah
+  pemilik 18:12 WIB "terus poles game"; antrean Lane 2 kosong, batch
+  "perusahaan ikut pindah wilayah" masih BRIEF MENYUSUL):** saat emas
+  berubah, pill emas di HUD berdenyut (`goldBump`, scale 1 → 1,12) +
+  chip selisih (`+N` hijau / `-N` merah) melayang naik lalu menghilang
+  (±0,95 detik). Referensi: kartu saldo beranimasi saat uang bertambah
+  (Yuktrium "Animated Balance Card", instagram.com/reel/DbaRu7Ws7js)
+  + teknik count-up CSS `@property` (Ania Kubow,
+  instagram.com/reel/DbqmKOyMn4a). **Bukan count-up angka sungguhan:**
+  `#hud-gold` tetap ditulis nilai AKHIR secara sinkron di `renderHUD`
+  (tes DOM + pembaca layar tetap benar); animasi hanya lapisan visual
+  (`showGoldDelta` di `public/js/app.js`, dipicu dari `renderHUD` bila
+  `lastGold !== null` dan emas berubah — render pertama tidak
+  beranimasi). Chip memakai `fmt(delta, 2)` supaya selisih pecahan
+  tampil benar (`-0,1` untuk beli Minuman Energi 0,10 emas, bukan
+  `+0`); chip `aria-hidden` (nilai akhir sudah di `#hud-gold`); chip
+  lama dihapus dulu supaya perubahan cepat tidak menumpuk. **Hormati
+  `prefers-reduced-motion`:** tanpa chip + tanpa denyut (cek
+  `matchMedia`, CSS juga mematikan animasi). Tanpa migrasi skema
+  (tetap 31); TIDAK mengubah aturan main, harga, atau saldo siapa pun.
+  Dicek gold-delta-dom (29 cek: CSS + render awal tanpa chip + klaim
+  +5 lewat peti → chip `+5` + `gold-bump` + hilang sendiri + beli
+  minuman −0,1 → chip `-0,1` + `#hud-gold` tetap 55 + reduced-motion
+  tanpa animasi) + topbar-dom + ui-batch2-dom (teks `#hud-gold`
+  sinkron tetap lolos). Full suite v5.7.3: **2753/2753 hijau, 0 gagal**
+  (e2e 1301, pg-verify 287, pg-test 46, pg-concurrency 38, DOM 1026
+  incl. gold-delta-dom 29 baru, xp-rollback 49, ssl 6). Catatan:
+  pg-verify + pg-concurrency sempat gagal sekali saat full suite
+  pertama (koneksi Postgres ditolak — Postgres masih start ulang
+  setelah restart runtime VM); re-run langsung setelahnya 287/287 +
+  38/38 hijau — bukan regresi kode.
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;
