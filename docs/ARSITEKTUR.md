@@ -111,9 +111,15 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
 
 ## 5. Skema database
 
-- `SCHEMA_VERSION` saat ini **21** (`src/db.js`). Migrasi berurutan
+- `SCHEMA_VERSION` saat ini **22** (`src/db.js`). Migrasi berurutan
   (`migrateStageNColumns`) — jangan pernah menulis ulang `CREATE TABLE`
   tanpa jalur migrasi; data live harus ikut naik versi.
+- **Pelajaran insiden 28 Nov 2026 (v4.6.0 crash-loop, server down 11:11–11:2x WIB):**
+  indeks yang merujuk kolom hasil migrasi JANGAN dibuat di `schema()` —
+  `schema()` jalan SEBELUM migrasi, jadi di DB lama indeksnya gagal
+  (Postgres 42703) dan `initDb` crash sebelum server nyala. Buat indeks
+  seperti itu di fungsi migrasi, SETELAH `ADD COLUMN` (pola
+  `migrateShareColumns` v4.6.1).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;
