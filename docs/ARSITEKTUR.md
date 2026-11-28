@@ -468,6 +468,34 @@ satu tempat. Bila menemukan duplikasi, pindahkan ke sini:
   dissolve: 404 + party_id null + seats/members 0 + notifikasi mantan
   anggota & pelamar) + party-dom (6) (tombol hanya untuk ketua, klik
   Keluarkan → member hilang, klik Bubarkan → kembali ke daftar partai).
+- **Kronik yatim `level5` + `market` v5.7.3 (28 Nov 2026, laporan Vincent
+  di Discord #bugs):** Vincent level 11 stuck Babak III 3/4 — "Capai
+  Level 5" tidak pernah selesai. Akar: dua kunci Kronik TIDAK PUNYA situs
+  penanda sama sekali. **`level5`:** ditandai di `addXp` (src/api-core.js)
+  saat warga pertama kali melewati level 5 (`level lama < 5 && level baru
+  >= 5` — `>=`, bukan `==`, karena satu addXp bisa melompati level) +
+  migrasi backfill idempotent `migrateV576ChronicleLevel5` (skema 31→32,
+  penanda `chronicle_level5_backfill_2026_11_28`, pola migrateWageRollback)
+  yang menandai semua warga level >= 5 yang sudah ada — termasuk Vincent —
+  supaya klaim Babak III (+25 emas) lewat tombol klaim normal, TANPA
+  hadiah manual. **`market`:** `POST /api/chronicle/visit` kini menerima
+  `'market'` juga (kunci tidak dikenal tetap 400); klien memanggil visit
+  `{key:'market'}` saat merender `marketPage` (dipakai #/market lokal dan
+  #/global) — cerminkan pola `'map'` di `ROUTES.map`. TIDAK ada backfill
+  untuk `market` (pemain tinggal buka pasar sekali). **Audit penutup
+  (28 Nov 2026, 20/20 kunci punya situs penanda — tidak ada lagi kunci
+  yatim):** Babak I — claim api-core:577, job 1320, shift 1410 (hanya shift
+  PENUH 100 energi), train 825, eat 865, map visit 998, market visit 998,
+  country api-civic:441; Babak II — travel api-core:2532, buy 2105, sell
+  2130/2265, chat5 api-civic:2043; Babak III — company 1783, fx 2348/2376,
+  level5 api-core:56, party api-civic:847/869; Babak IV — law 1081, vote
+  1104/1372/1383; Babak V — attack 1569, article 1749. Dicek e2e [44]
+  (baseline false; visit tidak dikenal 400; visit market → done; XP 990 +
+  20 latihan melompati level 1→5 → level5 done; klaim Babak III ditolak
+  sebelum lengkap; level5 tepat 1×; company/fx/party lewat endpoint asli;
+  klaim Babak III +25 emas, 2× ditolak) + pg-verify [33] (migrasi 31→32:
+  lv11+lv5 di-backfill, lv4+lv1 tidak, lv7 yang sudah ditandai tidak
+  didobel, penanda + ringkasan JSON, idempotensi).
 - **Stok perusahaan + share link (v4.6.0):** `company_stock` (satu baris
   per perusahaan+komoditas, UNIQUE) — produksi harian (tick) + bonus shift
   mengambil bahan dari sini, BUKAN dari inventaris pemilik;

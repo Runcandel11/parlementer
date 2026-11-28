@@ -1396,6 +1396,7 @@ export async function initDb() {
     await migratePasswordResetColumns(t);
     await migrateV570Columns(t);
     await migrateV571Columns(t);
+    await migrateV576ChronicleLevel5(t);
     await seed(t);
     // Penanda versi ditulis DI DALAM transaksi migrasi: bila migrasi gagal
     // dan rollback, penanda ikut batal — cold start berikutnya mengulang
@@ -1474,7 +1475,7 @@ const INITDB_LOCK_KEY = 2026112701;
 // (sekali per deploy). Bila menambah migrasi baru, NAIKKAN angka ini.
 // Database lama (tanpa tabel db_meta) dianggap versi < angka ini dan
 // dimigrasi penuh sekali — aman, karena semua migrasi idempotent.
-const SCHEMA_VERSION = 31;
+const SCHEMA_VERSION = 32;
 
 // Baca penanda versi skema (null bila tabel/baris belum ada = DB lama/baru).
 async function schemaVersion() {
@@ -2249,6 +2250,53 @@ async function migrateV571Columns(t) {
   };
   await addCol('chat_messages', 'party_id', 'INTEGER');
   await addCol('citizens', 'total_goods_usd', 'REAL NOT NULL DEFAULT 0');
+}
+
+// v5.7.3 (skema 31 → 32) — Backfill tugas Kronik 'level5' ("Capai Level 5",
+// Babak III) untuk warga yang SUDAH level >= 5 sebelum perbaikan.
+// AKAR MASALAH (laporan Vincent, Discord #bugs 28 Nov 2026): 'level5'
+// yatim — tidak ada satu pun panggilan chronicleDone(..., 'level5') di
+// repo, jadi Babak III stuck 3/4 untuk semua pemain level 5+ (Vincent
+// level 11). Perbaikan jalur hidupnya ada di addXp (src/api-core.js:
+// tandai saat pertama kali melewati level 5); migrasi ini menutup warga
+// lama — termasuk Vincent — supaya mereka bisa klaim Babak III (+25 emas)
+// lewat tombol klaim normal (TANPA hadiah manual dari admin).
+// IDEMPOTEN lewat penanda db_meta 'chronicle_level5_backfill_2026_11_28'
+// + ringkasan JSON di penanda yang sama (pola migrateWageRollback), dan
+// cek per-baris (SELECT 1 ... sebelum INSERT) sebagai pengaman kedua bila
+// penanda hilang.
+// Warga level < 5 tidak disentuh; warga yang sudah punya penanda 'level5'
+// (mis. naik level setelah perbaikan) tidak didobel.
+const CHRONICLE_LEVEL5_BACKFILL_KEY = 'chronicle_level5_backfill_2026_11_28';
+
+export async function migrateV576ChronicleLevel5(t) {
+  const done = await t.one('SELECT value FROM db_meta WHERE key = ?', [CHRONICLE_LEVEL5_BACKFILL_KEY]);
+  if (done) {
+    console.log('[migrasi chronicle-level5] sudah pernah jalan — dilewati.');
+    return { skipped: true };
+  }
+  const now = Date.now();
+  const rows = await t.sql(
+    `SELECT c.id, c.level, u.username AS name FROM citizens c
+     LEFT JOIN users u ON u.id = c.user_id WHERE c.level >= 5 ORDER BY c.id`);
+  const summary = {
+    citizensChecked: rows.length, citizensBackfilled: 0,
+    citizensAlreadyDone: 0, citizensBelowLevel: 0, backfilled: [],
+  };
+  const below = await t.one('SELECT COUNT(*) AS n FROM citizens WHERE level < 5');
+  summary.citizensBelowLevel = Number(below?.n || 0);
+  for (const row of rows) {
+    const ex = await t.one('SELECT 1 AS x FROM chronicle_done WHERE citizen_id = ? AND ckey = ?', [row.id, 'level5']);
+    if (ex) { summary.citizensAlreadyDone++; continue; }
+    await t.run('INSERT INTO chronicle_done (citizen_id, ckey, done_at) VALUES (?,?,?)', [row.id, 'level5', now]);
+    summary.citizensBackfilled++;
+    summary.backfilled.push({ citizen: row.name || ('warga#' + row.id), level: row.level });
+  }
+  const existing = await t.one('SELECT value FROM db_meta WHERE key = ?', [CHRONICLE_LEVEL5_BACKFILL_KEY]);
+  if (existing) await t.run('UPDATE db_meta SET value = ? WHERE key = ?', [JSON.stringify(summary), CHRONICLE_LEVEL5_BACKFILL_KEY]);
+  else await t.run('INSERT INTO db_meta (key, value) VALUES (?, ?)', [CHRONICLE_LEVEL5_BACKFILL_KEY, JSON.stringify(summary)]);
+  console.log(`[migrasi chronicle-level5] warga level>=5 dicek=${summary.citizensChecked} di-backfill=${summary.citizensBackfilled} sudah-selesai=${summary.citizensAlreadyDone} level<5=${summary.citizensBelowLevel}`);
+  return summary;
 }
 
 // Jejak baca chat (v5.4.0): tabel chat_read untuk lencana pesan belum dibaca

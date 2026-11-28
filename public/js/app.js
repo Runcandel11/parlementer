@@ -2318,6 +2318,11 @@ const comIcon = (name) => COMMODITY_ICONS[name] || '📦';
 
 function marketPage(scope) {
   return async () => {
+    // Tandai tugas kronik 'market' (Lihat pasar) — gagal diam-diam bila
+    // sesi habis. Cerminkan pola 'map' di ROUTES.map (v5.7.3): sebelumnya
+    // tugas ini yatim (tidak ada penanda), jadi Babak I stuck 7/8.
+    // Dipanggil untuk #/market (local) maupun #/global — keduanya pasar.
+    post('/api/chronicle/visit', { key: 'market' }).catch(() => {});
     // Stok milik pemain (LIO, PL-000026): /api/inventory dimuat PARALEL
     // dengan pasar (Promise.all) supaya tidak menambah loading berurutan.
     // Bila inventaris gagal dimuat, pasar tetap tampil (stok dianggap 0).

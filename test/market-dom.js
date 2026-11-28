@@ -129,6 +129,16 @@ async function main() {
     check('papan: Besi Mentah menunjukkan Milikmu: 0 (stok kosong tetap tampil)', besiRow?.textContent.includes('Milikmu: 0'), besiRow?.textContent.trim().slice(0, 60));
     void boardText;
 
+    // --- (6) v5.7.3 — Kronik 'market': membuka #/market memanggil visit ---
+    // (pola yang sama seperti 'map' di ROUTES.map). Panggilan klien
+    // fire-and-forget — setelah render + 900 ms, barisnya harus ada di DB.
+    {
+      const dbM = new DatabaseSync(DB_PATH);
+      const mk = dbM.prepare("SELECT 1 AS x FROM chronicle_done WHERE citizen_id = ? AND ckey = 'market'").get(citizenId);
+      dbM.close();
+      check("Kronik: membuka #/market menandai tugas 'market' selesai (visit klien)", !!mk, mk ? 'tertandai' : 'tidak ada baris');
+    }
+
     // Form jual: label dropdown berisi total milik + baris dinamis per tier.
     const sellOpt = [...document.querySelectorAll('#sell-com option')].find((o) => o.textContent.includes('Gandum Mentah'));
     check('dropdown jual: opsi Gandum berisi Milikmu: 105', sellOpt?.textContent.includes('Milikmu: 105'), sellOpt?.textContent);

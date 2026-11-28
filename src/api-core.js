@@ -46,6 +46,14 @@ export function registerCore(app) {
     const leveled = [];
     while (xp >= xpForLevel(level)) { xp -= xpForLevel(level); level += 1; leveled.push(level); }
     await run('UPDATE citizens SET level = ?, xp = ? WHERE id = ?', [level, xp, citizen.id]);
+    // Kronik 'level5' (v5.7.3): tandai selesai saat warga MENCAPAI level 5 —
+    // >= 5, bukan == 5, karena satu addXp bisa melompati beberapa level
+    // sekaligus (mis. XP 990 + 20 XP latihan = level 1 -> 5). Idempotent
+    // (markChronicleDone UNIQUE-safe); hanya saat pertama kali melewati
+    // ambang itu (level lama < 5) supaya tidak ada panggilan sia-sia di
+    // setiap addXp warga level 5+. Sebelum v5.7.3 kunci ini yatim: tidak
+    // ada satu pun situs penanda, jadi Babak III stuck 3/4 selamanya.
+    if (citizen.level < 5 && level >= 5) await chronicleDone(citizen, 'level5');
     for (const lv of leveled) {
       await notify(citizen.id, 'SISTEM', 'Naik Level!', `Selamat! Kamu mencapai Level ${lv}.`);
       if (lv === 5 && citizen.user_id) {
@@ -980,13 +988,14 @@ export function registerCore(app) {
     res.json({ ok: true, reward: ch.reward });
   }));
 
-  // Kunjungan peta (v2.5.0): menandai tugas kronik 'map' selesai. Hanya
-  // kunci yang dikenal yang diterima; idempotent (chronicleDone sudah
-  // memeriksa duplikat).
+  // Kunjungan halaman (v2.5.0 'map', v5.7.3 'market'): menandai tugas
+  // kronik selesai. Hanya kunci yang dikenal yang diterima; idempotent
+  // (chronicleDone sudah memeriksa duplikat). 'market' yatim sebelum
+  // v5.7.3 — tidak ada penanda, jadi Babak I stuck 7/8 untuk semua pemain.
   app.post('/api/chronicle/visit', authRequired, citizenRequired, r(async (req, res) => {
     const { key } = req.body || {};
-    if (key !== 'map') return res.status(400).json({ error: 'Kunjungan tidak dikenal.' });
-    await chronicleDone(req.citizen, 'map');
+    if (key !== 'map' && key !== 'market') return res.status(400).json({ error: 'Kunjungan tidak dikenal.' });
+    await chronicleDone(req.citizen, key);
     res.json({ ok: true });
   }));
 

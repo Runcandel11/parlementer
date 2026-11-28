@@ -4465,6 +4465,92 @@ async function main() {
   r = await KX.post(`/api/parties/${kickPartyId}/dissolve`, {});
   check('Dissolve partai yang sudah dibubarkan ditolak (404)', r.status === 404, `status=${r.status}`);
 
+  console.log('\n[44] v5.7.3 — Kronik: level5 ditandai saat naik level + visit market');
+  const LV = new Client(); const LV2 = new Client();
+  LV.extraHeaders = { 'X-Forwarded-For': '127.0.0.61' };
+  LV2.extraHeaders = { 'X-Forwarded-For': '127.0.0.62' };
+  r = await LV.post('/api/auth/register', { email: 'kronik-lv@test.local', password: 'rahasia123', username: 'kronik_lv' });
+  check('Daftar kronik_lv', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const lvId = (await LV.get('/api/me')).data.citizen.id;
+  // Baseline: level5 + market belum selesai untuk pemain baru.
+  r = await LV.get('/api/chronicle');
+  let chr1 = (r.data.chapters || []).find((x) => x.chapter === 1);
+  let chr3 = (r.data.chapters || []).find((x) => x.chapter === 3);
+  check('Baseline: level5 belum selesai (pemain baru)', chr3?.tasks.find((t) => t.key === 'level5')?.done === false, JSON.stringify(chr3));
+  check('Baseline: market belum selesai (pemain baru)', chr1?.tasks.find((t) => t.key === 'market')?.done === false, JSON.stringify(chr1));
+  // Visit kunci tidak dikenal tetap 400; 'map' tetap 200 (regresi endpoint).
+  r = await LV.post('/api/chronicle/visit', { key: 'bukan-kunci' });
+  check('Visit kunci tidak dikenal tetap 400', r.status === 400, `status=${r.status}`);
+  r = await LV.post('/api/chronicle/visit', { key: 'map' });
+  check("Visit 'map' tetap 200", r.status === 200 && r.data.ok, `status=${r.status}`);
+  // 'market' menandai market done (Babak I).
+  r = await LV.post('/api/chronicle/visit', { key: 'market' });
+  check("Visit 'market' 200", r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await LV.get('/api/chronicle');
+  chr1 = (r.data.chapters || []).find((x) => x.chapter === 1);
+  check("Visit 'market' menandai tugas market selesai", chr1?.tasks.find((t) => t.key === 'market')?.done === true, JSON.stringify(chr1));
+  // Naik level 1 -> 5 dalam SATU addXp: XP 990 + 20 XP latihan (melompati
+  // level — persis kasus Vincent yang levelnya sudah jauh di atas 5).
+  {
+    const dbL = new DatabaseSync(DB_PATH);
+    dbL.prepare('UPDATE citizens SET xp = 990 WHERE id = ?').run(lvId);
+    dbL.close();
+  }
+  r = await LV.post('/api/train', { attr: 'str' });
+  check('Latihan str (+20 XP) 200', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const meLV = await LV.get('/api/me');
+  check('Satu latihan melompati level 1 -> 5 (XP 990 + 20)', meLV.data.citizen.level === 5, `level=${meLV.data.citizen.level} xp=${meLV.data.citizen.xp}`);
+  r = await LV.get('/api/chronicle');
+  chr3 = (r.data.chapters || []).find((x) => x.chapter === 3);
+  check('Naik level menandai tugas level5 selesai (>= 5, bukan == 5)', chr3?.tasks.find((t) => t.key === 'level5')?.done === true, JSON.stringify(chr3));
+  // Klaim Babak III DITOLAK selama 3 tugas lain belum selesai.
+  r = await LV.post('/api/chronicle/claim', { chapter: 3 });
+  check('Klaim Babak III ditolak 400 (company/fx/party belum selesai)', r.status === 400, `status=${r.status}`);
+  // Idempotent: latihan atribut lain (+20 XP lagi) tidak mendobel baris.
+  r = await LV.post('/api/train', { attr: 'edu' });
+  check('Latihan edu kedua 200 (jeda per atribut)', r.status === 200 && r.data.ok, `status=${r.status}`);
+  {
+    const dbL = new DatabaseSync(DB_PATH);
+    const n = dbL.prepare("SELECT COUNT(*) AS n FROM chronicle_done WHERE citizen_id = ? AND ckey = 'level5'").get(lvId);
+    dbL.close();
+    check('level5 tercatat tepat 1× (idempotent)', n.n === 1, `n=${n.n}`);
+  }
+  // Selesaikan 3 tugas Babak III lain lewat endpoint asli.
+  {
+    const dbL = new DatabaseSync(DB_PATH);
+    dbL.prepare('UPDATE citizens SET gold = 300 WHERE id = ?').run(lvId);
+    dbL.close();
+  }
+  r = await LV.post('/api/companies', { type: 'resource', name: 'Tambang Kronik', resource: 'Besi Mentah' });
+  check('Dirikan perusahaan resource (tugas company)', r.status === 200 && r.data.ok, `status=${r.status}`);
+  r = await LV.post('/api/fx/mint', { gold: 1 });
+  check('Cetak Rupiah dari emas (tugas fx)', r.status === 200 && r.data.ok, `status=${r.status}`);
+  // Partai: pemain kedua (level 10 via DB) dirikan partai open; LV gabung.
+  r = await LV2.post('/api/auth/register', { email: 'kronik-pendiri@test.local', password: 'rahasia123', username: 'kronik_pendir' });
+  check('Daftar pendiri partai', r.status === 200 && r.data.ok, `status=${r.status}`);
+  const lv2Id = (await LV2.get('/api/me')).data.citizen.id;
+  {
+    const dbL = new DatabaseSync(DB_PATH);
+    dbL.prepare('UPDATE citizens SET level = 10, gold = 200 WHERE id = ?').run(lv2Id);
+    dbL.close();
+  }
+  r = await LV2.post('/api/parties', { name: 'Partai Kronik', tag: 'KRN', ideology: 'Progresif', type: 'open' });
+  check('Pendiri dirikan partai open KRN', r.status === 200 && r.data.ok && r.data.partyId, `status=${r.status}`);
+  const krnPartyId = r.data.partyId;
+  r = await LV.post(`/api/parties/${krnPartyId}/join`, {});
+  check('kronik_lv gabung partai KRN (tugas party)', r.status === 200 && r.data.ok && r.data.role === 'member', `status=${r.status}`);
+  r = await LV.get('/api/chronicle');
+  chr3 = (r.data.chapters || []).find((x) => x.chapter === 3);
+  check('Babak III 4/4 selesai', chr3?.done === 4 && chr3?.total === 4, JSON.stringify(chr3));
+  // Klaim Babak III: +25 emas, sekali saja.
+  const goldBefore = (await LV.get('/api/me')).data.citizen.gold;
+  r = await LV.post('/api/chronicle/claim', { chapter: 3 });
+  check('Klaim Babak III 200 (+25 emas)', r.status === 200 && r.data.ok && r.data.reward === 25, `status=${r.status} reward=${r.data.reward}`);
+  const goldAfter = (await LV.get('/api/me')).data.citizen.gold;
+  check('Emas bertambah tepat +25 dari klaim Babak III', Math.abs(goldAfter - goldBefore - 25) < 0.01, `before=${goldBefore} after=${goldAfter}`);
+  r = await LV.post('/api/chronicle/claim', { chapter: 3 });
+  check('Klaim Babak III 2× ditolak 400', r.status === 400, `status=${r.status}`);
+
   setDayO(1);
 
   dbS6.close();
